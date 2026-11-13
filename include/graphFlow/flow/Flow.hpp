@@ -10,6 +10,7 @@
 #include "graphFlow/core/PoolBudget.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/flow/Concepts.hpp"
+#include "graphFlow/flow/Execution.hpp"
 #include "graphFlow/flow/NodeHandle.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/PayloadStorage.hpp"
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -34,18 +36,6 @@
 
 namespace graphFlow
 {
-    /** Raised by `Flow::run()` when the topology is valid but the typed execution path is not built.
-     *
-     * This slice owns registration, handles, ports, topology validation, tuning and pool
-     * derivation. The generic execution adapters land in T3; the distinct type keeps the pending
-     * execution apart from invalid graph or tuning errors.
-     */
-    class ExecutionUnavailable : public std::logic_error
-    {
-    public:
-        using std::logic_error::logic_error;
-    };
-
     /** Application-facing graph of one payload type.
      *
      * A `Flow` owns the node topology, the payload storage and the execution runner. Registration
@@ -53,9 +43,8 @@ namespace graphFlow
      * low-level `GraphBuilder`/`GraphRunner`/`Hooks` path stays available through its own headers
      * for custom nodes.
      *
-     * This implementation slice provides construction, handles, ports, topology validation, tuning
-     * and automatic pool derivation. The typed execution adapters are added in T3; `run()` therefore
-     * validates the complete graph and then reports that execution is not available yet.
+     * `run()` validates the topology, derives the configuration, constructs the typed stages and
+     * the scheduler, and returns only after every queue and pool chunk has been retired.
      */
     template<typename TPayload, typename TDevice, typename TStorage = DefaultStorage<TPayload, TDevice>>
     class Flow
@@ -71,11 +60,11 @@ namespace graphFlow
         static_assert(
             std::constructible_from<TStorage, TDevice, std::uint32_t, std::uint32_t>,
             "graphFlow::Flow: the storage type must be constructible from (device, numChunks, chunkCapacity)");
+        static_assert(ChunkStorage<TStorage>, "graphFlow::Flow: the storage type must satisfy ChunkStorage");
         static_assert(
-            ChunkStorage<TStorage>,
-            "graphFlow::Flow: the storage type must satisfy ChunkStorage");
-        static_assert(
-            requires { { TStorage::slotBytes } -> std::convertible_to<std::uint64_t>; },
+            requires {
+                { TStorage::slotBytes } -> std::convertible_to<std::uint64_t>;
+            },
             "graphFlow::Flow: the storage type must expose static constexpr slotBytes");
 
         explicit Flow(TDevice device)
@@ -110,12 +99,18 @@ namespace graphFlow
             if(m_sourceKey.has_value())
                 throw std::logic_error{"graphFlow: a Flow has exactly one source node"};
 
-            auto const key = appendNode(
-                std::move(name),
-                NodeRole::source,
-                1u,
-                std::make_shared<TFunctor>(std::move(functor)),
-                nullptr);
+            auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
+            StageFactory makeStage =
+                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            {
+                return std::make_unique<detail::SourceStage<TDevice, TStorage, TPayload, TFunctor>>(
+                    device,
+                    storage,
+                    config,
+                    *functorPtr);
+            };
+            auto const key
+                = appendNode(std::move(name), NodeRole::source, 1u, functorPtr, nullptr, std::move(makeStage));
             m_sourceKey = key;
             return SourceHandle{m_identity, key, 1u, m_nodes[key].name};
         }
@@ -128,12 +123,27 @@ namespace graphFlow
         partition(std::string name, TClassifier classifier, TUpdate update = {})
         {
             constexpr std::uint32_t bins = static_cast<std::uint32_t>(TClassifier::maxBins);
+            auto classifierPtr = std::make_shared<TClassifier>(std::move(classifier));
+            auto updatePtr = std::make_shared<TUpdate>(std::move(update));
+            StageFactory makeStage
+                = [classifierPtr,
+                   updatePtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            {
+                return std::make_unique<detail::PartitionStage<TDevice, TStorage, TPayload, TClassifier, TUpdate>>(
+                    device,
+                    storage,
+                    config,
+                    *classifierPtr,
+                    *updatePtr);
+            };
             auto const key = appendNode(
                 std::move(name),
                 NodeRole::transform,
                 bins,
-                std::make_shared<TClassifier>(std::move(classifier)),
-                std::make_shared<TUpdate>(std::move(update)));
+                classifierPtr,
+                updatePtr,
+                std::move(makeStage));
+            m_nodes[key].partition = true;
             return TypedNodeHandle<bins, ClassifierBin<TClassifier, TPayload>>{
                 m_identity,
                 key,
@@ -146,12 +156,18 @@ namespace graphFlow
         requires TransformFor<TFunctor, TPayload>
         TransformHandle transform(std::string name, TFunctor functor)
         {
-            auto const key = appendNode(
-                std::move(name),
-                NodeRole::transform,
-                1u,
-                std::make_shared<TFunctor>(std::move(functor)),
-                nullptr);
+            auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
+            StageFactory makeStage =
+                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            {
+                return std::make_unique<detail::TransformStage<TDevice, TStorage, TPayload, TFunctor>>(
+                    device,
+                    storage,
+                    config,
+                    *functorPtr);
+            };
+            auto const key
+                = appendNode(std::move(name), NodeRole::transform, 1u, functorPtr, nullptr, std::move(makeStage));
             return TransformHandle{m_identity, key, 1u, m_nodes[key].name};
         }
 
@@ -160,12 +176,18 @@ namespace graphFlow
         requires SinkFor<TFunctor, TPayload>
         NodeHandle sink(std::string name, TFunctor functor)
         {
-            auto const key = appendNode(
-                std::move(name),
-                NodeRole::sink,
-                0u,
-                std::make_shared<TFunctor>(std::move(functor)),
-                nullptr);
+            auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
+            StageFactory makeStage =
+                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            {
+                return std::make_unique<detail::SinkStage<TDevice, TStorage, TPayload, TFunctor>>(
+                    device,
+                    storage,
+                    config,
+                    *functorPtr);
+            };
+            auto const key
+                = appendNode(std::move(name), NodeRole::sink, 0u, functorPtr, nullptr, std::move(makeStage));
             return NodeHandle{m_identity, key, 0u, m_nodes[key].name};
         }
 
@@ -192,46 +214,76 @@ namespace graphFlow
             connectPort(port.node(), BinValue, to);
         }
 
-        /** Validate the graph and derive its storage, then report that typed execution is pending.
+        /** Validate the graph, build the typed execution path and run it to completion.
          *
-         * Invalid, missing and duplicated routes are rejected before any device work. The storage
-         * and runner members are constructed from the derived configuration so their ownership and
-         * destruction order are already fixed for the T3 execution path.
+         * Invalid, missing and duplicated routes are rejected before any device work. The storage,
+         * the per-node stages and the scheduler are local objects, so their destruction order is
+         * fixed: the runner is destroyed first, then the stages, then the storage. Each stage is
+         * appended in node-record order so route indices stay identical and one typed stage backs
+         * every registered node.
          */
         Stats run(NodeHandle const& source, std::uint64_t itemCount)
         {
             validateForRun(source);
 
             Config const config = resolveConfig(itemCount);
-            m_storage = std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
-            m_runner = std::make_unique<GraphRunner<TDevice, TStorage>>(m_device, *m_storage);
-            m_runner->setBatchChunks(config.batchChunks);
 
-            throw ExecutionUnavailable{
-                "graphFlow::Flow::run: graph topology is valid; typed execution is added in T3"};
+            auto storage = std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
+            std::vector<std::unique_ptr<Stage>> stages;
+            stages.reserve(m_nodes.size());
+            for(NodeRecord const& node : m_nodes)
+            {
+                std::unique_ptr<Stage> stage = node.makeStage(m_device, *storage, config);
+                if(!stage)
+                    throw std::logic_error{"graphFlow: a registered node has no typed execution stage"};
+                stages.push_back(std::move(stage));
+            }
+
+            using Runner = GraphRunner<TDevice, TStorage>;
+            auto runner = std::make_unique<Runner>(m_device, *storage);
+            for(std::size_t key = 0u; key < m_nodes.size(); ++key)
+            {
+                NodeRecord const& node = m_nodes[key];
+                std::vector<int> routes;
+                routes.reserve(node.routes.size());
+                for(NodeId const destination : node.routes)
+                {
+                    if(destination > static_cast<NodeId>(std::numeric_limits<int>::max()))
+                        throw std::overflow_error{"graphFlow: route destination exceeds the runner's int range"};
+                    routes.push_back(static_cast<int>(destination));
+                }
+                runner->addNode(
+                    node.name,
+                    node.role,
+                    node.bins,
+                    std::move(routes),
+                    detail::makeHooks(stages[key].get()));
+            }
+            runner->setSource(static_cast<std::uint32_t>(*m_sourceKey), itemCount, config.liveParticles);
+            runner->setBatchChunks(config.batchChunks);
+
+            Stats stats = runner->run();
+            return stats;
         }
 
         Flow& operator=(Flow&& other) noexcept
         {
             if(this != &other)
             {
-                // The runner refers to the pool owned by the storage. Destroy it first so a move
-                // assignment can never leave a runner pointing at storage that was just reset.
-                m_runner.reset();
-                m_storage.reset();
                 m_device = std::move(other.m_device);
                 m_identity = std::move(other.m_identity);
                 m_sourceKey = std::move(other.m_sourceKey);
                 m_nodes = std::move(other.m_nodes);
                 m_tuning = std::move(other.m_tuning);
-                m_storage = std::move(other.m_storage);
-                m_runner = std::move(other.m_runner);
             }
             return *this;
         }
 
     private:
         static constexpr NodeId invalidRoute = std::numeric_limits<NodeId>::max();
+
+        using Stage = detail::StageBase<TDevice, TStorage>;
+        using StageFactory = std::function<std::unique_ptr<Stage>(TDevice const&, TStorage&, Config const&)>;
 
         struct NodeRecord
         {
@@ -241,6 +293,8 @@ namespace graphFlow
             std::vector<NodeId> routes;
             std::shared_ptr<void const> functor;
             std::shared_ptr<void const> update;
+            bool partition = false;
+            StageFactory makeStage;
         };
 
         void ensureOwner() const
@@ -254,7 +308,8 @@ namespace graphFlow
             NodeRole role,
             std::uint32_t bins,
             std::shared_ptr<void const> functor,
-            std::shared_ptr<void const> update)
+            std::shared_ptr<void const> update,
+            StageFactory makeStage)
         {
             ensureOwner();
             if(m_nodes.size() >= static_cast<std::size_t>(std::numeric_limits<NodeId>::max()))
@@ -266,7 +321,15 @@ namespace graphFlow
 
             NodeId const key = static_cast<NodeId>(m_nodes.size());
             m_nodes.push_back(
-                NodeRecord{std::move(name), role, bins, std::move(routes), std::move(functor), std::move(update)});
+                NodeRecord{
+                    std::move(name),
+                    role,
+                    bins,
+                    std::move(routes),
+                    std::move(functor),
+                    std::move(update),
+                    false,
+                    std::move(makeStage)});
             return key;
         }
 
@@ -455,7 +518,5 @@ namespace graphFlow
         std::optional<NodeId> m_sourceKey;
         std::vector<NodeRecord> m_nodes;
         Tuning m_tuning;
-        std::unique_ptr<TStorage> m_storage;
-        std::unique_ptr<GraphRunner<TDevice, TStorage>> m_runner;
     };
 } // namespace graphFlow

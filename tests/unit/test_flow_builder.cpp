@@ -262,7 +262,7 @@ TEST_CASE("duplicate and missing routes are rejected before run", "[unit][flow][
     CHECK_THROWS_AS(flow.run(source, 16u), std::invalid_argument);
 
     flow.connect(filter.out<1u>(), sink);
-    CHECK_THROWS_AS(flow.run(source, 16u), graphFlow::ExecutionUnavailable);
+    CHECK_NOTHROW(flow.run(source, 16u));
 }
 
 TEST_CASE("run rejects foreign and non-source handles", "[unit][flow][run]")
@@ -289,7 +289,7 @@ TEST_CASE("run rejects foreign and non-source handles", "[unit][flow][run]")
     tuning.numChunks = 8u;
     tuning.poolPayloadBudgetBytes = 1u << 20;
     flow.configure(tuning);
-    CHECK_THROWS_AS(flow.run(source, 8u), graphFlow::ExecutionUnavailable);
+    CHECK_NOTHROW(flow.run(source, 8u));
 }
 
 TEST_CASE("a flow has exactly one source", "[unit][flow][source]")
@@ -303,7 +303,7 @@ TEST_CASE("a flow has exactly one source", "[unit][flow][source]")
 
     auto sink = flow.sink("record", RecordSink{});
     flow.connect(source, sink);
-    CHECK_THROWS_AS(flow.run(source, 0u), graphFlow::ExecutionUnavailable);
+    CHECK_NOTHROW(flow.run(source, 0u));
 }
 
 TEST_CASE("tuning rejects zero-valued knobs", "[unit][flow][tuning]")
@@ -373,5 +373,5 @@ TEST_CASE("a flow is movable and its handles follow the graph", "[unit][flow][mo
     tuning.numChunks = 8u;
     tuning.poolPayloadBudgetBytes = 1u << 20;
     third.configure(tuning);
-    CHECK_THROWS_AS(third.run(source, 8u), graphFlow::ExecutionUnavailable);
+    CHECK_NOTHROW(third.run(source, 8u));
 }
