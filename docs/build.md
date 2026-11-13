@@ -58,8 +58,23 @@ cmake -S . -B build-cpu -G Ninja \
   -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
   -DGRAPHFLOW_ENABLE_OPENMP=OFF
 cmake --build build-cpu -j 14
-ctest --test-dir build-cpu --output-on-failure --no-tests=error
+ctest --test-dir build-cpu --output-on-failure --no-tests=error \
+  --output-junit ctest-cpu.xml
 ```
+
+### Example CLI contract tests
+
+CTest also runs the real `graphFlow_particle_feedback` binary through
+`tests/integration/example_cli.cmake`. The matrix is `N=0,1,17,127,128,4097`
+crossed with `C=1,31,127,128`, with `--seed 42` and `--max-visits 64`. Every
+case requires exit code 0 and a histogram whose counts sum to `N`. The CPU cases
+are always registered; a CUDA build adds the same matrix for the CUDA backend.
+A missing binary or an unavailable requested backend fails the case instead of
+skipping it. The case names follow
+`example.particle_feedback.<backend>.N<N>.C<C>`.
+
+`--output-junit <file>` writes the CTest results as JUnit XML. Keep it in the
+build directory or an artifact directory; no JUnit file is committed.
 
 Add `-Dalpaka_COMPILE_PEDANTIC=ON` for the CI-equivalent warning gate. CI must
 also see warnings such as `-Wsign-compare` and
@@ -77,7 +92,8 @@ cmake -S . -B build-cuda -G Ninja \
   -DGRAPHFLOW_ENABLE_CUDA=ON \
   -DCMAKE_CUDA_ARCHITECTURES=80
 cmake --build build-cuda -j 14
-ctest --test-dir build-cuda --output-on-failure --no-tests=error
+ctest --test-dir build-cuda --output-on-failure --no-tests=error \
+  --output-junit ctest-cuda.xml
 ```
 
 RTX 2080 Ti, `sm_75`, same tree in a separate build directory:
