@@ -1,0 +1,56 @@
+# alpaka3 API map
+
+Every accelerator primitive used by graphFlow was checked against the pinned alpaka3 tree
+under `/workspace` before use. Pinned revision:
+`eb677e8d7f70d79b35df25d9002f94ba669b6f44` (2026-10-26), alpaka 3.0.0.
+
+Process: search `include/alpaka`, `example`, `test` and `docs/snippets` for the operation,
+read the implementation and one usage, then select the public API. The snippets
+`docs/snippets/example/050_kernel.cpp`, `120_sharedMemory.cpp`, `150_atomics.cpp`,
+`160_events.cpp`, `170_random.cpp` and `example/tutorial/src/05_kernel.cpp` were read before
+writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces are used.
+
+| Capability | Searched symbols | Pinned path | Selected API | Tested backends | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Queue creation | `makeQueue`, `queueKind`, `QueuePolicyList` | `onHost/Device.hpp:85-131`, `tag.hpp:100-125`, `api/host/Device.hpp:143-163` | `device.makeQueue(alpaka::queueKind::nonBlocking)` | CPU | One queue per node. The host backend creates a fresh `cpu::Queue` with its own callback thread per call, so queues are independent in practice. Independence is not guaranteed by the API. |
+| Events | `makeEvent`, `enqueue(event)`, `isComplete`, `waitFor` | `onHost/Event.hpp:99-138`, `onHost/Queue.hpp:245-270`, `api/host/Event.hpp` | `device.makeEvent()`, `queue.enqueue(event)`, `event.isComplete()` | CPU | The scheduler never uses `enqueueHostFn`; it polls `isComplete()` with bounded spin plus `std::this_thread::yield()`. The event is enqueued after the last operation it covers, including the metadata copy. |
+| Device memory | `alloc`, `allocLike` | `onHost/Device.hpp:215-260` | `onHost::alloc<T>(device, Vec{numChunks * C})` | CPU | Pool payload arrays are allocated once. |
+| Mapped staging | `allocMapped` | `onHost/Device.hpp:300-320`, `api/host/Device.hpp:277-284` | `onHost::allocMapped<T>(device, Vec{...})` | CPU | Host-visible staging for histogram totals, status words, range counters and the output table. Buffers live as long as their node. |
+| Copies and fills | `memcpy`, `memset`, `fill` | `onHost/Queue.hpp:309-455`, `api/host/Queue.hpp:517-682` | `onHost::memcpy(queue, dst, src)`, `onHost::memset(queue, view, 0)`, `onHost::fill(queue, view, value)` | CPU | All are queue tasks, so they order with kernels and are covered by the node event. `next[B]` is zeroed with `onHost::memset` on the same queue before scatter. Host sources for async copies are persistent mapped views, never temporaries. |
+| Kernel launch | `ThreadSpec`, `FrameSpec`, `KernelBundle`, `enqueue` | `onHost/ThreadSpec.hpp`, `onHost/FrameSpec.hpp`, `onHost/Queue.hpp:129-200`, `KernelBundle.hpp` | `queue.enqueue(ThreadSpec{1u, threads}, KernelBundle{kernel, args...})` | CPU | `ThreadSpec` gives exact block/thread control, which the one-block-per-chunk design needs. `FrameSpec` is intentionally not used because it does not guarantee block boundaries. |
+| Block extent on the host backend | `cpu::Serial`, `cpu::OmpBlocks` | `api/host/exec/Serial.hpp:36-44`, `api/host/exec/OmpBlocks.hpp:38-46` | `GraphRunner::threadsPerBlock(device, T)` returns 1 for `api::Host` | CPU | The host executors throw unless `numThreads.product() == 1`. Kernels therefore derive the tile width from `acc.getExtentsOf(origin::block, unit::threads)`, so they are correct for 1 or T real threads and all threads reach every barrier. |
+| Index mapping | `makeIdxMap`, `worker::threadsInBlock`, `IdxRange` | `onAcc/interface.hpp:40-170`, `onAcc/WorkerGroup.hpp:118-140`, `onAcc/range.hpp` | `onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{n})` | CPU | Used for every strided loop: shared table zeroing, flush, and particle loops. No hardcoded block size. |
+| Atomics | `atomicAdd`, `atomicExch`, `scope::Block`, `scope::Device` | `onAcc/atomic.hpp:25-130`, `onAcc/scope.hpp`, `api/host/atomic.hpp` | `onAcc::atomicAdd(acc, ptr, 1u, onAcc::scope::block)` and `scope::device` | CPU | Shared per-tile histogram uses block scope; `counts[bin]`, `next[bin]` and the capped counter use device scope. `scope::system` is rejected by `static_assert` and is not used. |
+| Shared memory | `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads` | `onAcc/Acc.hpp:132-200` | `onAcc::declareSharedMdArray<uint32_t, uniqueId()>(acc, CVec<uint32_t, B>{})`, `onAcc::syncBlockThreads(acc)` | CPU | `B = 2` and `B = 64` are covered by tests. The return value is stored by value, as the API documentation requires. Three tables of `B` words per scatter block. No dynamic shared memory. |
+| RNG | `Philox4x32x10`, `PhiloxSingle`, `skip`, `advanceState` | `rand/engine/philox/philox.hpp:31-75`, `PhiloxSingle.hpp:60-140`, `PhiloxBaseCommon.hpp:55-90` | `alpaka::rand::engine::Philox4x32x10(seed, subsequence, offset)` and `operator()` | CPU | `graphFlow::rng::drawAt` constructs at offset zero and advances, because the constructor offset is not equivalent to advancing (see below). No project RNG algorithm. |
+| In-kernel scan/sort | `scan`, `reduce`, `transform`, `sort` | `onHost/algo/scan.hpp`, `onHost/algo/reduce.hpp`, `onHost/algo/transform.hpp` | **Not used** | n/a | These enqueue kernels; they are not in-kernel collectives. The dense path needs no scan and no sort. Any future device-side stable grouping is project code. |
+
+## Project-owned code and why
+
+| Project code | Reason |
+| --- | --- |
+| `ChunkPool`, `ChunkHandle`, generations, free list | alpaka3 has no chunk ownership or reuse-token concept. |
+| `outputChunkBound`, `planDenseBins`, `buildDenseTable` | Graph policy: exact output slot assignment belongs to the graph, not to alpaka. |
+| `GraphRunner` (ready deques, routing, credits, termination) | alpaka3 has no graph, DAG or scheduler. |
+| `rng::decisionOffset`, `rng::drawAt` | Encodes the particle-id to Philox-offset mapping and normalises the pinned constructor-offset behaviour. |
+| `ClassifyKernel`, `ScatterKernel`, `GenerateKernel`, `SinkKernel` | Typed kernels for the graph; they use only alpaka primitives for launch, indexing, atomics and shared memory. |
+| Scalar reference model (tests only) | Independent oracle; no device code. |
+
+## Pinned-behaviour notes
+
+1. **Philox constructor offset.** In `PhiloxSingle`, `skip()` computes the within-block
+   position, then `advanceState()` resets `position` to zero, and `skip4()` compares
+   `counter[0]` against `temp[1]` and `temp[2]` instead of the corresponding words. With a
+   nonzero subsequence, `skip4(0)` changes counter word 3, so `Philox4x32x10(seed, id, k)()`
+   differs from advancing a fresh engine even when `k` is a multiple of four.
+   `graphFlow::rng::drawAt` composes the public engine instead: construct at offset 0 and
+   call it `offset + 1` times. `tests/unit/test_philox.cpp` pins both the wrapper contract
+   and the observed pinned behaviour.
+2. **Host block extent.** `cpu::Serial`, `cpu::OmpBlocks` and `cpu::TbbBlocks` require a
+   thread block extent of one. `ThreadSpec{1, T}` is only valid on accelerators, so the
+   launch helper maps `T` to 1 for `api::Host`.
+3. **No in-kernel scan or sort.** The dense histogram uses shared atomics per tile and a
+   device-scope range reservation per nonempty bin. Any scan or sort variant must be
+   implemented as project code and measured.
+4. **Queue independence is not guaranteed.** Correctness does not depend on it. A startup
+   probe and the fair sequential fallback are out of scope for this slice.
