@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace
+namespace flow_test
 {
     using Device = decltype(graphFlow::test::makeCpuDevice());
 
@@ -120,7 +120,9 @@ namespace
             return Payload{id, 1u};
         }
     };
-} // namespace
+} // namespace flow_test
+
+using namespace flow_test;
 
 TEST_CASE("flow registers source, partition, transform and sink nodes", "[unit][flow][builder]")
 {
@@ -180,6 +182,7 @@ TEST_CASE("named and numeric partition ports address the same bin", "[unit][flow
 
     static_assert(decltype(filter)::maxBins == 3u);
     static_assert(std::same_as<decltype(filter)::bin_type, Outcome>);
+    static_assert(std::same_as<decltype(filter.out<1u>()), decltype(filter.out<Outcome::feedback>())>);
 
     flow.connect(source, ingress);
     flow.connect(ingress, filter);
