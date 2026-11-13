@@ -14,6 +14,7 @@ Documentation:
 - [Benchmarks](docs/benchmarks.md)
 - [Known limitations](docs/known-limitations.md)
 - [alpaka3 API map](docs/alpaka-api-map.md)
+- [Public API contract](docs/public-api.md)
 - [Approved plan](docs/plan.md)
 - [Missing work](docs/missing.md)
 - [Acceptance record](docs/acceptance.md)
@@ -43,10 +44,14 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 82/82, hal CUDA 86/86. The totals include
-the FrameSpec launch-policy and matrix tests; the CUDA totals also include the
-kernel execution and FrameSpec matrix cases. These are the rebased CTest runs.
-The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is visible.
+Recorded integrated tests: fwk394 CPU 126/126, hal CUDA 154/154. The totals
+include the FrameSpec launch-policy and matrix tests; the CUDA totals also
+include the kernel execution and FrameSpec matrix cases. These are the rebased
+CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
+visible.
+
+The public contract is frozen in [public API contract](docs/public-api.md); the
+`Flow<T>` implementation follows in T2.
 
 ## Historical measured baseline
 
