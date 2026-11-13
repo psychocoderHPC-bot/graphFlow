@@ -219,7 +219,13 @@ TEST_CASE("bounded P with Q>1 completes without a full batch", "[pool][budget][b
 
     CHECK(result.histogram == particle::histogramOf(reference.weights));
     CHECK(result.sunkParticles == parameters.numParticles);
-    // T5 (multi-chunk batching) is not in this tree: the runner still processes one chunk per
-    // batch and only accepts Q. After rebasing onto T5, add an assertion on the observed batch
-    // sizes (opportunistic, never requiring the full Q when the pool is fragmented).
+    // T5 batching is integrated, so Q>1 is live. Q must not enlarge the pool: S stays P + K*R(C)
+    // and a fragmented run shrinks the batch prefix instead of reserving Q times the credits.
+    CHECK(
+        result.stats.poolChunks
+        == particle::derivePoolSize(
+            parameters.numParticles,
+            parameters.chunkSize,
+            parameters.liveParticles,
+            particle::FlowBins));
 }
