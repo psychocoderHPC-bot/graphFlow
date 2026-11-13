@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/graph/Classifier.hpp"
+#include "graphFlow/graph/TileDescriptor.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -12,20 +13,21 @@
 
 namespace graphFlow
 {
-    /** Dense histogram kernel for one tile of one input chunk.
+    /** Dense histogram kernel for one batch of input chunks.
      *
-     * The launch uses one thread block per tile, so the block index selects the tile and the GPU
-     * can distribute the tiles of a chunk over all SMs. `tileOffset = tile * T` and
-     * `count = min(T, fill - tileOffset)` bound the slice `[tileOffset, tileOffset + count)` that
-     * this block owns; the stride inside the tile still comes from the real block extent, so the
-     * same code is correct for a single-threaded host block and for a multi-threaded accelerator
-     * block. Every thread reaches every block barrier, including threads that own no particle in
-     * an inactive tail lane.
+     * The launch uses one thread block per `TileDescriptor`, so the block index selects a tile of a
+     * chunk. The descriptor supplies `chunkIndex`, `tileOffset` and `count`; the block owns the
+     * slice `[tileOffset, tileOffset + count)` of that chunk and indexes payload and metadata with
+     * `chunkIndex * chunkCapacity + tileOffset + i`. The stride inside the tile still comes from the
+     * real block extent, so the same code is correct for a single-threaded host block and for a
+     * multi-threaded accelerator block. Every thread reaches every block barrier, including threads
+     * that own no particle in an inactive tail lane.
      *
      * The block builds a shared `counts[T_B]` histogram with block-scope atomics, then flushes
      * every nonempty bin into the device-scope `counts[bin]` total. `counts[T_B]` is the status
      * word and is set to 1 on an out-of-range classifier result; the particle is dropped in that
-     * case and never indexes outside `[0, T_B)`.
+     * case and never indexes outside `[0, T_B)`. Because the block list spans every input chunk of
+     * the batch, `counts[bin]` aggregates over the whole batch.
      */
     template<typename TPolicy, std::uint32_t T_B = TPolicy::maxBins>
     struct ClassifyKernel
@@ -42,21 +44,18 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto visits,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto counts,
-            std::uint32_t chunkIndex,
-            std::uint32_t chunkCapacity,
-            std::uint32_t fill,
-            std::uint32_t tileSize) const
+            alpaka::concepts::IMdSpan auto tiles,
+            std::uint32_t chunkCapacity) const
         {
             using namespace alpaka;
 
             auto tileCounts
                 = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
 
-            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
-            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
-            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
-            std::uint32_t const base = chunkIndex * chunkCapacity;
+            auto const [block] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            TileDescriptor const tile = tiles[static_cast<std::uint32_t>(block)];
+            std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+            std::uint32_t const count = tile.count;
 
             for(auto [bin] :
                 onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
@@ -68,7 +67,7 @@ namespace graphFlow
                     onAcc::worker::threadsInBlock,
                     IdxRange{count}))
             {
-                std::uint32_t const slot = base + tileOffset + i;
+                std::uint32_t const slot = base + i;
                 Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
                 std::uint32_t const bin
                     = policy.classify(particle.id, particle.property, particle.weight, particle.visit);

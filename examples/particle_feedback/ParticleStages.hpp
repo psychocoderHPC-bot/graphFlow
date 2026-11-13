@@ -15,6 +15,7 @@
 #include "graphFlow/graph/HashScatterKernel.hpp"
 #include "graphFlow/graph/Kernels.hpp"
 #include "graphFlow/graph/ScatterKernel.hpp"
+#include "graphFlow/graph/TileDescriptor.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
 #include "graphFlow/sched/GraphRunner.hpp"
 
@@ -42,7 +43,7 @@ namespace graphFlow::particle
         std::uint32_t maxVisits = 64u;
         std::uint32_t tileSize = 128u;
         std::uint32_t deviceIndex = 0u;
-        std::uint32_t batchChunks = 1u; // Q, consumed by the later batching task
+        std::uint32_t batchChunks = 1u; // Q, ready input chunks per transform batch
     };
 
     /** Checked number of tiles needed by a chunk.
@@ -188,7 +189,8 @@ namespace graphFlow::particle
 
         void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
         {
-            ChunkDescriptor const& chunk = batch.chunk;
+            // A source batch always carries exactly one chunk; its fill is the admission result.
+            ChunkDescriptor const& chunk = batch.chunk();
             queue.enqueue(
                 alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
                 alpaka::KernelBundle{
@@ -202,15 +204,15 @@ namespace graphFlow::particle
                     chunk.fill});
         }
 
-        bool advance(Queue const&, ChunkDescriptor const&, std::uint32_t& allocated)
+        bool advance(Queue const&, typename GraphRunner<TDevice>::Batch const&, std::uint32_t& allocated)
         {
             allocated = 0u;
             return false;
         }
 
-        void finish(ChunkDescriptor const& chunk, std::vector<ChunkDescriptor>& outputs) const
+        void finish(typename GraphRunner<TDevice>::Batch const& batch, std::vector<ChunkDescriptor>& outputs) const
         {
-            outputs.push_back(chunk);
+            outputs.insert(outputs.end(), batch.chunks.begin(), batch.chunks.end());
         }
 
     private:
@@ -219,36 +221,55 @@ namespace graphFlow::particle
         std::uint32_t m_threads;
     };
 
-    /** Transform stage: classify, plan output chunks on the host, scatter. */
+    /** Transform stage: classify, plan output chunks on the host, scatter.
+     *
+     * One transform dispatch may own up to `batchChunks` ready input chunks. The host flattens
+     * every input chunk into a compact `TileDescriptor` list (`chunkIndex`, `tileOffset`, `count`),
+     * copies that list to the device once, and launches exactly one classify kernel and one scatter
+     * kernel per batch with one block per descriptor. The histogram, the output plan and the output
+     * table are batch-wide: `total[bin]` aggregates over every input chunk, the exact output chunks
+     * are `ceil(total[bin] / C)` per bin across the whole batch, and `next[bin]` is reserved
+     * batch-wide, so a per-bin range may cross any number of output chunk boundaries.
+     *
+     * `batchChunks == 1` reproduces the earlier single-chunk behaviour: one descriptor list with the
+     * tiles of one chunk, one classify and one scatter launch, and the same per-chunk plan.
+     */
     template<typename TDevice, typename TPolicy, typename TBinTable = DenseBinTable>
     class TransformStage
     {
     public:
         using Queue = typename GraphRunner<TDevice>::Queue;
+        using Batch = typename GraphRunner<TDevice>::Batch;
         using U32View
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
         using MappedU32View
             = ALPAKA_TYPEOF(alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using TileView = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<TileDescriptor>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using MappedTileView = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<TileDescriptor>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         /** `tileSize` is the logical tile width T, not the resolved block extent.
          *
-         * The stage launches one block per tile with
-         * `ThreadSpec{tileCount(fill, T), GraphRunner::threadsPerBlock(device, T)}`. On the host
-         * backend the block extent collapses to one real thread while T keeps the tile slice
-         * width used by the kernels, so a chunk larger than T still splits into several blocks.
+         * The stage launches one block per tile descriptor with
+         * `ThreadSpec{tileDescriptorCount, GraphRunner::threadsPerBlock(device, T)}`. On the host
+         * backend the block extent collapses to one real thread while T keeps the tile slice width
+         * used by the kernels, so a chunk larger than T still splits into several blocks.
          */
         TransformStage(
             TDevice const& device,
             ChunkPool<TDevice>& pool,
             TPolicy policy,
             U32View capped,
-            std::uint32_t tileSize)
+            std::uint32_t tileSize,
+            std::uint32_t batchChunks = 1u)
             : m_pool{pool}
             , m_policy{policy}
             , m_capacity{pool.chunkCapacity()}
             , m_bins{TPolicy::maxBins}
-            , m_reserveBound{static_cast<std::uint32_t>(
-                  outputChunkBound(pool.chunkCapacity(), pool.chunkCapacity(), TPolicy::maxBins))}
+            , m_batchChunks{batchChunks}
+            , m_tileCapacity{checkedTileCapacity(pool.chunkCapacity(), tileSize, batchChunks)}
+            , m_reserveBound{checkedReserveBound(pool.chunkCapacity(), batchChunks, TPolicy::maxBins)}
             , m_tileSize{tileSize}
             , m_threads{GraphRunner<TDevice>::threadsPerBlock(device, tileSize)}
             , m_counts{alpaka::onHost::alloc<std::uint32_t>(
@@ -269,28 +290,63 @@ namespace graphFlow::particle
             , m_tableHost{alpaka::onHost::allocMapped<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(TPolicy::maxBins) + m_reserveBound})}
+            , m_tiles{alpaka::onHost::alloc<TileDescriptor>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(m_tileCapacity)})}
+            , m_tilesHost{alpaka::onHost::allocMapped<TileDescriptor>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(m_tileCapacity)})}
             , m_capped{std::move(capped)}
         {
             m_totals.assign(m_bins, 0u);
             m_pending.reserve(m_reserveBound);
         }
 
-        void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
+        void launch(Queue const& queue, Batch const& batch)
         {
             throwIfFailed();
-            ChunkDescriptor const& chunk = batch.chunk;
+            if(batch.chunks.empty())
+                throw BatchError{"transform: empty batch"};
+            if(batch.chunks.size() > m_batchChunks)
+                throw BatchError{
+                    "transform: batch of " + std::to_string(batch.chunks.size())
+                    + " chunks exceeds batchChunks " + std::to_string(m_batchChunks)};
+
             m_stage = 0u;
             m_pending.clear();
+            m_numTiles = 0u;
+
+            // Flatten every input chunk into the batch-wide tile descriptor list.
+            for(ChunkDescriptor const& chunk : batch.chunks)
+            {
+                std::uint32_t const tiles = tileCount(chunk.fill, m_tileSize);
+                for(std::uint32_t tile = 0u; tile < tiles; ++tile)
+                {
+                    if(m_numTiles >= m_tileCapacity)
+                        throw BatchError{"transform: tile descriptor capacity exceeded"};
+                    std::uint32_t const tileOffset = tile * m_tileSize;
+                    std::uint32_t const remaining = chunk.fill - tileOffset;
+                    std::uint32_t const count = remaining < m_tileSize ? remaining : m_tileSize;
+                    m_tilesHost.data()[m_numTiles++] = TileDescriptor{chunk.handle.index, tileOffset, count};
+                }
+            }
+            if(batch.chunks.size() > m_maxBatchChunks)
+                m_maxBatchChunks = static_cast<std::uint32_t>(batch.chunks.size());
 
             // total[B] + status word; both start at zero for this batch.
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
-            std::uint32_t const tiles = tileCount(chunk.fill, m_tileSize);
-            if(tiles != 0u)
+            if(m_numTiles != 0u)
             {
+                // One host-to-device copy of the descriptor list, then one classify launch.
+                alpaka::onHost::memcpy(
+                    queue,
+                    m_tiles,
+                    m_tilesHost,
+                    alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
                 if constexpr(TBinTable::isHash)
                 {
                     queue.enqueue(
-                        alpaka::onHost::ThreadSpec{tiles, m_threads},
+                        alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
                         alpaka::KernelBundle{
                             HashClassifyKernel<TPolicy, TBinTable>{m_policy},
                             m_pool.ids(),
@@ -299,16 +355,14 @@ namespace graphFlow::particle
                             m_pool.visits(),
                             m_pool.binIds(),
                             m_counts,
-                            chunk.handle.index,
+                            m_tiles,
                             m_capacity,
-                            chunk.fill,
-                            m_tileSize,
                             m_bins});
                 }
                 else
                 {
                     queue.enqueue(
-                        alpaka::onHost::ThreadSpec{tiles, m_threads},
+                        alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
                         alpaka::KernelBundle{
                             ClassifyKernel<TPolicy>{m_policy},
                             m_pool.ids(),
@@ -317,23 +371,22 @@ namespace graphFlow::particle
                             m_pool.visits(),
                             m_pool.binIds(),
                             m_counts,
-                            chunk.handle.index,
-                            m_capacity,
-                            chunk.fill,
-                            m_tileSize});
+                            m_tiles,
+                            m_capacity});
                 }
+                ++m_classifyLaunches;
             }
             // The event the scheduler arms after this call covers the metadata copy.
             alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
         }
 
-        bool advance(Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
+        bool advance(Queue const& queue, Batch const& batch, std::uint32_t& allocated)
         {
             throwIfFailed();
             allocated = 0u;
             if(m_stage == 0u)
             {
-                planAndScatter(queue, chunk, allocated);
+                planAndScatter(queue, batch, allocated);
                 m_stage = 1u;
                 return true;
             }
@@ -354,31 +407,91 @@ namespace graphFlow::particle
             return false;
         }
 
-        void finish(ChunkDescriptor const&, std::vector<ChunkDescriptor>& outputs) const
+        void finish(Batch const&, std::vector<ChunkDescriptor>& outputs) const
         {
             outputs.insert(outputs.end(), m_pending.begin(), m_pending.end());
         }
 
-        /** Conservative number of output chunks this stage may need; used by tests/docs. */
+        /** Conservative number of output chunks one batch may need; used by tests/docs. */
         [[nodiscard]] std::uint32_t reserveBound() const
         {
             return m_reserveBound;
         }
 
-    private:
-        void planAndScatter(Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
+        [[nodiscard]] std::uint32_t batchChunks() const
         {
-            std::uint32_t const tiles = tileCount(chunk.fill, m_tileSize);
+            return m_batchChunks;
+        }
+
+        /** Classify launches issued so far; one per nonempty batch. */
+        [[nodiscard]] std::uint32_t classifyLaunches() const
+        {
+            return m_classifyLaunches;
+        }
+
+        /** Scatter launches issued so far; one per nonempty batch. */
+        [[nodiscard]] std::uint32_t scatterLaunches() const
+        {
+            return m_scatterLaunches;
+        }
+
+        /** Largest number of input chunks one batch carried so far. */
+        [[nodiscard]] std::uint32_t maxBatchChunks() const
+        {
+            return m_maxBatchChunks;
+        }
+
+    private:
+        /** Descriptor capacity of `batchChunks` input chunks with the given tile width. */
+        static std::uint32_t checkedTileCapacity(
+            std::uint32_t capacity,
+            std::uint32_t tileSize,
+            std::uint32_t batchChunks)
+        {
+            if(batchChunks == 0u)
+                throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
+            std::uint64_t const tiles
+                = static_cast<std::uint64_t>(tileCount(capacity, tileSize)) * batchChunks;
+            if(tiles > std::numeric_limits<std::uint32_t>::max())
+                throw std::overflow_error{"graphFlow: batch tile descriptor count overflow"};
+            return static_cast<std::uint32_t>(tiles);
+        }
+
+        /** Largest output-chunk count a batch of `batchChunks` full chunks may produce. */
+        static std::uint32_t checkedReserveBound(
+            std::uint32_t capacity,
+            std::uint32_t batchChunks,
+            std::uint32_t bins)
+        {
+            if(batchChunks == 0u)
+                throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
+            std::uint64_t const particles = static_cast<std::uint64_t>(capacity) * batchChunks;
+            std::uint64_t const bound = outputChunkBound(particles, capacity, bins);
+            if(bound > std::numeric_limits<std::uint32_t>::max())
+                throw std::overflow_error{"graphFlow: batch output-chunk bound overflow"};
+            return static_cast<std::uint32_t>(bound);
+        }
+
+        void planAndScatter(Queue const& queue, Batch const&, std::uint32_t& allocated)
+        {
             std::uint32_t const* host = m_countsHost.data();
             if(host[m_bins] != 0u)
                 throw BatchError{"classify: device status reports an invalid classifier result"};
 
+            m_totals.assign(m_bins, 0u);
+            std::uint64_t particles = 0u;
             for(std::uint32_t bin = 0u; bin < m_bins; ++bin)
+            {
                 m_totals[bin] = host[bin];
+                particles += host[bin];
+            }
 
+            // Batch-wide planning: exact chunks and fill levels per bin over all input chunks.
             DenseBinPlan const plan = planDenseBins(m_totals, m_capacity);
             if(plan.numOutputChunks > m_reserveBound)
                 throw BatchError{"plan: exact chunk count exceeds the reservation bound"};
+            if(particles > static_cast<std::uint64_t>(m_capacity) * m_batchChunks)
+                throw BatchError{"plan: batch particle count exceeds the configured batch size"};
 
             std::vector<std::uint32_t> chunkIndices;
             chunkIndices.reserve(plan.numOutputChunks);
@@ -408,10 +521,10 @@ namespace graphFlow::particle
 
                 if constexpr(TBinTable::isHash)
                 {
-                    if(tiles != 0u)
+                    if(m_numTiles != 0u)
                     {
                         queue.enqueue(
-                            alpaka::onHost::ThreadSpec{tiles, m_threads},
+                            alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
                             alpaka::KernelBundle{
                                 HashScatterKernel<TPolicy, TBinTable>{m_policy},
                                 m_pool.ids(),
@@ -427,19 +540,17 @@ namespace graphFlow::particle
                                 m_next,
                                 m_counts,
                                 m_capped,
-                                chunk.handle.index,
+                                m_tiles,
                                 m_capacity,
-                                chunk.fill,
-                                m_tileSize,
                                 m_bins});
                     }
                 }
                 else
                 {
-                    if(tiles != 0u)
+                    if(m_numTiles != 0u)
                     {
                         queue.enqueue(
-                            alpaka::onHost::ThreadSpec{tiles, m_threads},
+                            alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
                             alpaka::KernelBundle{
                                 ScatterKernel<TPolicy>{m_policy},
                                 m_pool.ids(),
@@ -455,12 +566,12 @@ namespace graphFlow::particle
                                 m_next,
                                 m_counts,
                                 m_capped,
-                                chunk.handle.index,
-                                m_capacity,
-                                chunk.fill,
-                                m_tileSize});
+                                m_tiles,
+                                m_capacity});
                     }
                 }
+                if(m_numTiles != 0u)
+                    ++m_scatterLaunches;
 
                 // The completion event must cover the status word and the range counters.
                 alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
@@ -468,7 +579,7 @@ namespace graphFlow::particle
             }
             catch(...)
             {
-                // Release once here; the runner separately releases the input chunk. The batch
+                // Release once here; the runner separately releases the input chunks. The batch
                 // state is reset as well, so a failed plan cannot leave stale totals or host
                 // counters behind, and the stage is marked single-use because the device stage may
                 // be partially queued.
@@ -484,6 +595,7 @@ namespace graphFlow::particle
         void resetBatchState()
         {
             m_stage = 0u;
+            m_numTiles = 0u;
             std::fill(m_totals.begin(), m_totals.end(), 0u);
             std::fill_n(m_countsHost.data(), static_cast<std::size_t>(m_bins) + 1u, 0u);
         }
@@ -519,6 +631,8 @@ namespace graphFlow::particle
         TPolicy m_policy;
         std::uint32_t m_capacity;
         std::uint32_t m_bins;
+        std::uint32_t m_batchChunks;
+        std::uint32_t m_tileCapacity;
         std::uint32_t m_reserveBound;
         std::uint32_t m_tileSize;
         std::uint32_t m_threads;
@@ -528,8 +642,14 @@ namespace graphFlow::particle
         MappedU32View m_nextHost;
         U32View m_table;
         MappedU32View m_tableHost;
+        TileView m_tiles;
+        MappedTileView m_tilesHost;
         U32View m_capped;
         std::uint32_t m_stage = 0u;
+        std::uint32_t m_numTiles = 0u;
+        std::uint32_t m_classifyLaunches = 0u;
+        std::uint32_t m_scatterLaunches = 0u;
+        std::uint32_t m_maxBatchChunks = 0u;
         std::vector<std::uint32_t> m_totals;
         std::vector<ChunkDescriptor> m_pending;
         bool m_failed = false;
@@ -553,7 +673,8 @@ namespace graphFlow::particle
 
         void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
         {
-            ChunkDescriptor const& chunk = batch.chunk;
+            // A sink batch always carries exactly one chunk; the runner never batches sinks.
+            ChunkDescriptor const& chunk = batch.chunk();
             m_sunk += chunk.fill;
             queue.enqueue(
                 alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
@@ -566,13 +687,13 @@ namespace graphFlow::particle
                     chunk.fill});
         }
 
-        bool advance(Queue const&, ChunkDescriptor const&, std::uint32_t& allocated)
+        bool advance(Queue const&, typename GraphRunner<TDevice>::Batch const&, std::uint32_t& allocated)
         {
             allocated = 0u;
             return false;
         }
 
-        void finish(ChunkDescriptor const&, std::vector<ChunkDescriptor>&) const
+        void finish(typename GraphRunner<TDevice>::Batch const&, std::vector<ChunkDescriptor>&) const
         {
         }
 

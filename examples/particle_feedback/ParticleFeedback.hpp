@@ -80,10 +80,10 @@ namespace graphFlow::particle
         return typename Runner::Hooks{
             [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
             { stage.launch(queue, batch); },
-            [&stage](typename Runner::Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
-            { return stage.advance(queue, chunk, allocated); },
-            [&stage](ChunkDescriptor const& chunk, std::vector<ChunkDescriptor>& outputs)
-            { stage.finish(chunk, outputs); }};
+            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
+            { return stage.advance(queue, batch, allocated); },
+            [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
+            { stage.finish(batch, outputs); }};
     }
 
     /** Build and run the Generate -> Filter -> {A, B} -> Sink feedback graph. */
@@ -131,9 +131,27 @@ namespace graphFlow::particle
         ProcessBPolicy processBPolicy{parameters.seed, parameters.maxVisits};
 
         GenerateStage<TDevice> generate{pool, parameters.seed, threads};
-        TransformStage<TDevice, FilterPolicy> filter{device, pool, filterPolicy, capped, config.tileSize};
-        TransformStage<TDevice, ProcessAPolicy> processA{device, pool, processAPolicy, capped, config.tileSize};
-        TransformStage<TDevice, ProcessBPolicy> processB{device, pool, processBPolicy, capped, config.tileSize};
+        TransformStage<TDevice, FilterPolicy> filter{
+            device,
+            pool,
+            filterPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
+        TransformStage<TDevice, ProcessAPolicy> processA{
+            device,
+            pool,
+            processAPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
+        TransformStage<TDevice, ProcessBPolicy> processB{
+            device,
+            pool,
+            processBPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
         SinkStage<TDevice> sink{pool, result, threads};
 
         GraphRunner<TDevice> runner{device, pool};
@@ -151,6 +169,7 @@ namespace graphFlow::particle
         alpaka::unused(nFilter, nProcessA, nProcessB, nSink);
 
         runner.setSource(nGenerate, parameters.numParticles, config.liveParticles);
+        runner.setBatchChunks(config.batchChunks);
         runner.setStallTimeout(std::chrono::milliseconds{parameters.stallTimeoutMs});
         SchedulerStats const stats = runner.run();
 

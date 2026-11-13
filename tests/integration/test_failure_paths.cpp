@@ -164,7 +164,7 @@ TEST_CASE("a failed transform batch poisons the stage and restores the pool", "[
         128u};
 
     graphFlow::ChunkDescriptor const chunk{pool.acquire(), 4u, 0u};
-    Runner::Batch const batch{chunk, 0u};
+    Runner::Batch const batch{{chunk}, 0u};
     generate.launch(queue, batch);
     alpaka::onHost::wait(queue);
 
@@ -177,12 +177,12 @@ TEST_CASE("a failed transform batch poisons the stage and restores the pool", "[
     alpaka::onHost::wait(queue);
 
     std::uint32_t allocated = 0u;
-    CHECK_THROWS_AS(stage.advance(queue, chunk, allocated), std::runtime_error);
+    CHECK_THROWS_AS(stage.advance(queue, batch, allocated), std::runtime_error);
 
     // The partially acquired output chunk is back; only the input is still live.
     CHECK(pool.freeCount() == 1u);
     std::vector<graphFlow::ChunkDescriptor> outputs;
-    stage.finish(chunk, outputs);
+    stage.finish(batch, outputs);
     CHECK(outputs.empty());
 
     // The failed batch marks the stage single-use, so stale planning state cannot be replayed.
