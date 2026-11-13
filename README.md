@@ -20,8 +20,8 @@ Documentation:
 
 ## Status
 
-Integrated main: `68124ad3875e42cbe09247f64bd218a7ac8d58fc` (T1, T2, T3, T5,
-T7, T14a). CPU and CUDA execution are validated on the recorded integrated
+Integrated main: `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b` (T1, T2, T3, T5,
+T7, T13, T14a). CPU and CUDA execution are validated on the recorded integrated
 runs. HIP compiles the full tree for `gfx90a` with `amdclang++`, but no AMD
 device is visible, so HIP execution is not claimed.
 
@@ -38,8 +38,9 @@ the largest fitting prefix of the ready list is dispatched. The pool stays
 `S = P + K*R(C)`, so `Q` changes launch amortisation and buffer sizing, not the
 pool bound.
 
-The tree contains `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
-`LICENSES/MPL-2.0.txt`. There is no CI workflow yet. See
+The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
+`.reuse/dep5`, and `LICENSES/MPL-2.0.txt`. The tree-wide format and SPDX sweep
+remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
 Recorded integrated tests: fwk394 CPU 74/74, hal CUDA 75/75. The totals come
@@ -279,14 +280,18 @@ The full design is in [architecture](docs/architecture.md).
   short. An optional cap is not implemented.
 - The launch still uses `ThreadSpec` with one block per tile descriptor. The
   `FrameSpec` refactor is pending.
-- No AMD GPU is visible. HIP is compile-only for `gfx90a`; no HIP runtime result
-  is claimed.
+- No AMD GPU is visible on hal. HIP is compile-only for `gfx90a`; HIP execution
+  is blocked until an AMD runtime device is available; no HIP runtime result is
+  claimed.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
   CUDA 13.4 is the validated compiler.
-- TSAN is blocked on hal by `unexpected memory mapping`; the scheduler subset is
-  clean on fwk394 (14/14).
+- TSAN is blocked on hal by `unexpected memory mapping`; the non-PIE
+  scheduler/pool subset is clean on fwk394 (14/14). No full integrated TSAN run
+  is claimed.
 - `hal` is shared. The historical throughput is a baseline, not an exclusive
-  acceptance number.
+  acceptance number. JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
+  available and exclusive per operator, but its gateway sharing flag is unknown
+  and no H100 baseline is recorded yet.
 - The fixed-capacity pool is budget-capped, but a slot-based pool remains future
   work.
 - One in-flight batch per node.
