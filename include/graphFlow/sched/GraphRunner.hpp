@@ -316,19 +316,31 @@ namespace graphFlow
                     //    the physical storage precondition (one chunk beyond the output reserve),
                     //    so ready input chunks cannot consume the output-credit reserve.
                     Node& source = *m_nodes[*m_sourceNode];
+                    std::uint64_t const liveParticles = generated - sunkParticles;
+                    std::uint64_t const remaining = m_sourceParticles - generated;
+                    std::uint64_t const capacity = m_pool.chunkCapacity();
+                    std::uint64_t const configuredLive = m_sourceLiveParticles;
+                    // A source chunk must be large enough to amortise one classify/plan/scatter
+                    // round trip. With a configured budget P, require min(C, P, remaining)
+                    // particles; otherwise wait for the sinks to release the budget. A tail or a
+                    // deliberately small P still gets a smaller chunk.
+                    std::uint64_t const minFill
+                        = configuredLive == 0u
+                              ? std::min(capacity, remaining)
+                              : std::min(std::min(capacity, configuredLive), remaining);
                     bool const withinAdmission
-                        = m_sourceLiveParticles == 0u
-                          || (generated - sunkParticles) < static_cast<std::uint64_t>(m_sourceLiveParticles);
-                    if(generated < m_sourceParticles && !source.inflight && withinAdmission
+                        = configuredLive == 0u || liveParticles < configuredLive;
+                    bool const enoughBudget
+                        = configuredLive == 0u
+                          || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
+                    if(generated < m_sourceParticles && !source.inflight && withinAdmission && enoughBudget
                        && m_pool.freeCount() > reservedTotal)
                     {
-                        std::uint64_t const liveParticles = generated - sunkParticles;
-                        std::uint64_t budget = m_sourceParticles - generated;
+                        std::uint64_t budget = remaining;
                         std::uint32_t const fillCap
-                            = m_sourceLiveParticles == 0u
+                            = configuredLive == 0u
                                   ? m_pool.chunkCapacity()
-                                  : static_cast<std::uint32_t>(
-                                        static_cast<std::uint64_t>(m_sourceLiveParticles) - liveParticles);
+                                  : static_cast<std::uint32_t>(configuredLive - liveParticles);
                         if(budget > fillCap)
                             budget = fillCap;
                         if(budget > m_pool.chunkCapacity())
