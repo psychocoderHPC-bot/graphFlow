@@ -37,6 +37,41 @@ the device must outlive the flow. The calls below are the complete minimal surfa
 changes payload semantics or routes; tuning is not an argument of the minimal
 calls above.
 
+## Failure status
+
+A functor may take an optional `Status&` argument after the optional
+accelerator argument:
+
+| Functor | Signatures with status |
+| --- | --- |
+| source | `(acc, status, id)`, `(status, id)` |
+| transform | `(acc, status, payload)`, `(status, payload)` |
+| classifier | `(acc, status, payload)`, `(status, payload)` |
+| updater | `(acc, status, bin, payload)`, `(status, bin, payload)` |
+| sink | `(acc, status, payload)`, `(status, payload)` |
+
+`Status` carries one status word per batch. A functor calls
+`status.set(graphFlow::StatusCode::invalid)` or
+`status.set(graphFlow::StatusCode::overflow)` when it rejects an item.
+`invalid` covers non-finite or impossible geometry, a vacuum ray with no
+reachable face, a classifier result outside `maxBins`, and other checked input
+failures. `overflow` covers a checked counter or capacity overflow.
+
+The device adapter copies the status word to the host after the metadata copy
+and before the batch event is observed. The host rejects the batch with a
+`BatchError` before it plans or publishes outputs, and the abort path returns
+the planned output chunks, leases, and pool credits exactly once. A failed
+stage is single-use. A capped history is a routed outcome, not a failure, so a
+classifier may still send it to a named terminal port.
+
+An updater reports its result through `UpdateResult`:
+
+| Value | Meaning |
+| --- | --- |
+| `success` | The update completed. |
+| `invalid` | The update rejected the item; the host fails the batch. |
+| `overflow` | A checked counter or capacity overflowed; the host fails the batch. |
+
 ## Handles and ports
 
 A node handle is an opaque value carrying a graph identity and an internal node

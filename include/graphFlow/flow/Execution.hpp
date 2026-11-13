@@ -12,6 +12,7 @@
 #include "graphFlow/flow/Concepts.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/PayloadStorage.hpp"
+#include "graphFlow/flow/Status.hpp"
 #include "graphFlow/graph/BinTable.hpp"
 #include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graph/DenseBinTable.hpp"
@@ -37,12 +38,37 @@ namespace graphFlow::detail
         functor(accelerator, std::forward<TArgs>(args)...);
     };
 
-    /** Call a public functor with the accelerator argument when it declares one. */
-    template<typename TFunctor, typename TAcc, typename... TArgs>
-    ALPAKA_FN_ACC decltype(auto) invokeOptional(TFunctor const& functor, TAcc const& accelerator, TArgs&&... args)
+    /** Whether `TFunctor` accepts the accelerator followed by a status reference. */
+    template<typename TFunctor, typename TAcc, typename TStatus, typename... TArgs>
+    concept InvocableWithAcceleratorAndStatus
+        = requires(TFunctor const& functor, TAcc const& accelerator, TStatus& status, TArgs&&... args) {
+              functor(accelerator, status, std::forward<TArgs>(args)...);
+          };
+
+    /** Whether `TFunctor` accepts a status reference without an accelerator. */
+    template<typename TFunctor, typename TStatus, typename... TArgs>
+    concept InvocableWithStatus = requires(TFunctor const& functor, TStatus& status, TArgs&&... args) {
+        functor(status, std::forward<TArgs>(args)...);
+    };
+
+    /** Invoke a public functor with the optional accelerator and status arguments.
+     *
+     * The accelerator forms take priority over the status-only form so an existing functor whose
+     * first parameter is a generic `auto const&` keeps its accelerator meaning.
+     */
+    template<typename TFunctor, typename TAcc, typename TStatus, typename... TArgs>
+    ALPAKA_FN_ACC decltype(auto) invokeWithStatus(
+        TFunctor const& functor,
+        TAcc const& accelerator,
+        TStatus& status,
+        TArgs&&... args)
     {
-        if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TArgs...>)
+        if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TArgs...>)
+            return functor(accelerator, status, std::forward<TArgs>(args)...);
+        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TArgs...>)
             return functor(accelerator, std::forward<TArgs>(args)...);
+        else if constexpr(InvocableWithStatus<TFunctor, TStatus, TArgs...>)
+            return functor(status, std::forward<TArgs>(args)...);
         else
             return functor(std::forward<TArgs>(args)...);
     }
@@ -62,81 +88,70 @@ namespace graphFlow::detail
     }
 
     /** Apply a transform functor, accepting a mutable payload or a returned replacement. */
-    template<typename TFunctor, typename TPayload, typename TArg>
-    ALPAKA_FN_ACC TPayload finishTransform(TFunctor const& functor, TArg&& argument, TPayload& payload)
+    template<typename TFunctor, typename TPayload, typename... TArgs>
+    ALPAKA_FN_ACC TPayload finishTransform(TFunctor const& functor, TPayload& payload, TArgs&&... args)
     {
-        using Result = std::invoke_result_t<TFunctor const&, TArg>;
+        using Result = std::invoke_result_t<TFunctor const&, TArgs...>;
         if constexpr(std::is_void_v<Result>)
-            functor(std::forward<TArg>(argument));
+            functor(std::forward<TArgs>(args)...);
         else
-            payload = static_cast<TPayload>(functor(std::forward<TArg>(argument)));
+            payload = static_cast<TPayload>(functor(std::forward<TArgs>(args)...));
         return payload;
     }
 
-    template<typename TFunctor, typename TAcc, typename TPayload, typename TArg>
-    ALPAKA_FN_ACC TPayload finishTransformAccelerated(
+    template<typename TFunctor, typename TAcc, typename TStatus, typename TPayload>
+    ALPAKA_FN_ACC TPayload applyTransform(
         TFunctor const& functor,
         TAcc const& accelerator,
-        TArg&& argument,
-        TPayload& payload)
+        TStatus& status,
+        TPayload payload)
     {
-        using Result = std::invoke_result_t<TFunctor const&, TAcc const&, TArg>;
-        if constexpr(std::is_void_v<Result>)
-            functor(accelerator, std::forward<TArg>(argument));
-        else
-            payload = static_cast<TPayload>(functor(accelerator, std::forward<TArg>(argument)));
-        return payload;
-    }
-
-    template<typename TFunctor, typename TAcc, typename TPayload>
-    ALPAKA_FN_ACC TPayload applyTransform(TFunctor const& functor, TAcc const& accelerator, TPayload payload)
-    {
-        if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload&>)
-            return finishTransformAccelerated(functor, accelerator, payload, payload);
-        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload const&>)
-            return finishTransformAccelerated(functor, accelerator, std::as_const(payload), payload);
+        if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TPayload&>)
+            return finishTransform(functor, payload, accelerator, status, payload);
+        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload&>)
+            return finishTransform(functor, payload, accelerator, payload);
+        else if constexpr(InvocableWithStatus<TFunctor, TStatus, TPayload&>)
+            return finishTransform(functor, payload, status, payload);
         else if constexpr(std::invocable<TFunctor const&, TPayload&>)
             return finishTransform(functor, payload, payload);
+        else if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TPayload const&>)
+            return finishTransform(functor, payload, accelerator, status, std::as_const(payload));
+        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload const&>)
+            return finishTransform(functor, payload, accelerator, std::as_const(payload));
+        else if constexpr(InvocableWithStatus<TFunctor, TStatus, TPayload const&>)
+            return finishTransform(functor, payload, status, std::as_const(payload));
         else
-            return finishTransform(functor, std::as_const(payload), payload);
+            return finishTransform(functor, payload, std::as_const(payload));
     }
 
     /** Apply an optional partition updater and normalise its result. */
-    template<typename TUpdate, typename TPayload, typename TArg>
-    ALPAKA_FN_ACC UpdateResult finishUpdate(TUpdate const& update, TArg&& bin, TPayload& payload)
+    template<typename TUpdate, typename... TArgs>
+    ALPAKA_FN_ACC UpdateResult finishUpdate(TUpdate const& update, TArgs&&... args)
     {
-        using Result = std::invoke_result_t<TUpdate const&, TArg, TPayload&>;
+        using Result = std::invoke_result_t<TUpdate const&, TArgs...>;
         if constexpr(std::is_void_v<Result>)
         {
-            update(std::forward<TArg>(bin), payload);
+            update(std::forward<TArgs>(args)...);
             return UpdateResult::success;
         }
         else
-            return static_cast<UpdateResult>(update(std::forward<TArg>(bin), payload));
+            return static_cast<UpdateResult>(update(std::forward<TArgs>(args)...));
     }
 
-    template<typename TUpdate, typename TAcc, typename TPayload, typename TArg>
-    ALPAKA_FN_ACC UpdateResult finishUpdateAccelerated(
+    template<typename TUpdate, typename TAcc, typename TStatus, typename TPayload, typename TBin>
+    ALPAKA_FN_ACC UpdateResult applyUpdate(
         TUpdate const& update,
         TAcc const& accelerator,
-        TArg&& bin,
+        TStatus& status,
+        TBin bin,
         TPayload& payload)
     {
-        using Result = std::invoke_result_t<TUpdate const&, TAcc const&, TArg, TPayload&>;
-        if constexpr(std::is_void_v<Result>)
-        {
-            update(accelerator, std::forward<TArg>(bin), payload);
-            return UpdateResult::success;
-        }
-        else
-            return static_cast<UpdateResult>(update(accelerator, std::forward<TArg>(bin), payload));
-    }
-
-    template<typename TUpdate, typename TAcc, typename TPayload, typename TBin>
-    ALPAKA_FN_ACC UpdateResult applyUpdate(TUpdate const& update, TAcc const& accelerator, TBin bin, TPayload& payload)
-    {
-        if constexpr(InvocableWithAccelerator<TUpdate, TAcc, TBin, TPayload&>)
-            return finishUpdateAccelerated(update, accelerator, bin, payload);
+        if constexpr(InvocableWithAcceleratorAndStatus<TUpdate, TAcc, TStatus, TBin, TPayload&>)
+            return finishUpdate(update, accelerator, status, bin, payload);
+        else if constexpr(InvocableWithAccelerator<TUpdate, TAcc, TBin, TPayload&>)
+            return finishUpdate(update, accelerator, bin, payload);
+        else if constexpr(InvocableWithStatus<TUpdate, TStatus, TBin, TPayload&>)
+            return finishUpdate(update, status, bin, payload);
         else
             return finishUpdate(update, bin, payload);
     }
@@ -262,16 +277,18 @@ namespace graphFlow::detail
             auto view1,
             auto view2,
             auto view3,
+            alpaka::concepts::IMdSpan auto statusView,
             std::uint64_t firstId,
             std::uint32_t base,
             std::uint32_t fill) const
         {
             using namespace alpaka;
             TAccess access;
+            Status status{&statusView[0u]};
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const offset = static_cast<std::uint32_t>(i);
-                auto payload = invokeOptional(functor, acc, firstId + static_cast<std::uint64_t>(offset));
+                auto payload = invokeWithStatus(functor, acc, status, firstId + static_cast<std::uint64_t>(offset));
                 access
                     .store(view0, view1, view2, view3, base + offset, static_cast<typename TAccess::Payload>(payload));
             }
@@ -299,6 +316,7 @@ namespace graphFlow::detail
             auto out1,
             auto out2,
             auto out3,
+            alpaka::concepts::IMdSpan auto statusView,
             alpaka::concepts::IMdSpan auto inBase,
             alpaka::concepts::IMdSpan auto inCount,
             alpaka::concepts::IMdSpan auto outPosition,
@@ -308,6 +326,7 @@ namespace graphFlow::detail
         {
             using namespace alpaka;
             TAccess access;
+            Status status{&statusView[0u]};
             for(auto [chunkIndex] : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{chunks}))
             {
                 std::uint32_t const chunk = static_cast<std::uint32_t>(chunkIndex);
@@ -322,7 +341,7 @@ namespace graphFlow::detail
                     std::uint32_t const outputOffset = global % chunkCapacity;
                     std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
                     typename TAccess::Payload payload = access.load(in0, in1, in2, in3, inSlot + offset);
-                    payload = applyTransform(functor, acc, std::move(payload));
+                    payload = applyTransform(functor, acc, status, std::move(payload));
                     access.store(out0, out1, out2, out3, outSlot, payload);
                 }
             }
@@ -343,6 +362,7 @@ namespace graphFlow::detail
             auto view1,
             auto view2,
             auto view3,
+            alpaka::concepts::IMdSpan auto statusView,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto counts,
             alpaka::concepts::IMdSpan auto tiles,
@@ -350,6 +370,7 @@ namespace graphFlow::detail
         {
             using namespace alpaka;
             TAccess access;
+            Status status{&statusView[0u]};
 
             std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
             auto tileCounts = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
@@ -369,9 +390,11 @@ namespace graphFlow::detail
                 {
                     std::uint32_t const slot = base + static_cast<std::uint32_t>(i);
                     typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, slot);
-                    std::uint32_t const bin = static_cast<std::uint32_t>(invokeOptional(classifier, acc, payload));
+                    std::uint32_t const bin
+                        = static_cast<std::uint32_t>(invokeWithStatus(classifier, acc, status, payload));
                     if(bin >= T_B)
                     {
+                        status.set(StatusCode::invalid);
                         counts[T_B] = 1u;
                         continue;
                     }
@@ -418,6 +441,7 @@ namespace graphFlow::detail
             auto out1,
             auto out2,
             auto out3,
+            alpaka::concepts::IMdSpan auto statusView,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto table,
             alpaka::concepts::IMdSpan auto next,
@@ -427,6 +451,7 @@ namespace graphFlow::detail
         {
             using namespace alpaka;
             TAccess access;
+            Status status{&statusView[0u]};
 
             std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
             auto tileCounts = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
@@ -473,7 +498,11 @@ namespace graphFlow::detail
                     std::uint32_t const outputOffset = j % chunkCapacity;
 
                     typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
-                    UpdateResult const result = applyUpdate(update, acc, static_cast<TBin>(bin), payload);
+                    UpdateResult const result = applyUpdate(update, acc, status, static_cast<TBin>(bin), payload);
+                    if(result == UpdateResult::invalid)
+                        status.set(StatusCode::invalid);
+                    else if(result == UpdateResult::overflow)
+                        status.set(StatusCode::overflow);
                     if(result != UpdateResult::success)
                         onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
 
@@ -495,16 +524,18 @@ namespace graphFlow::detail
             auto view1,
             auto view2,
             auto view3,
+            alpaka::concepts::IMdSpan auto statusView,
             std::uint32_t base,
             std::uint32_t fill) const
         {
             using namespace alpaka;
             TAccess access;
+            Status status{&statusView[0u]};
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const offset = static_cast<std::uint32_t>(i);
                 typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, base + offset);
-                invokeOptional(functor, acc, payload);
+                invokeWithStatus(functor, acc, status, payload);
             }
         }
     };
@@ -549,6 +580,10 @@ namespace graphFlow::detail
     {
         using Base = StageBase<TDevice, TStorage>;
         using Access = StorageAccess<TStorage, TPayload>;
+        using U32View = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using MappedU32View = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
     public:
         using Queue = typename Base::Queue;
@@ -560,6 +595,8 @@ namespace graphFlow::detail
             , m_functor{std::move(functor)}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
+            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
+            , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
@@ -567,26 +604,35 @@ namespace graphFlow::detail
 
         void launch(Queue const& queue, Batch const& batch) override
         {
+            throwIfFailed();
             ChunkDescriptor const& chunk = batch.chunk();
-            if(chunk.fill == 0u)
-                return;
-            ++m_launches;
-            LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
-            queue.enqueue(
-                policy.frameSpec(),
-                alpaka::KernelBundle{
-                    SourceKernel<TFunctor, Access>{m_functor},
-                    Access::view0(m_storage),
-                    Access::view1(m_storage),
-                    Access::view2(m_storage),
-                    Access::view3(m_storage),
-                    batch.firstId,
-                    static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
-                    chunk.fill});
+            // Reset the single status word on the node queue, then copy it back only after the
+            // source kernel, so `advance` observes a status that covers this batch.
+            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
+            if(chunk.fill != 0u)
+            {
+                ++m_launches;
+                LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+                queue.enqueue(
+                    policy.frameSpec(),
+                    alpaka::KernelBundle{
+                        SourceKernel<TFunctor, Access>{m_functor},
+                        Access::view0(m_storage),
+                        Access::view1(m_storage),
+                        Access::view2(m_storage),
+                        Access::view3(m_storage),
+                        m_status,
+                        batch.firstId,
+                        static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
+                        chunk.fill});
+            }
+            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }
 
         bool advance(Queue const&, Batch const&, std::uint32_t& allocated) override
         {
+            throwIfFailed();
+            checkStatus("source");
             allocated = 0u;
             return false;
         }
@@ -598,6 +644,7 @@ namespace graphFlow::detail
 
         void abort() override
         {
+            m_failed = true;
         }
 
         [[nodiscard]] std::uint32_t launches() const noexcept
@@ -606,12 +653,31 @@ namespace graphFlow::detail
         }
 
     private:
+        void throwIfFailed() const
+        {
+            if(m_failed)
+                throw std::logic_error{"graphFlow: SourceStage is single-use after a failed batch"};
+        }
+
+        void checkStatus(char const* stage)
+        {
+            StatusCode const code = decodeStatus(m_statusHost.data()[0u]);
+            if(code != StatusCode::ok)
+            {
+                m_failed = true;
+                throw BatchError{std::string{stage} + ": device status reports " + statusCodeName(code)};
+            }
+        }
+
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
+        U32View m_status;
+        MappedU32View m_statusHost;
         std::uint32_t m_launches = 0u;
+        bool m_failed = false;
     };
 
     /** Transform stage: one batch-wide out-of-place launch, no histogram or scatter. */
@@ -662,6 +728,8 @@ namespace graphFlow::detail
             , m_outChunksHost{alpaka::onHost::allocMapped<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(m_reserveBound)})}
+            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
+            , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
@@ -698,6 +766,7 @@ namespace graphFlow::detail
 
             try
             {
+                alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
                     ChunkHandle const handle = m_storage.acquire();
@@ -731,12 +800,14 @@ namespace graphFlow::detail
                         Access::view1(m_storage),
                         Access::view2(m_storage),
                         Access::view3(m_storage),
+                        m_status,
                         m_inBase,
                         m_inCount,
                         m_outPosition,
                         m_outChunks,
                         m_capacity,
                         static_cast<std::uint32_t>(chunkCount)});
+                alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             }
             catch(...)
             {
@@ -751,6 +822,8 @@ namespace graphFlow::detail
 
         bool advance(Queue const&, Batch const&, std::uint32_t& allocated) override
         {
+            throwIfFailed();
+            checkStatus("transform");
             allocated = m_allocated;
             m_allocated = 0u;
             return false;
@@ -805,6 +878,16 @@ namespace graphFlow::detail
                 throw std::logic_error{"graphFlow: TransformStage is single-use after a failed batch"};
         }
 
+        void checkStatus(char const* stage)
+        {
+            StatusCode const code = decodeStatus(m_statusHost.data()[0u]);
+            if(code != StatusCode::ok)
+            {
+                m_failed = true;
+                throw BatchError{std::string{stage} + ": device status reports " + statusCodeName(code)};
+            }
+        }
+
         void releasePending()
         {
             for(ChunkDescriptor const& descriptor : m_pending)
@@ -828,6 +911,8 @@ namespace graphFlow::detail
         MappedU32View m_outPositionHost;
         U32View m_outChunks;
         MappedU32View m_outChunksHost;
+        U32View m_status;
+        MappedU32View m_statusHost;
         std::vector<ChunkDescriptor> m_pending;
         std::uint32_t m_allocated = 0u;
         std::uint32_t m_launches = 0u;
@@ -898,6 +983,8 @@ namespace graphFlow::detail
             , m_binIds{alpaka::onHost::alloc<std::uint32_t>(
                   device,
                   alpaka::Vec{checkedSlotCount(storage.numChunks(), m_capacity)})}
+            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
+            , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
@@ -935,6 +1022,7 @@ namespace graphFlow::detail
 
             LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
+            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
             if(m_numTiles != 0u)
             {
                 alpaka::onHost::memcpy(
@@ -951,12 +1039,14 @@ namespace graphFlow::detail
                         Access::view1(m_storage),
                         Access::view2(m_storage),
                         Access::view3(m_storage),
+                        m_status,
                         m_binIds,
                         m_counts,
                         tilesView,
                         m_capacity});
                 ++m_classifyLaunches;
             }
+            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
         }
 
@@ -1048,30 +1138,42 @@ namespace graphFlow::detail
 
         void planAndScatter(Queue const& queue, Batch const& batch, std::uint32_t& allocated)
         {
-            LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
-            std::uint32_t const* host = m_countsHost.data();
-            if(host[m_bins] != 0u)
-                throw BatchError{"partition classify: device status reports an invalid classifier result"};
-
-            m_totals.assign(m_bins, 0u);
-            std::uint64_t particles = 0u;
-            for(std::uint32_t bin = 0u; bin < m_bins; ++bin)
-            {
-                m_totals[bin] = host[bin];
-                particles += host[bin];
-            }
-            if(particles != batch.particles())
-                throw BatchError{"partition classify: classified particle count does not match the batch"};
-
-            DenseBinPlan const plan = planDenseBins(m_totals, m_capacity);
-            if(plan.numOutputChunks > m_reserveBound)
-                throw BatchError{"partition plan: exact chunk count exceeds the reservation bound"};
-
             std::vector<std::uint32_t> chunkIndices;
-            chunkIndices.reserve(plan.numOutputChunks);
-            m_pending.clear();
             try
             {
+                // The classify status copy is enqueued before the batch event, so `advance`
+                // observes the status of this batch before it plans any output chunk.
+                checkStatus("partition classify");
+                LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
+                std::uint32_t const* host = m_countsHost.data();
+                if(host[m_bins] != 0u)
+                {
+                    m_failed = true;
+                    throw BatchError{"partition classify: device status reports an invalid classifier result"};
+                }
+
+                m_totals.assign(m_bins, 0u);
+                std::uint64_t particles = 0u;
+                for(std::uint32_t bin = 0u; bin < m_bins; ++bin)
+                {
+                    m_totals[bin] = host[bin];
+                    particles += host[bin];
+                }
+                if(particles != batch.particles())
+                {
+                    m_failed = true;
+                    throw BatchError{"partition classify: classified particle count does not match the batch"};
+                }
+
+                DenseBinPlan const plan = planDenseBins(m_totals, m_capacity);
+                if(plan.numOutputChunks > m_reserveBound)
+                {
+                    m_failed = true;
+                    throw BatchError{"partition plan: exact chunk count exceeds the reservation bound"};
+                }
+
+                chunkIndices.reserve(plan.numOutputChunks);
+                m_pending.clear();
                 for(std::size_t bin = 0u; bin < m_totals.size(); ++bin)
                 {
                     std::uint32_t const chunks = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
@@ -1087,10 +1189,15 @@ namespace graphFlow::detail
 
                 std::vector<std::uint32_t> const table = buildDenseTable(plan, chunkIndices);
                 if(static_cast<std::uint64_t>(table.size()) > m_table.getExtents().x())
+                {
+                    m_failed = true;
                     throw BatchError{"partition plan: device table buffer too small"};
+                }
                 std::copy(table.begin(), table.end(), m_tableHost.data());
                 alpaka::onHost::memcpy(queue, m_table, m_tableHost);
                 alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
+                // Reset the status for the scatter stage; its copy follows the scatter kernel.
+                alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
                 auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
 
                 if(m_numTiles != 0u)
@@ -1107,6 +1214,7 @@ namespace graphFlow::detail
                             Access::view1(m_storage),
                             Access::view2(m_storage),
                             Access::view3(m_storage),
+                            m_status,
                             m_binIds,
                             m_table,
                             m_next,
@@ -1116,6 +1224,7 @@ namespace graphFlow::detail
                     ++m_scatterLaunches;
                 }
 
+                alpaka::onHost::memcpy(queue, m_statusHost, m_status);
                 alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
                 alpaka::onHost::memcpy(queue, m_nextHost, m_next);
             }
@@ -1143,6 +1252,16 @@ namespace graphFlow::detail
                 throw std::logic_error{"graphFlow: PartitionStage is single-use after a failed batch"};
         }
 
+        void checkStatus(char const* stage)
+        {
+            StatusCode const code = decodeStatus(m_statusHost.data()[0u]);
+            if(code != StatusCode::ok)
+            {
+                m_failed = true;
+                throw BatchError{std::string{stage} + ": device status reports " + statusCodeName(code)};
+            }
+        }
+
         void releasePending()
         {
             for(ChunkDescriptor const& descriptor : m_pending)
@@ -1152,6 +1271,7 @@ namespace graphFlow::detail
 
         void finalise()
         {
+            checkStatus("partition scatter");
             if(m_countsHost.data()[m_bins] != 0u)
                 throw BatchError{"partition scatter: device status reports a checked updater overflow"};
             for(std::uint32_t bin = 0u; bin < m_bins; ++bin)
@@ -1181,6 +1301,8 @@ namespace graphFlow::detail
         TileView m_tiles;
         MappedTileView m_tilesHost;
         U32View m_binIds;
+        U32View m_status;
+        MappedU32View m_statusHost;
         std::uint32_t m_stage = 0u;
         std::uint32_t m_numTiles = 0u;
         std::uint32_t m_classifyLaunches = 0u;
@@ -1196,6 +1318,10 @@ namespace graphFlow::detail
     {
         using Base = StageBase<TDevice, TStorage>;
         using Access = StorageAccess<TStorage, TPayload>;
+        using U32View = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using MappedU32View = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
     public:
         using Queue = typename Base::Queue;
@@ -1207,6 +1333,8 @@ namespace graphFlow::detail
             , m_functor{std::move(functor)}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
+            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
+            , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
@@ -1214,25 +1342,32 @@ namespace graphFlow::detail
 
         void launch(Queue const& queue, Batch const& batch) override
         {
+            throwIfFailed();
             ChunkDescriptor const& chunk = batch.chunk();
-            if(chunk.fill == 0u)
-                return;
-            ++m_launches;
-            LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
-            queue.enqueue(
-                policy.frameSpec(),
-                alpaka::KernelBundle{
-                    SinkKernel<TFunctor, Access>{m_functor},
-                    Access::view0(m_storage),
-                    Access::view1(m_storage),
-                    Access::view2(m_storage),
-                    Access::view3(m_storage),
-                    static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
-                    chunk.fill});
+            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
+            if(chunk.fill != 0u)
+            {
+                ++m_launches;
+                LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+                queue.enqueue(
+                    policy.frameSpec(),
+                    alpaka::KernelBundle{
+                        SinkKernel<TFunctor, Access>{m_functor},
+                        Access::view0(m_storage),
+                        Access::view1(m_storage),
+                        Access::view2(m_storage),
+                        Access::view3(m_storage),
+                        m_status,
+                        static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
+                        chunk.fill});
+            }
+            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }
 
         bool advance(Queue const&, Batch const&, std::uint32_t& allocated) override
         {
+            throwIfFailed();
+            checkStatus("sink");
             allocated = 0u;
             return false;
         }
@@ -1243,6 +1378,7 @@ namespace graphFlow::detail
 
         void abort() override
         {
+            m_failed = true;
         }
 
         [[nodiscard]] std::uint32_t launches() const noexcept
@@ -1251,11 +1387,30 @@ namespace graphFlow::detail
         }
 
     private:
+        void throwIfFailed() const
+        {
+            if(m_failed)
+                throw std::logic_error{"graphFlow: SinkStage is single-use after a failed batch"};
+        }
+
+        void checkStatus(char const* stage)
+        {
+            StatusCode const code = decodeStatus(m_statusHost.data()[0u]);
+            if(code != StatusCode::ok)
+            {
+                m_failed = true;
+                throw BatchError{std::string{stage} + ": device status reports " + statusCodeName(code)};
+            }
+        }
+
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
+        U32View m_status;
+        MappedU32View m_statusHost;
         std::uint32_t m_launches = 0u;
+        bool m_failed = false;
     };
 } // namespace graphFlow::detail

@@ -133,6 +133,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_payload_slot_storage.cpp
         tests/unit/test_flow_builder.cpp
         tests/unit/test_flow_execution.cpp
+        tests/unit/test_flow_failure.cpp
         tests/unit/test_pool_budget.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_route_table.cpp
