@@ -107,6 +107,7 @@ namespace graphFlow::particle
         config.seed = parameters.seed;
         config.maxVisits = parameters.maxVisits;
         config.numParticles = parameters.numParticles;
+        config.batchChunks = parameters.batchChunks;
         config.validate();
 
         std::uint32_t const threads = GraphRunner<TDevice>::threadsPerBlock(device, config.tileSize);

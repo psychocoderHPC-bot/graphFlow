@@ -14,7 +14,8 @@ namespace graphFlow
      *
      * `chunkCapacity` (C) is the number of particle slots per chunk, `numChunks` the pool size,
      * `liveParticles` (P) the configured source-admission capacity in particles, `tileSize` (T) the
-     * requested threads per block and the per-tile histogram width, and `maxBins` the runtime upper
+     * requested threads per block and the per-tile histogram width, `batchChunks` (Q) the number of
+     * ready chunks a future batching scheduler may process together, and `maxBins` the runtime upper
      * bound for the compile-time bin count of a node.
      *
      * The `policy*` fields are the knobs of the device-aware chunk policy in
@@ -32,6 +33,7 @@ namespace graphFlow
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
+        std::uint32_t batchChunks = 1u; // Q, ready-chunk batch size (reserved for batching)
 
         // Device-aware chunk policy knobs, see include/graphFlow/core/DevicePolicy.hpp.
         std::uint32_t policyWaves = 1u;
@@ -50,6 +52,8 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: chunkCapacity must be non-zero"};
             if(tileSize == 0u)
                 throw std::invalid_argument{"graphFlow::Config: tileSize must be non-zero"};
+            if(batchChunks == 0u)
+                throw std::invalid_argument{"graphFlow::Config: batchChunks must be non-zero"};
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};
             if(maxBins > denseBinLimit)
