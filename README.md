@@ -44,12 +44,12 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 158/158, hal CUDA 194/194. The totals
+Recorded integrated tests: fwk394 CPU 170/170, hal CUDA 206/206. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
-include the kernel execution, FrameSpec matrix, and typed `Flow` execution
-cases. The typed CUDA tests run the feedback graph, exactly-once sink counts,
-the bounded pool, and the generic POD chain on the A30. These are the rebased
-CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
+include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
+failure-status cases. The typed CUDA tests run the feedback graph,
+exactly-once sink counts, the bounded pool, the generic POD chain, and the
+status/abort paths on the A30. These are the rebased CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
 visible.
 
 The public contract is frozen in [public API contract](docs/public-api.md). The typed

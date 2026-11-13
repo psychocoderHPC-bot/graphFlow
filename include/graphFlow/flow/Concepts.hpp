@@ -6,6 +6,7 @@
 
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/flow/Payload.hpp"
+#include "graphFlow/flow/Status.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -30,7 +31,9 @@ namespace graphFlow
     enum class UpdateResult
     {
         success,
-        overflow
+        overflow,
+        /** Checked input failure, for example invalid geometry or an impossible state. */
+        invalid
     };
 
     /** Default updater of a classify-only partition node. */
@@ -50,28 +53,44 @@ namespace graphFlow
                   functor(accelerator, args...);
               };
 
-        template<bool THasAccelerator, typename TFunctor, typename... TArgs>
-        struct FunctorResult;
+        template<typename TFunctor, typename... TArgs>
+        concept CallableWithAcceleratorAndStatus
+            = requires(TFunctor const& functor, AcceleratorProbe const& accelerator, Status& status, TArgs... args) {
+                  functor(accelerator, status, args...);
+              };
 
         template<typename TFunctor, typename... TArgs>
-        struct FunctorResult<true, TFunctor, TArgs...>
+        concept CallableWithStatus
+            = requires(TFunctor const& functor, Status& status, TArgs... args) { functor(status, args...); };
+
+        /** Result type of the invocation shape the execution adapters select.
+         *
+         * The priority matches the dispatcher: accelerator plus status, accelerator, status, bare.
+         * The accelerator forms win over the status forms so an existing functor whose first
+         * parameter is a generic `auto const&` keeps its accelerator meaning.
+         */
+        template<typename TFunctor, typename... TArgs>
+        constexpr auto functorResultIdentity()
         {
-            using type = std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, TArgs...>;
-        };
+            if constexpr(CallableWithAcceleratorAndStatus<TFunctor, TArgs...>)
+                return std::type_identity<
+                    std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, Status&, TArgs...>>{};
+            else if constexpr(CallableWithAccelerator<TFunctor, TArgs...>)
+                return std::type_identity<std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, TArgs...>>{};
+            else if constexpr(CallableWithStatus<TFunctor, TArgs...>)
+                return std::type_identity<std::invoke_result_t<TFunctor const&, Status&, TArgs...>>{};
+            else
+                return std::type_identity<std::invoke_result_t<TFunctor const&, TArgs...>>{};
+        }
 
         template<typename TFunctor, typename... TArgs>
-        struct FunctorResult<false, TFunctor, TArgs...>
-        {
-            using type = std::invoke_result_t<TFunctor const&, TArgs...>;
-        };
+        using FunctorResultT = typename decltype(functorResultIdentity<TFunctor, TArgs...>())::type;
 
+        /** A public functor may take the accelerator, a `Status&`, both, or neither. */
         template<typename TFunctor, typename... TArgs>
-        using FunctorResultT =
-            typename FunctorResult<CallableWithAccelerator<TFunctor, TArgs...>, TFunctor, TArgs...>::type;
-
-        template<typename TFunctor, typename... TArgs>
-        concept OptionalAcceleratorInvocable
-            = CallableWithAccelerator<TFunctor, TArgs...> || std::invocable<TFunctor const&, TArgs...>;
+        concept OptionalContextInvocable
+            = CallableWithAcceleratorAndStatus<TFunctor, TArgs...> || CallableWithAccelerator<TFunctor, TArgs...>
+              || CallableWithStatus<TFunctor, TArgs...> || std::invocable<TFunctor const&, TArgs...>;
     } // namespace detail
 
     /** Value usable as a compile-time output-port index: an integral or enumeration bin. */
@@ -80,7 +99,7 @@ namespace graphFlow
 
     /** A source functor maps a logical item index to one payload. */
     template<typename TFunctor, typename TPayload>
-    concept SourceFor = detail::OptionalAcceleratorInvocable<TFunctor, std::uint64_t>
+    concept SourceFor = detail::OptionalContextInvocable<TFunctor, std::uint64_t>
                         && std::convertible_to<detail::FunctorResultT<TFunctor, std::uint64_t>, TPayload>;
 
     /** Bin type returned by a partition classifier. */
@@ -89,7 +108,7 @@ namespace graphFlow
 
     /** A partition classifier declares `maxBins` and returns a bin for an immutable payload. */
     template<typename TClassifier, typename TPayload>
-    concept PartitionClassifierFor = detail::OptionalAcceleratorInvocable<TClassifier, TPayload const&> && requires {
+    concept PartitionClassifierFor = detail::OptionalContextInvocable<TClassifier, TPayload const&> && requires {
         { TClassifier::maxBins } -> std::convertible_to<std::uint32_t>;
         requires(TClassifier::maxBins > 0u);
         requires(TClassifier::maxBins <= Config::denseBinLimit);
@@ -99,21 +118,21 @@ namespace graphFlow
 
     /** An updater receives the selected bin and the mutable payload copy. */
     template<typename TUpdate, typename TBin, typename TPayload>
-    concept UpdateFor = detail::OptionalAcceleratorInvocable<TUpdate, TBin, TPayload&>
+    concept UpdateFor = detail::OptionalContextInvocable<TUpdate, TBin, TPayload&>
                         && (std::is_void_v<detail::FunctorResultT<TUpdate, TBin, TPayload&>>
                             || std::convertible_to<detail::FunctorResultT<TUpdate, TBin, TPayload&>, UpdateResult>);
 
     /** A transform functor either mutates the payload or returns its replacement. */
     template<typename TFunctor, typename TPayload>
     concept TransformFor
-        = (detail::OptionalAcceleratorInvocable<TFunctor, TPayload&>
+        = (detail::OptionalContextInvocable<TFunctor, TPayload&>
            && (std::is_void_v<detail::FunctorResultT<TFunctor, TPayload&>>
                || std::same_as<std::remove_cvref_t<detail::FunctorResultT<TFunctor, TPayload&>>, TPayload>) )
-          || (detail::OptionalAcceleratorInvocable<TFunctor, TPayload const&>
+          || (detail::OptionalContextInvocable<TFunctor, TPayload const&>
               && (std::is_void_v<detail::FunctorResultT<TFunctor, TPayload const&>>
                   || std::same_as<std::remove_cvref_t<detail::FunctorResultT<TFunctor, TPayload const&>>, TPayload>) );
 
     /** A sink functor consumes each payload once. */
     template<typename TFunctor, typename TPayload>
-    concept SinkFor = detail::OptionalAcceleratorInvocable<TFunctor, TPayload const&>;
+    concept SinkFor = detail::OptionalContextInvocable<TFunctor, TPayload const&>;
 } // namespace graphFlow

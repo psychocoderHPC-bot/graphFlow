@@ -15,4 +15,5 @@
 #include "graphFlow/flow/Flow.hpp"
 #include "graphFlow/flow/NodeHandle.hpp"
 #include "graphFlow/flow/Ports.hpp"
+#include "graphFlow/flow/Status.hpp"
 #include "graphFlow/flow/Tuning.hpp"

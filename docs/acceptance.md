@@ -28,12 +28,14 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 158/158 passed at T4 |
-| CUDA CTest on hal (`sm_80`) | 194/194 passed at T4 |
+| CPU CTest on fwk394 | 170/170 passed at T3b |
+| CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
-The CTest totals include `tests/unit/test_launch_policy.cpp` and
+The T3b totals add twelve status/failure cases: the status/failure unit
+suite and three typed failure-path integration cases. The CTest totals include
+`tests/unit/test_launch_policy.cpp` and
 `tests/integration/test_framespec.cpp`, which pin the FrameSpec formula, the
 `FrameSpec` grid-stride mapping, the N/C/T/frameCap/Q matrix, and the
 `T > maxThreadsPerBlock` rejection. The CUDA build adds
