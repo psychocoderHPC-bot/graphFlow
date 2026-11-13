@@ -4,215 +4,118 @@
 
 #pragma once
 
-#include "ParticleStages.hpp"
+#include "ParticleFunctors.hpp"
+#include "ParticleTypes.hpp"
+#include "graphFlow/graphFlow.hpp"
 
 #include <alpaka/alpaka.hpp>
 
-#include <chrono>
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace graphFlow::particle
 {
-    /** Default source-admission capacity P when the caller does not configure one.
+    /** Sentinel left in the result buffer when a particle never reaches a sink. */
+    inline constexpr std::uint32_t missingWeight = 0xDEAD'BEEFu;
+
+    struct FeedbackResult
+    {
+        std::vector<std::uint32_t> weights; // final weight indexed by particle id
+        std::vector<HistogramRow> histogram; // sorted by weight, run-length encoded
+        std::uint64_t cappedParticles = 0u; // stopped by the --max-visits guard
+        std::uint64_t sunkParticles = 0u; // host-side sink conservation diagnostic
+        std::uint32_t liveParticles = 0u; // configured source-admission capacity P
+        SchedulerStats stats;
+    };
+
+    /** Run the Generate -> Filter -> {A, B} -> sink feedback graph through the public `Flow` API.
      *
-     * P is a working-set knob, not a function of N: capping it at `8*C` means the pool is sized by
-     * P and the transform output reserve, independent of arbitrarily large N. The value is
-     * documented in README.md and can be overridden with `--live-particles`.
+     * The topology is declared with opaque node handles and named outcome ports; no route table,
+     * node id, pool size, or runner configuration is constructed here. `Tuning` carries C, P, T,
+     * Q and the frame cap. The pool and the output-credit reserve are derived by `Flow` from the
+     * registered bins, so the A/B three-way split reserves one output chunk per outcome.
+     *
+     * The result views are application-owned. They are initialized before the run and copied back
+     * on a blocking queue after `Flow::run()` has retired every queue and pool chunk.
      */
-    inline std::uint32_t defaultLiveParticles(std::uint64_t numParticles, std::uint32_t chunkSize)
+    template<typename TDevice>
+    FeedbackResult runParticleFeedback(TDevice device, Parameters const& parameters, graphFlow::Tuning tuning)
     {
-        std::uint64_t const cap = 8ull * chunkSize;
-        std::uint64_t const live = numParticles < cap ? numParticles : cap;
-        return static_cast<std::uint32_t>(live == 0u ? 1u : live);
+        // Index by particle id; the sentinel detects a particle that never reached a sink.
+        std::uint64_t const resultSize = parameters.numParticles == 0u ? 1u : parameters.numParticles;
+        auto weights = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
+        auto cappedFlags = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
+        {
+            auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
+            alpaka::onHost::fill(initQueue, weights, missingWeight);
+            alpaka::onHost::memset(initQueue, cappedFlags, std::uint8_t{0});
+        }
+
+        graphFlow::Flow<graphFlow::Particle, TDevice> flow{device};
+        auto source = flow.source("generate", GenerateParticles{parameters.seed});
+        auto filter = flow.partition("filter", FilterByProperty{parameters.seed});
+        auto processA = flow.partition(
+            "process A",
+            SelectOutcome{parameters.seed, rng::purposeProcessA, parameters.maxVisits},
+            UpdateWeight{1000u});
+        auto processB = flow.partition(
+            "process B",
+            SelectOutcome{parameters.seed, rng::purposeProcessB, parameters.maxVisits},
+            UpdateWeight{1u});
+        auto sink = flow.sink("record weight", RecordWeight<decltype(weights.getView())>{weights.getView()});
+        auto capped = flow.sink(
+            "record capped weight",
+            RecordCapped<decltype(weights.getView()), decltype(cappedFlags.getView())>{
+                weights.getView(),
+                cappedFlags.getView()});
+
+        flow.connect(source, filter);
+        flow.connect(filter.template out<0u>(), processA);
+        flow.connect(filter.template out<1u>(), processB);
+        flow.connect(processA.template out<Outcome::sink>(), sink);
+        flow.connect(processB.template out<Outcome::sink>(), sink);
+        flow.connect(processA.template out<Outcome::feedback>(), filter);
+        flow.connect(processB.template out<Outcome::feedback>(), filter);
+        flow.connect(processA.template out<Outcome::capped>(), capped);
+        flow.connect(processB.template out<Outcome::capped>(), capped);
+        flow.configure(tuning);
+
+        SchedulerStats const stats = flow.run(source, parameters.numParticles);
+
+        std::vector<std::uint32_t> hostWeights(static_cast<std::size_t>(resultSize), 0u);
+        std::vector<std::uint32_t> hostCapped(static_cast<std::size_t>(resultSize), 0u);
+        {
+            auto readQueue = device.makeQueue(alpaka::queueKind::blocking);
+            alpaka::onHost::memcpy(readQueue, hostWeights, weights);
+            alpaka::onHost::memcpy(readQueue, hostCapped, cappedFlags);
+        }
+
+        FeedbackResult output;
+        output.weights.assign(
+            hostWeights.begin(),
+            hostWeights.begin() + static_cast<std::ptrdiff_t>(parameters.numParticles));
+        output.histogram = histogramOf(output.weights);
+        output.cappedParticles = 0u;
+        for(std::size_t id = 0u; id < static_cast<std::size_t>(parameters.numParticles); ++id)
+        {
+            output.cappedParticles += hostCapped[id];
+            if(hostWeights[id] != missingWeight)
+                ++output.sunkParticles;
+        }
+        output.liveParticles = tuning.liveParticles.value_or(parameters.liveParticles);
+        if(parameters.numParticles == 0u)
+            output.liveParticles = 1u; // keep the historical empty-run admission header
+        output.stats = stats;
+        return output;
     }
 
-    /** Derive the chunk-pool size from the source-admission capacity P, never from N.
-     *
-     * The plan's model is `S = ceil(P/C) + K*R`. That is a lower bound, not a safe bound for a
-     * split-routing feedback graph: every transform may split one input chunk into one chunk per
-     * bin, and repeated feedback can fragment the P live particles into as many as P chunks
-     * (one particle per chunk). The pool must therefore hold one chunk per live particle plus the
-     * output credits of the live transform batches:
-     *
-     *     R = outputChunkBound(C, C, B)
-     *     S = P + K*R,   K = TransformNodes
-     *
-     * The pool uses the single-chunk R, not a Q-scaled bound. A transform batch reserves the
-     * adaptive `outputChunkBound(sum(fill), C, B)` for the chunks it actually takes and only starts
-     * when the credits cover it; under fragmentation the scheduler shrinks the batch prefix instead
-     * of enlarging the pool. Q therefore never changes S.
-     *
-     * Source admission caps the fill of every admitted chunk at `P - liveParticles`, so the number
-     * of live particles (and therefore the number of data-carrying chunks) never exceeds P. The
-     * result is independent of N; `P == 0` selects `defaultLiveParticles`. `tests/integration/
-     * test_pressure.cpp` pins the N=4097, C=128, P=256 case and records why the smaller formula
-     * deadlocks; `tests/integration/test_batching.cpp` pins a bounded-P Q=8 batch inside S=P+K*R.
-     */
-    inline std::uint32_t derivePoolSize(
-        std::uint64_t numParticles,
-        std::uint32_t chunkSize,
-        std::uint32_t liveParticles,
-        std::uint32_t maxBins)
-    {
-        if(numParticles == 0u)
-            return 1u;
-        std::uint64_t live = liveParticles == 0u ? defaultLiveParticles(numParticles, chunkSize) : liveParticles;
-        if(live > numParticles)
-            live = numParticles;
-        if(live == 0u)
-            live = 1u;
-
-        std::uint64_t const perTransform = outputChunkBound(chunkSize, chunkSize, maxBins);
-        std::uint64_t const maxChunks = std::numeric_limits<std::uint32_t>::max();
-        if(perTransform > maxChunks)
-            throw std::overflow_error{"graphFlow: one transform reserve exceeds 2^32 chunks"};
-        std::uint64_t const transformCredits
-            = static_cast<std::uint64_t>(TransformNodes) * perTransform;
-        if(live > maxChunks || transformCredits > maxChunks - live)
-            throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
-        std::uint64_t const chunks = live + transformCredits;
-        return static_cast<std::uint32_t>(chunks == 0u ? 1u : chunks);
-    }
-
-    template<typename TDevice, typename TStage>
-    typename GraphRunner<TDevice>::Hooks hooksOf(TStage& stage)
-    {
-        using Runner = GraphRunner<TDevice>;
-        return typename Runner::Hooks{
-            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
-            { stage.launch(queue, batch); },
-            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
-            { return stage.advance(queue, batch, allocated); },
-            [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
-            { stage.finish(batch, outputs); },
-            [&stage]()
-            {
-                if constexpr(requires { stage.abort(); })
-                    stage.abort();
-            }};
-    }
-
-    /** Build and run the Generate -> Filter -> {A, B} -> Sink feedback graph. */
+    /** Convenience overload for callers that do not resolve the tuning separately. */
     template<typename TDevice>
     FeedbackResult runParticleFeedback(TDevice device, Parameters const& parameters)
     {
-        Config config;
-        config.chunkCapacity = parameters.chunkSize;
-        config.liveParticles = parameters.liveParticles == 0u
-                                   ? defaultLiveParticles(parameters.numParticles, parameters.chunkSize)
-                                   : parameters.liveParticles;
-        if(config.liveParticles > parameters.numParticles && parameters.numParticles != 0u)
-            config.liveParticles = static_cast<std::uint32_t>(parameters.numParticles);
-        config.numChunks = derivePoolSize(
-            parameters.numParticles,
-            parameters.chunkSize,
-            config.liveParticles,
-            FlowBins);
-        config.tileSize = parameters.tileSize;
-        config.maxBins = FlowBins;
-        config.seed = parameters.seed;
-        config.maxVisits = parameters.maxVisits;
-        config.numParticles = parameters.numParticles;
-        config.batchChunks = parameters.batchChunks;
-        config.frameCap = parameters.frameCap;
-        // The programmatic default leaves the documented Config cap in place; the CLI passes the
-        // resolved device-policy budget plus the K*R output-credit reserve. Validation rejects a
-        // pool whose S*C payload exceeds this budget before any allocation happens.
-        if(parameters.poolPayloadBudgetBytes != 0u)
-            config.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
-        config.validate();
-
-        // Every stage passes the logical tile width to the frame launcher. The launcher resolves
-        // the physical block extent: T on accelerators and one on the host backend.
-        ChunkPool<TDevice> pool{device, config.numChunks, config.chunkCapacity};
-
-        // The result buffer is indexed by particle id; the sentinel detects missing deliveries.
-        std::uint64_t const resultSize = parameters.numParticles == 0u ? 1u : parameters.numParticles;
-        auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
-        auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
-
-        {
-            auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
-            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEADBEEFu});
-            alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
-        }
-
-        FilterPolicy filterPolicy{parameters.seed};
-        ProcessAPolicy processAPolicy{parameters.seed, parameters.maxVisits};
-        ProcessBPolicy processBPolicy{parameters.seed, parameters.maxVisits};
-
-        GenerateStage<TDevice> generate{
-            device,
-            pool,
-            parameters.seed,
-            config.tileSize,
-            config.frameCap};
-        TransformStage<TDevice, FilterPolicy> filter{
-            device,
-            pool,
-            filterPolicy,
-            capped,
-            config.tileSize,
-            config.batchChunks,
-            config.frameCap};
-        TransformStage<TDevice, ProcessAPolicy> processA{
-            device,
-            pool,
-            processAPolicy,
-            capped,
-            config.tileSize,
-            config.batchChunks,
-            config.frameCap};
-        TransformStage<TDevice, ProcessBPolicy> processB{
-            device,
-            pool,
-            processBPolicy,
-            capped,
-            config.tileSize,
-            config.batchChunks,
-            config.frameCap};
-        SinkStage<TDevice> sink{device, pool, result, config.tileSize, config.frameCap};
-
-        GraphRunner<TDevice> runner{device, pool};
-        // Node indices are stable: 0 generate, 1 filter, 2 A, 3 B, 4 sink.
-        std::uint32_t const nGenerate
-            = runner.addNode("generate", NodeRole::source, 1u, {1}, hooksOf<TDevice>(generate));
-        std::uint32_t const nFilter
-            = runner.addNode("filter", NodeRole::transform, FlowBins, {2, 3}, hooksOf<TDevice>(filter));
-        std::uint32_t const nProcessA
-            = runner.addNode("processA", NodeRole::transform, FlowBins, {4, 1}, hooksOf<TDevice>(processA));
-        std::uint32_t const nProcessB
-            = runner.addNode("processB", NodeRole::transform, FlowBins, {4, 1}, hooksOf<TDevice>(processB));
-        std::uint32_t const nSink
-            = runner.addNode("sink", NodeRole::sink, 1u, {}, hooksOf<TDevice>(sink));
-        alpaka::unused(nFilter, nProcessA, nProcessB, nSink);
-
-        runner.setSource(nGenerate, parameters.numParticles, config.liveParticles);
-        runner.setBatchChunks(config.batchChunks);
-        runner.setStallTimeout(std::chrono::milliseconds{parameters.stallTimeoutMs});
-        SchedulerStats const stats = runner.run();
-
-        std::vector<std::uint32_t> weights(static_cast<std::size_t>(resultSize), 0u);
-        auto cappedHost = alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
-        {
-            auto readQueue = device.makeQueue(alpaka::queueKind::blocking);
-            alpaka::onHost::memcpy(readQueue, weights, result);
-            alpaka::onHost::memcpy(readQueue, cappedHost, capped);
-        }
-        std::uint32_t const cappedValue = cappedHost.data()[0u];
-        weights.resize(static_cast<std::size_t>(parameters.numParticles));
-
-        FeedbackResult output;
-        output.histogram = histogramOf(weights);
-        output.weights = std::move(weights);
-        output.cappedParticles = cappedValue;
-        output.sunkParticles = sink.sunkParticles();
-        output.liveParticles = config.liveParticles;
-        output.stats = stats;
-        return output;
+        return runParticleFeedback(std::move(device), parameters, tuningOf(parameters));
     }
 } // namespace graphFlow::particle

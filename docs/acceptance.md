@@ -125,8 +125,9 @@ minimum applies only to source admission.
 
 ## Pool and payload budget
 
-The fixed pool remains `S = P + K*R(C)` with
-`R(C) = outputChunkBound(C, C, B)` for three transform nodes. A transform batch
+The fixed pool remains the source capacity plus one output bound per registered
+node. `Flow` derives the reserve; the example's two-output filter and two
+three-output A/B partitions reserve `2 + 3 + 3 = 8` chunks. A transform batch
 reserves the adaptive `outputChunkBound(sum(fill), C, B)` and shrinks its chunk
 prefix to the largest one that fits the current credits, so Q does not enlarge
 the pool.
@@ -135,7 +136,7 @@ The former `C=8192`, `P=65536` pair is no longer a default and is rejected by
 the payload budget. Its chunk and payload figures appear only in the historical
 table above and are not current defaults. The policy-derived accelerator
 defaults are pinned by the unit tests at `C=8192`, `P=16384`, `T=128` on a
-nominal 24 GiB device; the CLI adds the exact `K*R(C)` reserve to the policy
+nominal 24 GiB device; `Flow` adds the exact registered-node reserve to the policy
 budget. The real A30 reports `24,192 MiB` usable after ECC, so its 1/8 budget is
 `3,171,090,432 B`. A separate test pins that budget: the policy selects
 `P=16128` for the default `C` and for an explicit `C=8192` with auto `P`; an
@@ -143,7 +144,7 @@ explicit `P=16384` is rejected. `applyDevicePolicy` + `derivePoolSize` +
 `Config::validate` accepts the resulting pool.
 
 A slot-based pool remains future work. The budget caps the fixed-capacity
-design without changing the `S = P + K*R(C)` progress bound.
+design without changing the `P` plus registered-node-reserve progress bound.
 
 ## Repository gates
 

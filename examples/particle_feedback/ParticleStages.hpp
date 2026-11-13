@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ParticleTypes.hpp"
+
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/LaunchPolicy.hpp"
@@ -38,29 +40,12 @@ namespace graphFlow::particle
     /** Number of transform nodes in the particle-feedback graph. */
     inline constexpr std::uint32_t TransformNodes = 3u;
 
-    /** Runtime knobs of the particle-feedback example. */
-    struct Parameters
-    {
-        std::uint64_t numParticles = 0u;
-        std::uint32_t chunkSize = 128u;
-        std::uint32_t liveParticles = 0u; // P, zero means the documented default
-        std::uint32_t stallTimeoutMs = 120'000u; // test hook: fail instead of spinning forever
-
-        std::uint64_t seed = 0u;
-        std::uint32_t maxVisits = 64u;
-        std::uint32_t tileSize = 128u;
-        std::uint32_t deviceIndex = 0u;
-        std::uint32_t batchChunks = 1u; // Q, ready input chunks per transform batch
-        std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
-        std::uint64_t poolPayloadBudgetBytes = 0u; // total pool cap, zero uses the Config default
-    };
-
     /** Total payload budget of the fixed-capacity pool.
      *
-     * The device policy budget bounds the live working set `P*C`. The pool also holds the
-     * `K*R` transform output-credit chunks, so the example budget is the policy budget plus the
-     * payload of exactly those credits. `R` is bounded by `FlowBins` for `n=C`, so the reserve is
-     * independent of N and does not grow with the run size.
+     * Deprecated low-level path: the device policy budget bounds the live working set `P*C`. The
+     * pool also holds the `K*R` transform output-credit chunks, so this budget is the policy budget
+     * plus the payload of exactly those credits. `Flow` derives the same quantity from the
+     * registered node bins for the public example.
      */
     inline std::uint64_t poolPayloadBudgetBytes(
         std::uint64_t policyBudgetBytes,
@@ -91,23 +76,83 @@ namespace graphFlow::particle
         return static_cast<std::uint32_t>(tiles);
     }
 
-    struct HistogramRow
+    /** Adapt one low-level stage to the runner hooks. Deprecated with `ParticleStages.hpp`. */
+    template<typename TDevice, typename TStage>
+    typename GraphRunner<TDevice>::Hooks hooksOf(TStage& stage)
     {
-        std::uint32_t weight = 0u;
-        std::uint64_t count = 0u;
+        using Runner = GraphRunner<TDevice>;
+        return typename Runner::Hooks{
+            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
+            { stage.launch(queue, batch); },
+            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
+            { return stage.advance(queue, batch, allocated); },
+            [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
+            { stage.finish(batch, outputs); },
+            [&stage]()
+            {
+                if constexpr(requires { stage.abort(); })
+                    stage.abort();
+            }};
+    }
 
-        friend bool operator==(HistogramRow const&, HistogramRow const&) = default;
-    };
-
-    struct FeedbackResult
+    /** Default source-admission capacity P when the caller does not configure one.
+     *
+     * Deprecated low-level path. P is a working-set knob, not a function of N: capping it at
+     * `8*C` means the pool is sized by P and the transform output reserve, independent of
+     * arbitrarily large N. The public example leaves an absent P to the device policy.
+     */
+    inline std::uint32_t defaultLiveParticles(std::uint64_t numParticles, std::uint32_t chunkSize)
     {
-        std::vector<std::uint32_t> weights;   // final weight indexed by particle id
-        std::vector<HistogramRow> histogram;  // sorted by weight, run-length encoded
-        std::uint64_t cappedParticles = 0u;   // stopped by the --max-visits guard
-        std::uint64_t sunkParticles = 0u;     // host-side sink conservation diagnostic
-        std::uint32_t liveParticles = 0u;     // configured source-admission capacity P
-        SchedulerStats stats;
-    };
+        std::uint64_t const cap = 8ull * chunkSize;
+        std::uint64_t const live = numParticles < cap ? numParticles : cap;
+        return static_cast<std::uint32_t>(live == 0u ? 1u : live);
+    }
+
+    /** Deprecated low-level pool-size formula `S = P + K*R`.
+     *
+     * The plan's model is `S = ceil(P/C) + K*R`. That is a lower bound, not a safe bound for a
+     * split-routing feedback graph: every transform may split one input chunk into one chunk per
+     * bin, and repeated feedback can fragment the P live particles into as many as P chunks
+     * (one particle per chunk). The pool must therefore hold one chunk per live particle plus the
+     * output credits of the live transform batches:
+     *
+     *     R = outputChunkBound(C, C, B)
+     *     S = P + K*R,   K = TransformNodes
+     *
+     * The pool uses the single-chunk R, not a Q-scaled bound. A transform batch reserves the
+     * adaptive `outputChunkBound(sum(fill), C, B)` for the chunks it actually takes and only starts
+     * when the credits cover it; under fragmentation the scheduler shrinks the batch prefix instead
+     * of enlarging the pool. Q therefore never changes S.
+     *
+     * Source admission caps the fill of every admitted chunk at `P - liveParticles`, so the number
+     * of live particles (and therefore the number of data-carrying chunks) never exceeds P.
+     * `P == 0` selects `defaultLiveParticles`.
+     */
+    inline std::uint32_t derivePoolSize(
+        std::uint64_t numParticles,
+        std::uint32_t chunkSize,
+        std::uint32_t liveParticles,
+        std::uint32_t maxBins)
+    {
+        if(numParticles == 0u)
+            return 1u;
+        std::uint64_t live = liveParticles == 0u ? defaultLiveParticles(numParticles, chunkSize) : liveParticles;
+        if(live > numParticles)
+            live = numParticles;
+        if(live == 0u)
+            live = 1u;
+
+        std::uint64_t const perTransform = outputChunkBound(chunkSize, chunkSize, maxBins);
+        std::uint64_t const maxChunks = std::numeric_limits<std::uint32_t>::max();
+        if(perTransform > maxChunks)
+            throw std::overflow_error{"graphFlow: one transform reserve exceeds 2^32 chunks"};
+        std::uint64_t const transformCredits
+            = static_cast<std::uint64_t>(TransformNodes) * perTransform;
+        if(live > maxChunks || transformCredits > maxChunks - live)
+            throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
+        std::uint64_t const chunks = live + transformCredits;
+        return static_cast<std::uint32_t>(chunks == 0u ? 1u : chunks);
+    }
 
     /** Filter: `draw(seed, id, visit, Filter) >= property ? bin 1 : bin 0`. */
     struct FilterPolicy
@@ -792,19 +837,4 @@ namespace graphFlow::particle
         std::uint64_t m_sunk = 0u;
     };
 
-    /** Build the sorted, run-length encoded weight histogram. */
-    inline std::vector<HistogramRow> histogramOf(std::vector<std::uint32_t> weights)
-    {
-        std::sort(weights.begin(), weights.end());
-        std::vector<HistogramRow> rows;
-        for(std::size_t i = 0u; i < weights.size();)
-        {
-            std::size_t j = i;
-            while(j < weights.size() && weights[j] == weights[i])
-                ++j;
-            rows.push_back(HistogramRow{weights[i], static_cast<std::uint64_t>(j - i)});
-            i = j;
-        }
-        return rows;
-    }
 } // namespace graphFlow::particle

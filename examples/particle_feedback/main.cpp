@@ -37,7 +37,7 @@ namespace
     {
         graphFlow::particle::Parameters const& parameters = resolved.parameters;
         graphFlow::particle::FeedbackResult const result
-            = graphFlow::particle::runParticleFeedback(device, parameters);
+            = graphFlow::particle::runParticleFeedback(device, parameters, resolved.tuning);
 
         std::cout << "# graphFlow_particle_feedback backend=" << graphFlow::backendName(backend)
                   << " device=" << parameters.deviceIndex << " device-name=" << deviceName

@@ -245,18 +245,13 @@ TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]"
             * graphFlow::payloadBytesPerSlot
         <= resolved.policy.memoryBudgetBytes);
 
-    graphFlow::Config config;
-    config.chunkCapacity = resolved.parameters.chunkSize;
-    config.liveParticles = resolved.parameters.liveParticles;
-    config.tileSize = resolved.parameters.tileSize;
-    config.numParticles = resolved.parameters.numParticles;
-    config.numChunks = graphFlow::particle::derivePoolSize(
-        config.numParticles,
-        config.chunkCapacity,
-        config.liveParticles,
-        graphFlow::particle::FlowBins);
-    config.poolPayloadBudgetBytes = resolved.parameters.poolPayloadBudgetBytes;
-    CHECK_NOTHROW(config.validate());
+    // The CLI no longer computes a pool: the resolved tuning carries the domain knobs and
+    // `Flow` derives the pool and output-credit reserve from the registered bins.
+    CHECK(resolved.tuning.chunkCapacity == resolved.parameters.chunkSize);
+    CHECK(resolved.tuning.liveParticles == resolved.parameters.liveParticles);
+    CHECK(resolved.tuning.tileSize == resolved.parameters.tileSize);
+    CHECK(resolved.tuning.batchChunks == resolved.parameters.batchChunks);
+    CHECK(resolved.tuning.frameCap == resolved.parameters.frameCap);
 
     // The largest feasible explicit P passes; the former preset P=16384 is rejected.
     graphFlow::cli::Options const fitting = parseArgs(

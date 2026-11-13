@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
@@ -609,7 +610,6 @@ TEST_CASE("single-chunk pool bound completes N much larger than P with Q=8", "[i
     parameters.seed = 42u;
     parameters.maxVisits = 64u;
     parameters.batchChunks = 8u;
-    parameters.stallTimeoutMs = 30'000u;
 
     graphFlow::particle::FeedbackResult const result
         = graphFlow::particle::runParticleFeedback(device, parameters);
@@ -620,14 +620,9 @@ TEST_CASE("single-chunk pool bound completes N much larger than P with Q=8", "[i
     CHECK(result.sunkParticles == parameters.numParticles);
     CHECK(result.liveParticles == 256u);
 
-    // Q does not enlarge the pool: S = P + K*R(C) = 256 + 3*2 = 262. Under fragmentation the
-    // scheduler shrinks a batch instead of reserving a Q-scaled bound.
-    std::uint32_t const expectedPool = graphFlow::particle::derivePoolSize(
-        parameters.numParticles,
-        parameters.chunkSize,
-        256u,
-        graphFlow::particle::FlowBins);
-    CHECK(expectedPool == 256u + 3u * 2u);
+    // Q does not enlarge the pool. `Flow` reserves one output chunk per registered bin: the
+    // filter has two outputs and A/B each have sink, feedback and capped, so S = P + 2 + 3 + 3.
+    constexpr std::uint32_t expectedPool = 256u + 8u;
     CHECK(result.stats.poolChunks == expectedPool);
     CHECK(result.stats.peakLiveChunks <= expectedPool);
 }

@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/sched/GraphRunner.hpp"

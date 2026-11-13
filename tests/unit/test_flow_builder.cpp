@@ -124,7 +124,7 @@ namespace flow_test
 
     struct DirectSource
     {
-        Payload operator()(std::uint64_t id) const
+        ALPAKA_FN_ACC Payload operator()(std::uint64_t id) const
         {
             return Payload{id, 1u};
         }
