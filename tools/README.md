@@ -71,12 +71,16 @@ that contains a negative case exits 1 at the end.
 
 | Host | Policy budget | Pair | Payload | Result |
 | --- | ---: | --- | ---: | --- |
-| A30 24 GiB reported, 24,192 MiB usable | 3,171,090,432 B | C=8192, P=16128 | 3,170,893,824 B | passes with 196,608 B margin |
+| A30 24 GiB reported, 24,192 MiB usable | 3,171,090,432 B | C=8192, P=16128 | 3,170,893,824 B | passes with 196,608 B margin † |
 | A30 | 3,171,090,432 B | C=8192, P=16384 | 3,221,225,472 B | rejected, over by 50,135,040 B |
 | A30 | 3,171,090,432 B | C=8192, P=65536 | 12,884,901,888 B | rejected, canonical negative case |
 | fwk394 11 GiB GPU | 1.375 GiB | C=4096, P=8192 | 805,306,368 B | fits the GPU budget; CUDA build blocked by the nvcc 12.5 ICE |
 | fwk394 CPU | 16 MiB | C=4096, P=8192 | 805,306,368 B | rejected |
 | fwk394 CPU | 16 MiB | C=1024, P=512 | 12,582,912 B | passes |
+
+† `24,192 MiB` is a rounded usable figure, not the policy input. The exact
+policy budget is 3,171,090,432 B; the C=8192/P=16128 payload is
+`8192 * 16128 * 24 B = 3,170,893,824 B`; the exact headroom is 196,608 B.
 
 `--matrix acceptance` is the measured A30 pair. The former `P=65536` pair and
 the earlier `P=16384` pair remain reachable through `--live-particles`; run one

@@ -9,10 +9,11 @@ acceptance claims.
 
 ## hal A30, CUDA sm_80
 
-C=8192, seed=42. The measured policy budget is 3,171,090,432 B (24,192 MiB
-usable; nvidia-smi reports 24,576 MiB because ECC reserves memory). P=16128
-uses 3,170,893,824 B. P=16384 (3,221,225,472 B) and P=65536
-(12,884,901,888 B) are rejected by T7.
+C=8192, seed=42. The measured policy budget is 3,171,090,432 B. The 24,192 MiB
+usable figure is rounded; `nvidia-smi` reports 24,576 MiB because ECC reserves
+memory. P=16128 uses `8192 * 16128 * 24 B = 3,170,893,824 B`, leaving 196,608 B
+of exact headroom. P=16384 (3,221,225,472 B) and P=65536 (12,884,901,888 B)
+are rejected by T7.
 
 | N | C | P | Q | wall s | particles/s | hist sum | hist rows | peak live |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

@@ -294,8 +294,10 @@ case "$matrix" in
         ;;
     fwk394)
         # Requested 2080 Ti pair. On an 11 GiB card T7's 1/8 policy budget is
-        # 1.375 GiB, so this ~1.5 GiB pair is the documented negative case;
-        # override --live-particles 8192 for the passing fwk394 run.
+        # 1.375 GiB, so this ~1.5 GiB pair is the documented GPU negative case.
+        # C=4096/P=8192 (768 MiB) fits the GPU budget but the sm_75 CUDA build
+        # is blocked by the nvcc 12.5 ICE. On fwk394 CPU the 16 MiB host budget
+        # rejects C=4096/P=8192; the passing CPU pair is C=1024/P=512.
         [[ "$backend_set" == "1" ]] || backend_list="cuda"
         [[ "$n_set" == "1" ]] || n_list="100000000"
         [[ "$c_set" == "1" ]] || c_list="4096"
