@@ -3,9 +3,12 @@
 
 # Benchmarks
 
-This page contains the historical pre-T5/T7 baseline only. It is not a current
-integrated run. The integrated performance matrix is pending in T13, and this
-page does not invent a post-T5/T7 number.
+This page contains the historical pre-T5/T7 baseline and the integrated T13
+result. The integrated numbers are the recorded T13 evidence for main
+`68124ad3875e42cbe09247f64bd218a7ac8d58fc`, supplied from the run on that
+revision. They are not a fresh run in this worktree, and every number on this
+page states its provenance. The full matrix, budget rejections, and raw-row
+provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md) (PR #8).
 
 ## Historical environment
 
@@ -79,17 +82,65 @@ the minimum applies only to source generation.
 
 The acceptance contract is histogram multiset equality, not per-particle order.
 
+## Integrated T13 result
+
+Integrated main `68124ad3875e42cbe09247f64bd218a7ac8d58fc` (T5 batching, T7
+pool payload budget). The numbers are the supplied T13 evidence for that
+revision, not a fresh run in this worktree.
+
+hal A30, CUDA sm_80, `C=8192`, seed 42:
+
+| N | Q | Wall time | Histogram sum | particles/s | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 100,000,000 | 1 | 218.87 s | 100,000,000 | ~4.57e5 | 264 rows |
+| 100,000,000 | 2 | 9.83 s | 100,000,000 | ~1.02e7 | 264 rows |
+| 100,000,000 | 8 | 8.50 s | 100,000,000 | ~1.18e7 | 264 rows |
+| 1,000,000 | 1 | 2.32 s | 1,000,000 | ~4.31e5 | 150 rows |
+| 1,000,000 | 2 | 0.41 s | 1,000,000 | ~2.44e6 | 150 rows |
+| 1,000,000 | 8 | 0.35 s | 1,000,000 | ~2.86e6 | 150 rows |
+
+These runs used `P=16128`, which leaves the documented 196,608 B of headroom
+under the measured A30 budget (see the budget row below); the `P=16384` policy
+default is rejected on this device. The sorted histogram rows are identical
+across Q within each N (identical SHA-256 per N; the `N=1e8` and `N=1e6` row
+sets differ, as expected for different particle counts).
+
+CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42:
+
+| N | CPU wall s | CUDA wall s | Histogram sum | rows_equal |
+| ---: | ---: | ---: | ---: | --- |
+| 100,000 | 15.23 | 1.96 | 100,000 | yes |
+| 1,000,000 | 149.44 | 17.66 | 1,000,000 | yes |
+
+fwk394, CPU, `C=1024`, `P=512`, `Q=1`: `N=1,000,000` took 52.75 s
+(~1.90e4 particles/s), histogram sum 1,000,000. The fwk394 CUDA sm_75 build
+fails with an nvcc 12.5 internal compiler error, so no fwk394 CUDA run is
+claimed.
+
+Payload budget against the measured 3,171,090,432 B A30 budget:
+
+| Pair | Payload B | Result |
+| --- | ---: | --- |
+| `C=8192`, `P=16128` | 3,170,893,824 | passes |
+| `C=8192`, `P=16384` | 3,221,225,472 | rejected |
+| `C=8192`, `P=65536` | 12,884,901,888 | rejected |
+
 ## Current state and caveats
 
 - The integrated main adds device-aware `C`/`P`/`T`, multi-chunk batching with
-  an adaptive prefix, and the pool payload budget. The numbers above predate
-  those changes.
-- The T13 integrated benchmark is pending. No current integrated wall time,
-  particles-per-second value, or peak count is claimed here.
+  an adaptive prefix, and the pool payload budget. The historical numbers above
+  predate those changes.
+- The T13 integrated benchmark is recorded in the section above. No number
+  here goes beyond that evidence, and no new measurement was taken for this
+  page.
 - The former `C=8192`, `P=65536` pool is rejected by the payload budget. Its
   historical 65542-chunk peak is not a current default.
-- `hal` is shared, so the historical wall times and the derived `5.33e5`
-  particles/s are a baseline, not an exclusive-hardware acceptance claim.
+- `hal` reports `sharing=unknown` and fwk394 is a shared host, so the
+  historical wall times and the derived `5.33e5` particles/s are a baseline,
+  not an exclusive-hardware acceptance claim. The same caveat applies to the
+  integrated T13 table: all of its wall times and derived particles/s values
+  are single-run baselines on shared hosts, not exclusive-hardware acceptance
+  numbers.
 - No AMD GPU was visible. HIP is compile-only for `gfx90a`, so there is no HIP
   benchmark.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.

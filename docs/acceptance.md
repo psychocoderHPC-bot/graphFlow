@@ -38,7 +38,8 @@ the selected NVIDIA GPU and fails when no GPU is visible.
 
 The numbers below are the pre-T5/T7 result. They are not a current integrated
 run. They predate device-aware policy resolution, multi-chunk batching, and the
-payload budget. T13 will provide the integrated benchmark.
+payload budget. The integrated T13 measurement is recorded below; the
+historical table stays for comparison.
 
 | Backend | N | Wall time | Histogram sum | Peak live chunks (historical pool) | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -54,6 +55,46 @@ diff. That equality check was not repeated on the integrated revision.
 The queue probe on CUDA reported `overlap=no queues-alias=no
 second-before-first=no`; the queues were distinct, but no overlap was observed.
 Correctness does not depend on overlap.
+
+## Integrated T13 measurement
+
+The integrated T13 benchmark is done. The table below is the supplied T13
+evidence for this revision, not a fresh run in this worktree. `hal` reports
+`sharing=unknown` and fwk394 is shared, so every wall time and derived
+particles/s value is a single-run shared-host baseline, not an
+exclusive-hardware acceptance claim.
+
+hal A30, CUDA sm_80, `C=8192`, seed 42:
+
+| N | Q | Wall time | Histogram sum | particles/s |
+| --- | ---: | ---: | ---: | ---: |
+| 100,000,000 | 1 | 218.87 s | 100,000,000 | ~4.57e5 |
+| 100,000,000 | 2 | 9.83 s | 100,000,000 | ~1.02e7 |
+| 100,000,000 | 8 | 8.50 s | 100,000,000 | ~1.18e7 |
+| 1,000,000 | 1 | 2.32 s | 1,000,000 | ~4.31e5 |
+| 1,000,000 | 2 | 0.41 s | 1,000,000 | ~2.44e6 |
+| 1,000,000 | 8 | 0.35 s | 1,000,000 | ~2.86e6 |
+
+Recorded effects:
+
+- Q effect. Raising the batch-chunk count from Q=1 to Q=2 and Q=8 cut the
+  `N=1e8` wall time from 218.87 s to 9.83 s and 8.50 s, and the `N=1e6` wall
+  time from 2.32 s to 0.41 s and 0.35 s. The sorted histogram rows are
+  identical across Q within each N.
+- The `N=1e8` run used `P=16128`, not the policy default `P=16384`: the
+  measured A30 payload budget is 3,171,090,432 B, and `C=8192`, `P=16384`
+  needs 3,221,225,472 B, so T7 rejects it; `C=8192`, `P=16128`
+  (3,170,893,824 B) passes. The default-policy clamp that would keep `P`
+  within the device budget is not yet fixed in this revision; the run used an
+  explicit `P=16128`.
+
+CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42: `rows_equal`
+is yes for `N=1e5` (CPU 15.23 s, CUDA 1.96 s) and `N=1e6` (CPU 149.44 s,
+CUDA 17.66 s); both histogram sums equal `N`.
+
+fwk394, CPU, `C=1024`, `P=512`, `Q=1`: `N=1e6` took 52.75 s, histogram sum
+1,000,000. The fwk394 CUDA sm_75 build fails with an nvcc 12.5 internal
+compiler error, so no fwk394 CUDA run is claimed.
 
 ## Source admission history
 

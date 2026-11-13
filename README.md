@@ -50,9 +50,10 @@ when no NVIDIA GPU is visible.
 ## Historical measured baseline
 
 The table below is the pre-T5/T7 result. It is not a current integrated run and
-does not include the device-aware policy, batching, or the payload budget. T13
-will provide the integrated benchmark. The `C=8192`, `P=65536` pair used for
-those runs is now rejected by the payload budget.
+does not include the device-aware policy, batching, or the payload budget. The
+integrated T13 result is recorded in [docs/benchmarks.md](docs/benchmarks.md).
+The `C=8192`, `P=65536` pair used for those runs is now rejected by the payload
+budget.
 
 | Backend | N | Wall time | Histogram sum | Peak live chunks (historical pool) |
 | --- | ---: | ---: | ---: | ---: |
@@ -292,8 +293,9 @@ The full design is in [architecture](docs/architecture.md).
 - No generic graph API yet.
 - No CI runners or `.github/workflows` yet.
 - The hash path is CPU-tested only. The dense/hash threshold is static.
-- The integrated performance run is pending in T13. The numbers in this README
-  are historical and pre-T5/T7.
+- The integrated performance run is recorded in
+  [docs/benchmarks.md](docs/benchmarks.md). The numbers in this README are
+  historical and pre-T5/T7.
 - The result buffer is `O(N)` (about 400 MB at `N=1e8`).
 
 ## Verified findings

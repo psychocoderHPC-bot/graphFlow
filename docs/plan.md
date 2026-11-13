@@ -17,6 +17,7 @@ This document replaces the earlier graphFlow draft. The implementation starts fr
 | Determinism | Histogram multiset equality across chunk size, backend, and scheduling order |
 | Scale gate | CI smoke `N=1e6`; manual acceptance `N=1e8` |
 | Hardware | hal A30 for CUDA; named AMD GPU for HIP |
+| T13 integrated benchmark | Done on integrated main `68124ad3875e42cbe09247f64bd218a7ac8d58fc`: `N=1e8`, `C=8192`, `P=16128`, Q=1/Q=2/Q=8 wall 218.87 s / 9.83 s / 8.50 s on hal A30, identical histograms across Q, CPU/CUDA rows equal at `N=1e5`/`N=1e6`. |
 
 **Goals**
 
@@ -361,7 +362,14 @@ Record:
 - Record the first correct `N=1e8` throughput, then freeze it as a regression target with a stated tolerance. Do not invent a throughput number before the first measurement. The current baseline is about `5.33e5` particles/s on the shared A30; re-measure on an exclusive allocation before treating it as acceptance-grade.
 - Report a sustained copy-bandwidth reference on the same device and data size as context.
 
-Observed baseline on A30 (hal, sharing unknown), with `C=8192`, `P=65536`, and full-chunk source admission: `N=1e5` took 0.58 s, `N=1e6` took 2.24 s, and `N=1e8` took 187.5 s wall (about `5.33e5` particles/s). The `N=1e8` histogram summed to exactly 100,000,000 over 264 rows, with a peak of 877 live chunks in a 65542-chunk pool. The same `N=1e6` configuration with one-particle source admission took about 119 s and peaked at 8195 of 8198 chunks. The queue probe reported distinct queues but no overlap, so the speedup came from full-chunk pipelining, not cross-queue overlap. The `S=P+K*R` payload pool is about 12.9 GB at these settings while the observed peak is under 1000 chunks; a slot-based pool or a smaller `P` is the next memory optimization. HIP compiles the full tree for `gfx90a` (compile-only gate, no AMD device present). ASAN and UBSAN pass 42/42 tests on hal; TSAN is blocked by the hal kernel's `unexpected memory mapping` limit, not by a project defect. Treat the throughput as a recorded baseline until an exclusive allocation is available.
+T13 (integrated performance matrix) is done on integrated main
+`68124ad3875e42cbe09247f64bd218a7ac8d58fc`: `N=1e8`, `C=8192`, `P=16128` on
+hal A30 took 218.87 s (Q=1), 9.83 s (Q=2), and 8.50 s (Q=8), with identical
+histograms across Q and CPU/CUDA rows equal at `N=1e5` and `N=1e6`; the
+shared-host caveat and the full table are in `docs/benchmarks.md` and
+`docs/acceptance.md`.
+
+Observed baseline on A30 (hal, sharing unknown), with `C=8192`, `P=65536`, and full-chunk source admission: `N=1e5` took 0.58 s, `N=1e6` took 2.24 s, and `N=1e8` took 187.5 s wall (about `5.33e5` particles/s). The `N=1e8` histogram summed to exactly 100,000,000 over 264 rows, with a peak of 877 live chunks in a 65542-chunk pool. The same `N=1e6` configuration with one-particle source admission took about 119 s and peaked at 8195 of 8198 chunks. The queue probe reported distinct queues but no overlap, so the speedup came from full-chunk pipelining, not cross-queue overlap. The `S=P+K*R` payload pool is about 12.9 GB at these settings while the observed peak is under 1000 chunks; a slot-based pool or a smaller `P` is the next memory optimization. HIP compiles the full tree for `gfx90a` (compile-only gate, no AMD device present). Historically, ASAN and UBSAN passed 42/42 tests on hal; TSAN was blocked by the hal kernel's `unexpected memory mapping` limit, not by a project defect. These sanitizer results are from the pre-T5/T7 baseline record and are not an integrated ASAN/UBSAN result. Treat the throughput as a recorded baseline until an exclusive allocation is available.
 
 ## 11. Tests and CI
 
