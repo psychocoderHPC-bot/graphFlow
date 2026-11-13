@@ -43,13 +43,13 @@ resource or decision is missing.
   `frameCap` default 8; the host frame extent is 1 and accelerators use `T`.
   Kernels stride the batch tile list, so a block may process several tiles. The
   FrameSpec unit and matrix tests pass on CPU and CUDA.
-- [ ] **P0: generic graph API.** The current runner is a particle-feedback
-  runner with reusable primitives. Add the planned host-side
-  `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` model with typed payload
-  contracts, source/transform/sink roles, per-bin routing, feedback edges, and
-  no device function pointers. Port the particle example to it. Acceptance:
-  an arbitrary small DAG (source, two transforms, sink, one feedback edge) runs
-  through the same scheduler without particle-specific code in the core.
+- [ ] **P0: generic graph API.** The host-side
+  `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is in the tree with
+  source/transform/sink roles, per-bin routing, feedback edges, and no device
+  function pointers. The generic DAG acceptance test runs a source, two
+  transforms, a sink, and one feedback edge through `GraphRunner`.
+  Remaining: typed payload contracts beyond `NodeBase` and porting the particle
+  example to the graph core.
 - [ ] **P1: multiple in-flight batches per node.** The scheduler currently
   allows one in-flight batch per node. Add a bounded submitted depth per node,
   an event pool, and fair round-robin across ready nodes while preserving

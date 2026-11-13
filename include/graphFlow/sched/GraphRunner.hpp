@@ -594,6 +594,11 @@ namespace graphFlow
             return stats;
         }
 
+        [[nodiscard]] std::uint32_t nodeCount() const noexcept
+        {
+            return static_cast<std::uint32_t>(m_nodes.size());
+        }
+
         [[nodiscard]] std::uint32_t nodeCompleted(std::uint32_t node) const
         {
             return m_nodes.at(node)->completedChunks;
