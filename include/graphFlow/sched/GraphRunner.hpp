@@ -346,6 +346,10 @@ namespace graphFlow
                     auto tryDispatch = [&](std::size_t index) -> bool
                     {
                         Node& node = *m_nodes[index];
+                        // The single in-flight slot is claimed before the ready entry is consumed,
+                        // and the entry itself is only popped after a successful launch. A throwing
+                        // hook therefore cannot leave an un-armed batch in the slot or let the same
+                        // chunk be owned by `ready` and `inflight` at the same time.
                         if(node.ready.empty() || node.inflight)
                             return false;
 
@@ -358,19 +362,52 @@ namespace graphFlow
                             if(availableChunks() < reserve)
                                 return false; // keep the chunk queued until storage credits exist
                         }
-                        node.ready.pop_front();
+
                         Batch const batch{chunk, 0u};
-                        // Publish ownership before the hook; teardown then covers a throwing
-                        // launch or enqueue.
+                        // Publish ownership before the hook. The chunk stays at the front of `ready`
+                        // until the launch and the event enqueue succeeded, so a failed launch has
+                        // exactly one owner (`ready`, released by teardown) instead of two.
                         node.inflight = batch;
-                        if(node.role != NodeRole::source)
-                        {
-                            m_pool.acquireLease(chunk.handle);
-                            node.leaseHeld = true;
-                        }
                         node.inputOwned = true;
-                        node.hooks.launch(node.queue, batch);
-                        node.queue.enqueue(node.event);
+                        try
+                        {
+                            if(node.role != NodeRole::source)
+                            {
+                                m_pool.acquireLease(chunk.handle);
+                                node.leaseHeld = true;
+                            }
+                            node.hooks.launch(node.queue, batch);
+                            node.queue.enqueue(node.event);
+                        }
+                        catch(...)
+                        {
+                            // Roll the reserved slot and the lease back while preserving the queued
+                            // chunk. The device may have observed a partially enqueued stage, so
+                            // drain the queue before `ready` ownership is released by teardown.
+                            try
+                            {
+                                alpaka::onHost::wait(node.queue);
+                            }
+                            catch(...)
+                            {
+                                // Keep the original launch error; teardown releases `ready` anyway.
+                            }
+                            if(node.leaseHeld)
+                            {
+                                node.leaseHeld = false;
+                                try
+                                {
+                                    m_pool.releaseLease(chunk.handle);
+                                }
+                                catch(...)
+                                {
+                                }
+                            }
+                            node.inputOwned = false;
+                            node.inflight.reset();
+                            throw;
+                        }
+                        node.ready.pop_front();
                         node.reserved = reserve;
                         reservedTotal += reserve;
                         if(reservedTotal > stats.peakReservedChunks)

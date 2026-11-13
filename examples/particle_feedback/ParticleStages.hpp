@@ -245,6 +245,7 @@ namespace graphFlow::particle
 
         void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
         {
+            throwIfFailed();
             ChunkDescriptor const& chunk = batch.chunk;
             m_stage = 0u;
             m_pending.clear();
@@ -269,6 +270,7 @@ namespace graphFlow::particle
 
         bool advance(Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
         {
+            throwIfFailed();
             allocated = 0u;
             if(m_stage == 0u)
             {
@@ -285,7 +287,8 @@ namespace graphFlow::particle
                 // The scatter completed but its result is unusable; hand the acquired output chunks
                 // back before the runner tears the batch down.
                 releasePending();
-                m_stage = 0u;
+                resetBatchState();
+                m_failed = true;
                 throw;
             }
             m_stage = 0u;
@@ -370,11 +373,33 @@ namespace graphFlow::particle
             }
             catch(...)
             {
-                // Release once here; the runner separately releases the input chunk.
+                // Release once here; the runner separately releases the input chunk. The batch
+                // state is reset as well, so a failed plan cannot leave stale totals or host
+                // counters behind, and the stage is marked single-use because the device stage may
+                // be partially queued.
                 releasePending();
+                resetBatchState();
+                m_failed = true;
                 throw;
             }
             allocated = static_cast<std::uint32_t>(chunkIndices.size());
+        }
+
+        /** Clear every per-batch field so a failure cannot leak partially planned state. */
+        void resetBatchState()
+        {
+            m_stage = 0u;
+            std::fill(m_totals.begin(), m_totals.end(), 0u);
+            std::fill_n(m_countsHost.data(), static_cast<std::size_t>(m_bins) + 1u, 0u);
+        }
+
+        /** A failed batch may have left a partially queued device stage, so the instance must not
+         * be reused; callers construct a fresh stage for the next run. */
+        void throwIfFailed() const
+        {
+            if(m_failed)
+                throw std::logic_error{
+                    "graphFlow: TransformStage is single-use after a failed batch"};
         }
 
         void releasePending()
@@ -411,6 +436,7 @@ namespace graphFlow::particle
         std::uint32_t m_stage = 0u;
         std::vector<std::uint32_t> m_totals;
         std::vector<ChunkDescriptor> m_pending;
+        bool m_failed = false;
     };
 
     /** Sink stage: write `result[id] = weight` for one chunk. */
