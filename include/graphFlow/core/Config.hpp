@@ -16,6 +16,11 @@ namespace graphFlow
      * `liveParticles` (P) the configured source-admission capacity in particles, `tileSize` (T) the
      * requested threads per block and the per-tile histogram width, and `maxBins` the runtime upper
      * bound for the compile-time bin count of a node.
+     *
+     * The `policy*` fields are the knobs of the device-aware chunk policy in
+     * `graphFlow/core/DevicePolicy.hpp`: `makeDevicePolicy` reads them through `policyConfigOf()`
+     * and `applyDevicePolicy()` writes the chosen `chunkCapacity`, `liveParticles` and `tileSize`
+     * back. A zero `policyMemoryBudgetBytes` derives the budget from the device properties.
      */
     struct Config
     {
@@ -27,6 +32,14 @@ namespace graphFlow
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
+
+        // Device-aware chunk policy knobs, see include/graphFlow/core/DevicePolicy.hpp.
+        std::uint32_t policyWaves = 1u;
+        std::uint32_t policyTargetBlocksPerSm = 4u;
+        std::uint32_t policyLogicalTileWidth = 128u;
+        std::uint32_t policyMaxChunkCapacity = 8192u;
+        std::uint32_t policyLiveParticlesPerChunk = 2u;
+        std::uint64_t policyMemoryBudgetBytes = 0u; // zero means "derive from the device"
 
         /** Largest bin count the dense shared table supports in this slice. */
         static constexpr std::uint32_t denseBinLimit = 1024u;
@@ -43,6 +56,16 @@ namespace graphFlow
                 throw std::invalid_argument{
                     "graphFlow::Config: maxBins " + std::to_string(maxBins) + " exceeds the dense bin limit of "
                     + std::to_string(denseBinLimit)};
+            if(policyWaves == 0u)
+                throw std::invalid_argument{"graphFlow::Config: policyWaves must be non-zero"};
+            if(policyTargetBlocksPerSm == 0u)
+                throw std::invalid_argument{"graphFlow::Config: policyTargetBlocksPerSm must be non-zero"};
+            if(policyLogicalTileWidth == 0u)
+                throw std::invalid_argument{"graphFlow::Config: policyLogicalTileWidth must be non-zero"};
+            if(policyMaxChunkCapacity == 0u)
+                throw std::invalid_argument{"graphFlow::Config: policyMaxChunkCapacity must be non-zero"};
+            if(policyLiveParticlesPerChunk == 0u)
+                throw std::invalid_argument{"graphFlow::Config: policyLiveParticlesPerChunk must be non-zero"};
         }
     };
 } // namespace graphFlow
