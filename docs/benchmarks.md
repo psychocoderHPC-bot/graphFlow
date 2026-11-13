@@ -99,11 +99,11 @@ hal A30, CUDA sm_80, `C=8192`, seed 42:
 | 1,000,000 | 2 | 0.41 s | 1,000,000 | ~2.44e6 | 150 rows |
 | 1,000,000 | 8 | 0.35 s | 1,000,000 | ~2.86e6 | 150 rows |
 
-These runs used `P=16128`, the largest live-particle count the measured A30
-budget admits (see the budget row below); the `P=16384` policy default is
-rejected on this device. The sorted histogram rows are identical across Q
-within each N (identical SHA-256 per N; the `N=1e8` and `N=1e6` row sets
-differ, as expected for different particle counts).
+These runs used `P=16128`, which leaves the documented 196,608 B of headroom
+under the measured A30 budget (see the budget row below); the `P=16384` policy
+default is rejected on this device. The sorted histogram rows are identical
+across Q within each N (identical SHA-256 per N; the `N=1e8` and `N=1e6` row
+sets differ, as expected for different particle counts).
 
 CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42:
 
