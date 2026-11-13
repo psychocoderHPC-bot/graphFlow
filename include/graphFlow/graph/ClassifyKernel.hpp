@@ -15,11 +15,12 @@ namespace graphFlow
 {
     /** Dense histogram kernel for one batch of input chunks.
      *
-     * The launch uses one thread block per `TileDescriptor`, so the block index selects a tile of a
-     * chunk. The descriptor supplies `chunkIndex`, `tileOffset` and `count`; the block owns the
-     * slice `[tileOffset, tileOffset + count)` of that chunk and indexes payload and metadata with
-     * `chunkIndex * chunkCapacity + tileOffset + i`. The stride inside the tile still comes from the
-     * real block extent, so the same code is correct for a single-threaded host block and for a
+     * The launch uses a frame specification. Each block strides over the batch-wide tile descriptor
+     * list, so one block may process several tiles. The descriptor supplies `chunkIndex`,
+     * `tileOffset` and `count`; the block owns the slice `[tileOffset, tileOffset + count)` of that
+     * chunk and indexes payload and metadata with
+     * `chunkIndex * chunkCapacity + tileOffset + i`. The stride inside the tile comes from the real
+     * block extent, so the same code is correct for a single-threaded host block and for a
      * multi-threaded accelerator block. Every thread reaches every block barrier, including threads
      * that own no particle in an inactive tail lane.
      *
@@ -49,45 +50,44 @@ namespace graphFlow
         {
             using namespace alpaka;
 
-            auto tileCounts
-                = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
+            std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
 
-            auto const [block] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-            TileDescriptor const tile = tiles[static_cast<std::uint32_t>(block)];
-            std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
-            std::uint32_t const count = tile.count;
+            auto tileCounts = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
 
-            for(auto [bin] :
-                onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
-                tileCounts[bin] = 0u;
-            onAcc::syncBlockThreads(acc);
-
-            for(auto [i] : onAcc::makeIdxMap(
-                    acc,
-                    onAcc::worker::threadsInBlock,
-                    IdxRange{count}))
+            for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
             {
-                std::uint32_t const slot = base + i;
-                Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
-                std::uint32_t const bin
-                    = policy.classify(particle.id, particle.property, particle.weight, particle.visit);
-                if(bin >= T_B)
+                std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
+                TileDescriptor const tile = tiles[tileIndex];
+                std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                std::uint32_t const count = tile.count;
+
+                for(auto [bin] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                    tileCounts[bin] = 0u;
+                onAcc::syncBlockThreads(acc);
+
+                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
                 {
-                    // Hard batch error: report and never index outside the shared table.
-                    counts[T_B] = 1u;
-                    continue;
+                    std::uint32_t const slot = base + i;
+                    Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
+                    std::uint32_t const bin
+                        = policy.classify(particle.id, particle.property, particle.weight, particle.visit);
+                    if(bin >= T_B)
+                    {
+                        // Hard batch error: report and never index outside the shared table.
+                        counts[T_B] = 1u;
+                        continue;
+                    }
+                    binIds[slot] = bin;
+                    onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
                 }
-                binIds[slot] = bin;
-                onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
-            }
-            onAcc::syncBlockThreads(acc);
+                onAcc::syncBlockThreads(acc);
 
-            for(auto [bin] :
-                onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
-            {
-                std::uint32_t const inTile = tileCounts[bin];
-                if(inTile != 0u)
-                    onAcc::atomicAdd(acc, &counts[bin], inTile, onAcc::scope::device);
+                for(auto [bin] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                {
+                    std::uint32_t const inTile = tileCounts[bin];
+                    if(inTile != 0u)
+                        onAcc::atomicAdd(acc, &counts[bin], inTile, onAcc::scope::device);
+                }
             }
         }
     };

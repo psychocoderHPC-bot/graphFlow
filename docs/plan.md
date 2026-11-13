@@ -18,6 +18,7 @@ This document replaces the earlier graphFlow draft. The implementation starts fr
 | Scale gate | CI smoke `N=1e6`; manual acceptance `N=1e8` |
 | Hardware | hal A30 for CUDA; named AMD GPU for HIP |
 | T13 integrated benchmark | Done. The A30 matrix was recorded on integrated main `68124ad3875e42cbe09247f64bd218a7ac8d58fc`: `N=1e8`, `C=8192`, `P=16128`, Q=1/Q=2/Q=8 wall 218.87 s / 9.83 s / 8.50 s on hal A30, identical histograms across Q, CPU/CUDA rows equal at `N=1e5`/`N=1e6`. T13 and T14a are in current main `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b`. |
+| FrameSpec launch | Done: `launchPolicy` emits `FrameSpec{numFrames, frameExtent}` with `frameCap` default 8, host extent 1, and accelerator extent `T`; blocks stride the tile list. Current CTest: 82/82 CPU on fwk394, 86/86 CUDA on hal. |
 
 **Goals**
 
@@ -68,7 +69,7 @@ Every accelerator helper, kernel primitive, and test fixture must be checked aga
 | Events | `onHost/Queue.hpp:122-127,245-270`; `onHost/Event.hpp:99-138`; `queue.makeEvent`, `queue.enqueue(event)`, `event.isComplete()`, `queue.waitFor(event)`, `onHost::wait`, `getElapsedTime`. | Per-batch completion records; timing only in benchmarks. |
 | Host tasks | `onHost/Queue.hpp:177-217`; host callbacks share a backend callback thread and must not block; deferred tasks are not covered by `wait()`. | The scheduler polls events on its own thread; it does not use host callbacks. |
 | Memory | `onHost/Device.hpp:215-320`; `onHost/Queue.hpp:309-453`; `alloc`, `allocLike`, `allocHost`, `allocMapped`, `allocUnified`, `allocDeferred`, `memcpy`, `memset`, `fill`; `SharedBuffer`/`keepAlive`. | Preallocated pools; `allocMapped` for asynchronous staging. |
-| Launch | `onHost/ThreadSpec.hpp`, `onHost/FrameSpec.hpp`, `KernelBundle.hpp`, `exec::anyExecutor`, `getFrameSpec`, `ALPAKA_FN_ACC`. | Typed kernels with runtime tile counts. |
+| Launch | `onHost/FrameSpec.hpp`, `core/LaunchPolicy.hpp`, `KernelBundle.hpp`, `exec::anyExecutor`, `ALPAKA_FN_ACC`. | Frame-strided typed kernels; `numFrames = min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)`. |
 | Atomics | `onAcc/atomic.hpp:25-66`; `scope::Block` and `scope::Device`; `scope::System` is rejected by `static_assert`. | Histogram counters, `next[bin]`, hash insertion. |
 | Shared memory | `onAcc/Acc.hpp:132-200`; `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads`. | Per-tile dense or hash table; runtime size via dynamic shared memory. |
 | Warp and intrinsics | `onAcc/warp.hpp:32-131`; `ballot`, `any`, `all`, `activemask`, `shfl*`, `getSize`; `intrinsic.hpp:17-46`; `popcount`, `ffs`, `clz`. | Ballot/popcount only where measured; no `shfl` for control decisions. |
@@ -183,7 +184,8 @@ flowchart LR
 
 ### 6.1 Classify
 
-- One block per tile of `T` particles, with `T` chosen independently of `C`.
+- Blocks stride over the batch tile list; each tile owns `T` particles and `T` is
+  chosen independently of `C`.
 - All threads participate in barriers, including inactive lanes in a tail tile.
 - Apply the classifier once per particle and store the bin ID in the chunk metadata.
 - Dense path: per-block shared `counts[B]`, zero, barrier, block-scope `atomicAdd`, barrier, global device-scope `atomicAdd(total[bin], count)` for each nonempty bin.
@@ -201,7 +203,7 @@ flowchart LR
 
 ### 6.3 Scatter
 
-- One block per input tile.
+- Blocks stride over the batch input tiles.
 - Rebuild the per-tile bin counts from the stored bin IDs. This avoids recomputing the classifier.
 - For each nonempty tile/bin group, reserve one device-scope range:
 
@@ -382,7 +384,7 @@ Observed baseline on A30 (hal, sharing unknown), with `C=8192`, `P=65536`, and f
 | Dense bins | `B = 1, 2, 3, 64, 1024`; sparse IDs, empty bins, multiple bins to one node, invalid classifier results, hot-bin stress. |
 | Hash bins | `B = 4096, 65536`; sparse distribution, table-full error, dense/hash agreement at overlapping `B`, no hardcoded warp size. |
 | Multiplexer | No overlapping reservations, exact routing and counts, input conservation, chunk-boundary crossings, exact and partial fills, batched inputs, counter overflow, output visibility only after completion, scalar partition oracle. |
-| Example | `N = 0, 1, 17, 128, 4097, 1e6`; `C = 1, 31, 127, 128`; seeds `0, 7, 42`; feedback, max-visits, histogram conservation, CPU/CUDA/HIP multiset equality. |
+| Example | `N = 0, 1, 17, 127, 128, 4097, 1e6`; `C = 1, 31, 127, 128`; `T = 32, 128`; `frameCap = 1, 8, uncapped`; `Q = 1, 2, 8`; seeds `0, 7, 42`; feedback, max-visits, histogram conservation, CPU/CUDA/HIP multiset equality. |
 | API reuse | Compile and run the selected Philox, event, `allocMapped`, atomic, shared-memory, and warp paths on all three backends; every helper has an API-map entry. |
 | Sanitizers | ASAN/UBSAN for host code; TSAN for the scheduler; leak checks. |
 

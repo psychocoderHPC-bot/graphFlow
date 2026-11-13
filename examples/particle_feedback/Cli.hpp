@@ -8,6 +8,7 @@
 
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/core/Config.hpp"
+#include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -38,6 +39,7 @@ namespace graphFlow::cli
         std::optional<std::uint32_t> liveParticles; // P, absent means policy
         std::optional<std::uint32_t> tileSize;      // T, absent means policy
         std::uint32_t batchChunks = 1u;             // Q
+        std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
@@ -57,7 +59,8 @@ namespace graphFlow::cli
         out << "usage: graphFlow_particle_feedback --backend cpu|cuda|hip [--device D]\n"
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
-               "                                    [--batch-chunks Q] [--seed S] [--max-visits M]\n";
+               "                                    [--batch-chunks Q] [--frame-cap F]\n"
+               "                                    [--seed S] [--max-visits M]\n";
     }
 
     inline std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -138,6 +141,10 @@ namespace graphFlow::cli
             {
                 options.batchChunks = parseU32(flag, nextValue(flag));
             }
+            else if(flag == "--frame-cap")
+            {
+                options.frameCap = parseU32(flag, nextValue(flag));
+            }
             else if(flag == "--seed")
             {
                 options.seed = parseU64(flag, nextValue(flag));
@@ -187,6 +194,7 @@ namespace graphFlow::cli
         resolved.parameters.liveParticles = resolved.policy.liveParticles;
         resolved.parameters.tileSize = resolved.policy.tileSize;
         resolved.parameters.batchChunks = options.batchChunks;
+        resolved.parameters.frameCap = options.frameCap;
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;

@@ -9,12 +9,12 @@ repository state, not on the intended final state.
 
 Current validated state:
 
-- Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public),
-  branch `main`, HEAD `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b`.
-- Last recorded validation on the integrated revision: 74/74 CTest cases on
-  fwk394 CPU, 75/75 on hal CUDA, per `docs/acceptance.md`; the code is
-  unchanged by this docs-only reconciliation, so no new test run is claimed
-  here.
+- Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
+  Policy/docs main is `cb0548cedf81a284e6291a39dee1eeca7256d783`; this work
+  rebases the FrameSpec launch on top of it.
+- Last recorded validation on the rebased FrameSpec revision: 82/82 CTest
+  cases on fwk394 CPU, 86/86 on hal CUDA, per `docs/acceptance.md`. The CUDA
+  totals include the `[cuda]` kernel and FrameSpec matrix cases.
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
 - CUDA example: `N=1e5` 0.58 s, `N=1e6` 2.24 s, `N=1e8` 187.5 s with an exact
@@ -33,9 +33,16 @@ resource or decision is missing.
   (default 1) dispatches up to `Q` ready input chunks per transform node, with
   one classify launch and one scatter launch per batch and the adaptive
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
-  Q=1/2/8 (74/74 CPU on fwk394, 75/75 CUDA on hal, identical sorted histograms
-  across Q). Open refinement: `--batch-chunks Q` has no upper cap beyond the
-  32-bit parse limit, tracked in Section 7.
+  Q=1/2/8 with identical sorted histograms across Q. The current tree passes
+  82/82 CPU on fwk394 and 86/86 CUDA on hal. Open refinement:
+  `--batch-chunks Q` has no upper cap beyond the 32-bit parse limit, tracked in
+  Section 7.
+- [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
+  `launchPolicy` with `FrameSpec{numFrames, frameExtent}`. `numFrames` is
+  `min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)` with
+  `frameCap` default 8; the host frame extent is 1 and accelerators use `T`.
+  Kernels stride the batch tile list, so a block may process several tiles. The
+  FrameSpec unit and matrix tests pass on CPU and CUDA.
 - [ ] **P0: generic graph API.** The current runner is a particle-feedback
   runner with reusable primitives. Add the planned host-side
   `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` model with typed payload

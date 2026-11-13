@@ -118,6 +118,7 @@ namespace graphFlow::particle
         config.maxVisits = parameters.maxVisits;
         config.numParticles = parameters.numParticles;
         config.batchChunks = parameters.batchChunks;
+        config.frameCap = parameters.frameCap;
         // The programmatic default leaves the documented Config cap in place; the CLI passes the
         // resolved device-policy budget plus the K*R output-credit reserve. Validation rejects a
         // pool whose S*C payload exceeds this budget before any allocation happens.
@@ -125,9 +126,8 @@ namespace graphFlow::particle
             config.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
         config.validate();
 
-        std::uint32_t const threads = GraphRunner<TDevice>::threadsPerBlock(device, config.tileSize);
-        // The transform stages take the logical tile width and resolve the real block extent
-        // themselves; generate and sink stay one block per chunk with the resolved extent.
+        // Every stage passes the logical tile width to the frame launcher. The launcher resolves
+        // the physical block extent: T on accelerators and one on the host backend.
         ChunkPool<TDevice> pool{device, config.numChunks, config.chunkCapacity};
 
         // The result buffer is indexed by particle id; the sentinel detects missing deliveries.
@@ -145,29 +145,37 @@ namespace graphFlow::particle
         ProcessAPolicy processAPolicy{parameters.seed, parameters.maxVisits};
         ProcessBPolicy processBPolicy{parameters.seed, parameters.maxVisits};
 
-        GenerateStage<TDevice> generate{pool, parameters.seed, threads};
+        GenerateStage<TDevice> generate{
+            device,
+            pool,
+            parameters.seed,
+            config.tileSize,
+            config.frameCap};
         TransformStage<TDevice, FilterPolicy> filter{
             device,
             pool,
             filterPolicy,
             capped,
             config.tileSize,
-            config.batchChunks};
+            config.batchChunks,
+            config.frameCap};
         TransformStage<TDevice, ProcessAPolicy> processA{
             device,
             pool,
             processAPolicy,
             capped,
             config.tileSize,
-            config.batchChunks};
+            config.batchChunks,
+            config.frameCap};
         TransformStage<TDevice, ProcessBPolicy> processB{
             device,
             pool,
             processBPolicy,
             capped,
             config.tileSize,
-            config.batchChunks};
-        SinkStage<TDevice> sink{pool, result, threads};
+            config.batchChunks,
+            config.frameCap};
+        SinkStage<TDevice> sink{device, pool, result, config.tileSize, config.frameCap};
 
         GraphRunner<TDevice> runner{device, pool};
         // Node indices are stable: 0 generate, 1 filter, 2 A, 3 B, 4 sink.

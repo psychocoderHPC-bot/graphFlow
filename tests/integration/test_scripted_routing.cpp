@@ -115,7 +115,6 @@ namespace
     {
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
-        std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
         std::uint64_t const particles = 4u;
         std::uint32_t const live = graphFlow::particle::defaultLiveParticles(particles, capacity);
@@ -131,7 +130,7 @@ namespace
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
-        graphFlow::particle::GenerateStage<Device> generate{pool, 42u, threads};
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 42u, 128u};
         graphFlow::particle::TransformStage<Device, ScriptedFilterPolicy> filter{
             device,
             pool,
@@ -150,7 +149,7 @@ namespace
             ScriptedBPolicy{},
             capped,
             128u};
-        graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+        graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         graphFlow::GraphRunner<Device> runner{device, pool};
         auto const source = runner.addNode(

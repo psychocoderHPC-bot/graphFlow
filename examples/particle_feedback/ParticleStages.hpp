@@ -6,6 +6,7 @@
 
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/Config.hpp"
+#include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graph/BinTable.hpp"
@@ -50,6 +51,7 @@ namespace graphFlow::particle
         std::uint32_t tileSize = 128u;
         std::uint32_t deviceIndex = 0u;
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per transform batch
+        std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
         std::uint64_t poolPayloadBudgetBytes = 0u; // total pool cap, zero uses the Config default
     };
 
@@ -71,10 +73,10 @@ namespace graphFlow::particle
 
     /** Checked number of tiles needed by a chunk.
      *
-     * One thread block is launched per tile, so a zero fill launches no block and an empty chunk
-     * never reaches a kernel. The division is performed in 64 bit because `fill + T - 1` can
-     * overflow 32 bit when `fill` is close to `UINT32_MAX`; for `T >= 1` the result fits in
-     * 32 bit because it never exceeds `fill`.
+     * The frame launch assigns tiles to blocks by a grid stride, so a zero fill launches no block
+     * and an empty chunk never reaches a kernel. The division is performed in 64 bit because
+     * `fill + T - 1` can overflow 32 bit when `fill` is close to `UINT32_MAX`; for `T >= 1` the
+     * result fits in 32 bit because it never exceeds `fill`.
      */
     inline std::uint32_t tileCount(std::uint32_t fill, std::uint32_t tileSize)
     {
@@ -203,19 +205,31 @@ namespace graphFlow::particle
     public:
         using Queue = typename GraphRunner<TDevice>::Queue;
 
-        GenerateStage(ChunkPool<TDevice>& pool, std::uint64_t seed, std::uint32_t threadsPerBlock)
-            : m_pool{pool}
+        GenerateStage(
+            TDevice const& device,
+            ChunkPool<TDevice>& pool,
+            std::uint64_t seed,
+            std::uint32_t tileSize,
+            std::uint32_t frameCap = graphFlow::defaultFrameCap)
+            : m_device{device}
+            , m_pool{pool}
             , m_seed{seed}
-            , m_threads{threadsPerBlock}
+            , m_tileSize{tileSize}
+            , m_frameCap{frameCap}
         {
+            if(m_frameCap == 0u)
+                throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
         }
 
         void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
         {
             // A source batch always carries exactly one chunk; its fill is the admission result.
             ChunkDescriptor const& chunk = batch.chunk();
+            LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+            if(chunk.fill == 0u)
+                return;
             queue.enqueue(
-                alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                policy.frameSpec(),
                 alpaka::KernelBundle{
                     GenerateKernel{m_seed},
                     m_pool.ids(),
@@ -239,20 +253,23 @@ namespace graphFlow::particle
         }
 
     private:
+        TDevice m_device;
         ChunkPool<TDevice>& m_pool;
         std::uint64_t m_seed;
-        std::uint32_t m_threads;
+        std::uint32_t m_tileSize;
+        std::uint32_t m_frameCap;
     };
 
     /** Transform stage: classify, plan output chunks on the host, scatter.
      *
      * One transform dispatch may own up to `batchChunks` ready input chunks. The host flattens
      * every input chunk into a compact `TileDescriptor` list (`chunkIndex`, `tileOffset`, `count`),
-     * copies that list to the device once, and launches exactly one classify kernel and one scatter
-     * kernel per batch with one block per descriptor. The histogram, the output plan and the output
-     * table are batch-wide: `total[bin]` aggregates over every input chunk, the exact output chunks
-     * are `ceil(total[bin] / C)` per bin across the whole batch, and `next[bin]` is reserved
-     * batch-wide, so a per-bin range may cross any number of output chunk boundaries.
+     * copies that list to the device once, and launches exactly one classify kernel and one
+     * scatter kernel per batch with blocks striding over the descriptor list. The histogram, the
+     * output plan and the output table are batch-wide: `total[bin]` aggregates over every input
+     * chunk, the exact output chunks are `ceil(total[bin] / C)` per bin across the whole batch, and
+     * `next[bin]` is reserved batch-wide, so a per-bin range may cross any number of output chunk
+     * boundaries.
      *
      * `batchChunks == 1` reproduces the earlier single-chunk behaviour: one descriptor list with the
      * tiles of one chunk, one classify and one scatter launch, and the same per-chunk plan.
@@ -274,10 +291,10 @@ namespace graphFlow::particle
 
         /** `tileSize` is the logical tile width T, not the resolved block extent.
          *
-         * The stage launches one block per tile descriptor with
-         * `ThreadSpec{tileDescriptorCount, GraphRunner::threadsPerBlock(device, T)}`. On the host
-         * backend the block extent collapses to one real thread while T keeps the tile slice width
-         * used by the kernels, so a chunk larger than T still splits into several blocks.
+         * The launch uses `LaunchPolicy`/`FrameSpec`: `numFrames` blocks of `T` threads on an
+         * accelerator and `numFrames` blocks of one real thread on the host backend. The kernels
+         * stride over the batch-wide tile descriptor list, so a block may own several tiles and a
+         * tile descriptor always uses T as the logical slice width.
          */
         TransformStage(
             TDevice const& device,
@@ -285,8 +302,10 @@ namespace graphFlow::particle
             TPolicy policy,
             U32View capped,
             std::uint32_t tileSize,
-            std::uint32_t batchChunks = 1u)
-            : m_pool{pool}
+            std::uint32_t batchChunks = 1u,
+            std::uint32_t frameCap = graphFlow::defaultFrameCap)
+            : m_device{device}
+            , m_pool{pool}
             , m_policy{policy}
             , m_capacity{pool.chunkCapacity()}
             , m_bins{TPolicy::maxBins}
@@ -294,7 +313,7 @@ namespace graphFlow::particle
             , m_tileCapacity{checkedTileCapacity(pool.chunkCapacity(), tileSize, batchChunks)}
             , m_reserveBound{checkedReserveBound(pool.chunkCapacity(), batchChunks, TPolicy::maxBins)}
             , m_tileSize{tileSize}
-            , m_threads{GraphRunner<TDevice>::threadsPerBlock(device, tileSize)}
+            , m_frameCap{frameCap}
             , m_counts{alpaka::onHost::alloc<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(TPolicy::maxBins) + 1u})}
@@ -321,6 +340,8 @@ namespace graphFlow::particle
                   alpaka::Vec{static_cast<std::uint64_t>(m_tileCapacity)})}
             , m_capped{std::move(capped)}
         {
+            if(m_frameCap == 0u)
+                throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
             m_totals.assign(m_bins, 0u);
             m_pending.reserve(m_reserveBound);
         }
@@ -356,6 +377,8 @@ namespace graphFlow::particle
             if(batch.chunks.size() > m_maxBatchChunks)
                 m_maxBatchChunks = static_cast<std::uint32_t>(batch.chunks.size());
 
+            LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
+
             // total[B] + status word; both start at zero for this batch.
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
             if(m_numTiles != 0u)
@@ -366,10 +389,11 @@ namespace graphFlow::particle
                     m_tiles,
                     m_tilesHost,
                     alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
+                auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
                 if constexpr(TBinTable::isHash)
                 {
                     queue.enqueue(
-                        alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
+                        policy.frameSpec(),
                         alpaka::KernelBundle{
                             HashClassifyKernel<TPolicy, TBinTable>{m_policy},
                             m_pool.ids(),
@@ -378,14 +402,14 @@ namespace graphFlow::particle
                             m_pool.visits(),
                             m_pool.binIds(),
                             m_counts,
-                            m_tiles,
+                            tilesView,
                             m_capacity,
                             m_bins});
                 }
                 else
                 {
                     queue.enqueue(
-                        alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
+                        policy.frameSpec(),
                         alpaka::KernelBundle{
                             ClassifyKernel<TPolicy>{m_policy},
                             m_pool.ids(),
@@ -394,7 +418,7 @@ namespace graphFlow::particle
                             m_pool.visits(),
                             m_pool.binIds(),
                             m_counts,
-                            m_tiles,
+                            tilesView,
                             m_capacity});
                 }
                 ++m_classifyLaunches;
@@ -514,8 +538,9 @@ namespace graphFlow::particle
             return static_cast<std::uint32_t>(bound);
         }
 
-        void planAndScatter(Queue const& queue, Batch const&, std::uint32_t& allocated)
+        void planAndScatter(Queue const& queue, Batch const& batch, std::uint32_t& allocated)
         {
+            LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
             std::uint32_t const* host = m_countsHost.data();
             if(host[m_bins] != 0u)
                 throw BatchError{"classify: device status reports an invalid classifier result"};
@@ -560,13 +585,14 @@ namespace graphFlow::particle
                 std::copy(table.begin(), table.end(), m_tableHost.data());
                 alpaka::onHost::memcpy(queue, m_table, m_tableHost);
                 alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
+                auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
 
                 if constexpr(TBinTable::isHash)
                 {
                     if(m_numTiles != 0u)
                     {
                         queue.enqueue(
-                            alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
+                            policy.frameSpec(),
                             alpaka::KernelBundle{
                                 HashScatterKernel<TPolicy, TBinTable>{m_policy},
                                 m_pool.ids(),
@@ -582,7 +608,7 @@ namespace graphFlow::particle
                                 m_next,
                                 m_counts,
                                 m_capped,
-                                m_tiles,
+                                tilesView,
                                 m_capacity,
                                 m_bins});
                     }
@@ -592,7 +618,7 @@ namespace graphFlow::particle
                     if(m_numTiles != 0u)
                     {
                         queue.enqueue(
-                            alpaka::onHost::ThreadSpec{m_numTiles, m_threads},
+                            policy.frameSpec(),
                             alpaka::KernelBundle{
                                 ScatterKernel<TPolicy>{m_policy},
                                 m_pool.ids(),
@@ -608,7 +634,7 @@ namespace graphFlow::particle
                                 m_next,
                                 m_counts,
                                 m_capped,
-                                m_tiles,
+                                tilesView,
                                 m_capacity});
                     }
                 }
@@ -669,6 +695,7 @@ namespace graphFlow::particle
             }
         }
 
+        TDevice m_device;
         ChunkPool<TDevice>& m_pool;
         TPolicy m_policy;
         std::uint32_t m_capacity;
@@ -677,7 +704,7 @@ namespace graphFlow::particle
         std::uint32_t m_tileCapacity;
         std::uint32_t m_reserveBound;
         std::uint32_t m_tileSize;
-        std::uint32_t m_threads;
+        std::uint32_t m_frameCap;
         U32View m_counts;
         MappedU32View m_countsHost;
         U32View m_next;
@@ -706,11 +733,20 @@ namespace graphFlow::particle
         using U32View
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
-        SinkStage(ChunkPool<TDevice>& pool, U32View result, std::uint32_t threadsPerBlock)
-            : m_pool{pool}
+        SinkStage(
+            TDevice const& device,
+            ChunkPool<TDevice>& pool,
+            U32View result,
+            std::uint32_t tileSize,
+            std::uint32_t frameCap = graphFlow::defaultFrameCap)
+            : m_device{device}
+            , m_pool{pool}
             , m_result{std::move(result)}
-            , m_threads{threadsPerBlock}
+            , m_tileSize{tileSize}
+            , m_frameCap{frameCap}
         {
+            if(m_frameCap == 0u)
+                throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
         }
 
         void launch(Queue const& queue, typename GraphRunner<TDevice>::Batch const& batch)
@@ -718,8 +754,11 @@ namespace graphFlow::particle
             // A sink batch always carries exactly one chunk; the runner never batches sinks.
             ChunkDescriptor const& chunk = batch.chunk();
             m_sunk += chunk.fill;
+            LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+            if(chunk.fill == 0u)
+                return;
             queue.enqueue(
-                alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                policy.frameSpec(),
                 alpaka::KernelBundle{
                     SinkKernel{},
                     m_result,
@@ -745,9 +784,11 @@ namespace graphFlow::particle
         }
 
     private:
+        TDevice m_device;
         ChunkPool<TDevice>& m_pool;
         U32View m_result;
-        std::uint32_t m_threads;
+        std::uint32_t m_tileSize;
+        std::uint32_t m_frameCap;
         std::uint64_t m_sunk = 0u;
     };
 

@@ -84,7 +84,6 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
 {
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
-    std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
     std::uint64_t const particles = 64u;
     std::uint32_t const capacity = 8u;
@@ -104,7 +103,7 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
     parameters.seed = 7u;
     parameters.maxVisits = 8u;
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, parameters.seed, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, parameters.seed, 128u};
     graphFlow::particle::ProcessBPolicy policy{parameters.seed, parameters.maxVisits};
     graphFlow::particle::TransformStage<Device, graphFlow::particle::ProcessBPolicy> transform{
         device,
@@ -112,7 +111,7 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
         policy,
         capped,
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     graphFlow::ChunkHandle recorded{};
     graphFlow::GraphRunner<Device> runner{device, pool};

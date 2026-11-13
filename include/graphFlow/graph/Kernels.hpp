@@ -33,7 +33,7 @@ namespace graphFlow
             std::uint32_t fill) const
         {
             using namespace alpaka;
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{fill}))
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const slot = base + i;
                 std::uint64_t const id = firstId + i;
@@ -57,7 +57,7 @@ namespace graphFlow
             std::uint32_t fill) const
         {
             using namespace alpaka;
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{fill}))
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const slot = base + i;
                 result[static_cast<std::size_t>(ids[slot])] = weights[slot];
