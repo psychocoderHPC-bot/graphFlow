@@ -1,0 +1,6 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: graphFlow
+
+Files: *
+Copyright: 2026 René Widera
+License: MPL-2.0
