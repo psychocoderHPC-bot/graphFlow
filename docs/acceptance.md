@@ -3,9 +3,10 @@
 
 # graphFlow acceptance record
 
-Integrated revision: `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b` (T1, T2, T3,
-T5, T7, T13, T14a). This record uses the supplied integrated acceptance
-evidence. It does not claim a local rerun in this worktree.
+Integrated revision: rebased FrameSpec launch on policy/docs main
+`cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13, T14a).
+This record includes the rebased CTest runs on fwk394 CPU and hal CUDA; the
+historical T13 performance table remains the supplied integrated evidence.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -26,13 +27,17 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 74/74 passed |
-| CUDA CTest on hal | 75/75 passed |
+| CPU CTest on fwk394 | 82/82 passed |
+| CUDA CTest on hal | 86/86 passed |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
-The CUDA build adds `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on
-the selected NVIDIA GPU and fails when no GPU is visible.
+The CTest totals include `tests/unit/test_launch_policy.cpp` and
+`tests/integration/test_framespec.cpp`, which pin the FrameSpec formula, the
+`FrameSpec` grid-stride mapping, the N/C/T/frameCap/Q matrix, and the
+`T > maxThreadsPerBlock` rejection. The CUDA build adds
+`tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
+GPU and fails when no GPU is visible; the FrameSpec matrix also runs on CUDA.
 
 ## Historical performance baseline
 

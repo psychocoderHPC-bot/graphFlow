@@ -87,7 +87,6 @@ namespace
     {
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
-        std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
         std::uint64_t const reserve = graphFlow::outputChunkBound(capacity, capacity, Bin64Policy::maxBins);
         // With a bounded P the pool only needs P data chunks plus this graph's single transform
@@ -100,7 +99,7 @@ namespace
         graphFlow::ChunkPool pool{device, numChunks, capacity};
         auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
 
-        graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
         graphFlow::particle::TransformStage<Device, Bin64Policy> transform{
             device,
             pool,
@@ -108,7 +107,7 @@ namespace
             // The 64-bin test does not exercise the capped counter; a one-word buffer is enough.
             alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
             tileSize};
-        graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+        graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         std::vector<int> route(Bin64Policy::maxBins, 2);
         graphFlow::GraphRunner<Device> runner{device, pool};
@@ -223,19 +222,18 @@ TEST_CASE("invalid classifier results abort the batch", "[integration][dense]")
 {
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
-    std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
     graphFlow::ChunkPool pool{device, 32u, 8u};
     auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{16u}});
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, InvalidPolicy> transform{
         device,
         pool,
         InvalidPolicy{},
         alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     graphFlow::GraphRunner<Device> runner{device, pool};
     auto const source = runner.addNode(

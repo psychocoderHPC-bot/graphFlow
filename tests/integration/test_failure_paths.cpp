@@ -75,7 +75,6 @@ TEST_CASE("a throwing source launch fails the run without stalling", "[integrati
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
     using Runner = graphFlow::GraphRunner<Device>;
-    std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
 
     std::uint64_t const particles = 16u;
     std::uint32_t const capacity = 8u;
@@ -87,14 +86,14 @@ TEST_CASE("a throwing source launch fails the run without stalling", "[integrati
     graphFlow::ChunkPool pool{device, numChunks, capacity};
     auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, AllToBinZeroPolicy> transform{
         device,
         pool,
         AllToBinZeroPolicy{},
         alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     std::uint32_t launches = 0u;
     auto sourceHooks = graphFlow::particle::hooksOf<Device>(generate);
@@ -147,7 +146,6 @@ TEST_CASE("a failed transform batch poisons the stage and restores the pool", "[
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
     using Runner = graphFlow::GraphRunner<Device>;
-    std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
 
     // Two chunks of capacity four: the input holds one, leaving room for exactly one of the two
     // output chunks the even split needs.
@@ -156,7 +154,7 @@ TEST_CASE("a failed transform batch poisons the stage and restores the pool", "[
     auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
     alpaka::onHost::memset(queue, capped, std::uint8_t{0});
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, SplitEvenPolicy> stage{
         device,
         pool,
@@ -214,7 +212,6 @@ namespace
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
         using Runner = graphFlow::GraphRunner<Device>;
-        std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
 
         constexpr std::uint32_t capacity = 8u;
         constexpr std::uint64_t particles = 8u;
@@ -228,7 +225,7 @@ namespace
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
-        graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
         graphFlow::particle::TransformStage<Device, SplitEvenPolicy> split{
             device,
             pool,
@@ -243,7 +240,7 @@ namespace
             capped,
             128u,
             2u};
-        graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+        graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         BatchingFailureOutcome outcome;
         // Count abort invocations test-side. A second abort would attempt to release the already
@@ -339,7 +336,6 @@ TEST_CASE("a later unroutable output still releases the batch input", "[integrat
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
     using Runner = graphFlow::GraphRunner<Device>;
-    std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
 
     constexpr std::uint32_t capacity = 4u;
     constexpr std::uint64_t particles = 4u;
@@ -353,14 +349,14 @@ TEST_CASE("a later unroutable output still releases the batch input", "[integrat
         alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
     }
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, SplitEvenPolicy> transform{
         device,
         pool,
         SplitEvenPolicy{},
         capped,
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     auto transformHooks = graphFlow::particle::hooksOf<Device>(transform);
     auto const baseFinish = transformHooks.finish;

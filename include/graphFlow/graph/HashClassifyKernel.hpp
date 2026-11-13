@@ -16,9 +16,9 @@ namespace graphFlow
 {
     /** Large-bin histogram kernel for one tile of one input chunk.
      *
-     * The launch uses one thread block per `TileDescriptor` of the batch, so the block index
-     * selects a tile of a chunk and the descriptor supplies `chunkIndex`, `tileOffset` and
-     * `count`. Per particle the classifier is applied
+     * The launch uses a frame specification. Each block strides over the batch-wide tile
+     * descriptor list, so one block may process several tiles; the descriptor supplies
+     * `chunkIndex`, `tileOffset` and `count`. Per particle the classifier is applied
      * once and its bin is inserted into a per-block open-addressing hash table (`atomicCas` on the
      * key, `atomicAdd` on the count). After the insertion barrier every occupied entry is flushed
      * into the device-scope `counts[bin]` total, so the shared table never has to be as wide as the
@@ -53,64 +53,65 @@ namespace graphFlow
         {
             using namespace alpaka;
 
+            std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
+
             auto table = onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(
                 acc,
                 CVec<std::uint32_t, TBinTable::entries>{});
             auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
 
-            auto const [block] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-            TileDescriptor const tile = tiles[static_cast<std::uint32_t>(block)];
-            std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
-            std::uint32_t const count = tile.count;
-
-            for(auto [entry] : onAcc::makeIdxMap(
-                    acc,
-                    onAcc::worker::threadsInBlock,
-                    IdxRange{std::uint32_t{TBinTable::entries}}))
-                table[entry] = HashBinEntry{hashEmptyKey, 0u, 0u, 0u};
-            // Exactly one worker writes the scalar flag; the barrier publishes it.
-            for(auto [one] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{1u}}))
+            for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
             {
-                alpaka::unused(one);
-                tableFull = 0u;
-            }
-            onAcc::syncBlockThreads(acc);
+                std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
+                TileDescriptor const tile = tiles[tileIndex];
+                std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                std::uint32_t const count = tile.count;
 
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
-            {
-                std::uint32_t const slot = base + i;
-                Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
-                std::uint32_t const bin
-                    = policy.classify(particle.id, particle.property, particle.weight, particle.visit);
-                if(bin >= maxBins)
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                    table[entry] = HashBinEntry{hashEmptyKey, 0u, 0u, 0u};
+                // Exactly one worker writes the scalar flag; the barrier publishes it.
+                for(auto [one] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{1u}}))
                 {
-                    // Hard batch error: report and never index the table.
-                    onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
-                    continue;
+                    alpaka::unused(one);
+                    tableFull = 0u;
                 }
-                binIds[slot] = bin;
-                if(!hashInsert<ALPAKA_TYPEOF(acc), TBinTable>(acc, table.data(), bin))
+                onAcc::syncBlockThreads(acc);
+
+                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
                 {
-                    onAcc::atomicExch(acc, &tableFull, std::uint32_t{1u}, onAcc::scope::block);
+                    std::uint32_t const slot = base + i;
+                    Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
+                    std::uint32_t const bin
+                        = policy.classify(particle.id, particle.property, particle.weight, particle.visit);
+                    if(bin >= maxBins)
+                    {
+                        // Hard batch error: report and never index the table.
+                        onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
+                    }
+                    binIds[slot] = bin;
+                    if(!hashInsert<ALPAKA_TYPEOF(acc), TBinTable>(acc, table.data(), bin))
+                    {
+                        onAcc::atomicExch(acc, &tableFull, std::uint32_t{1u}, onAcc::scope::block);
+                        break;
+                    }
+                }
+                onAcc::syncBlockThreads(acc);
+
+                if(tableFull != 0u)
+                {
+                    onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
                     break;
                 }
-            }
-            onAcc::syncBlockThreads(acc);
 
-            if(tableFull != 0u)
-            {
-                onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
-                return;
-            }
-
-            for(auto [entry] : onAcc::makeIdxMap(
-                    acc,
-                    onAcc::worker::threadsInBlock,
-                    IdxRange{std::uint32_t{TBinTable::entries}}))
-            {
-                std::uint32_t const bin = table[entry].key;
-                if(bin != hashEmptyKey)
-                    onAcc::atomicAdd(acc, &counts[bin], table[entry].count, onAcc::scope::device);
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                {
+                    std::uint32_t const bin = table[entry].key;
+                    if(bin != hashEmptyKey)
+                        onAcc::atomicAdd(acc, &counts[bin], table[entry].count, onAcc::scope::device);
+                }
             }
         }
     };

@@ -44,6 +44,7 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK_FALSE(defaults.liveParticles.has_value());
     CHECK_FALSE(defaults.tileSize.has_value());
     CHECK(defaults.batchChunks == 1u);
+    CHECK(defaults.frameCap == graphFlow::defaultFrameCap);
     CHECK(defaults.seed == 0u);
     CHECK(defaults.maxVisits == 64u);
 
@@ -62,6 +63,8 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
          "64",
          "--batch-chunks",
          "8",
+         "--frame-cap",
+         "3",
          "--seed",
          "42",
          "--max-visits",
@@ -77,6 +80,7 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     REQUIRE(options.tileSize.has_value());
     CHECK(*options.tileSize == 64u);
     CHECK(options.batchChunks == 8u);
+    CHECK(options.frameCap == 3u);
     CHECK(options.seed == 42u);
     CHECK(options.maxVisits == 7u);
 
@@ -88,6 +92,7 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK(resolved.parameters.liveParticles == 512u);
     CHECK(resolved.parameters.tileSize == 64u);
     CHECK(resolved.parameters.batchChunks == 8u);
+    CHECK(resolved.parameters.frameCap == 3u);
     CHECK(resolved.parameters.seed == 42u);
     CHECK(resolved.parameters.maxVisits == 7u);
 
@@ -118,6 +123,9 @@ TEST_CASE("CLI rejects zero chunk, live-particle, tile and batch values", "[cli]
         Catch::Matchers::ContainsSubstring("must be non-zero"));
     CHECK_THROWS_WITH(
         parseArgs({"--batch-chunks", "0"}),
+        Catch::Matchers::ContainsSubstring("must be non-zero"));
+    CHECK_THROWS_WITH(
+        parseArgs({"--frame-cap", "0"}),
         Catch::Matchers::ContainsSubstring("must be non-zero"));
 }
 

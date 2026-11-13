@@ -11,8 +11,9 @@ namespace graphFlow
     /** One tile of one input chunk of a transform batch.
      *
      * The host flattens every input chunk of a batch into a compact descriptor list and copies it
-     * to the device once. The classify and scatter launches use one thread block per descriptor, so
-     * a batch is two launches regardless of how many chunks or tiles it carries.
+     * to the device once. The classify and scatter launches stride over the descriptor list with a
+     * frame specification, so a batch is two launches regardless of how many chunks or tiles it
+     * carries and one block may process several descriptors.
      *
      * `chunkIndex` selects the chunk in the pool, `tileOffset` is the first particle slot of the
      * tile within the chunk and `count` is the number of particles this tile owns

@@ -197,7 +197,6 @@ namespace
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
         using Runner = graphFlow::GraphRunner<Device>;
-        std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
         std::uint32_t const numChunks = static_cast<std::uint32_t>(fills.size());
         REQUIRE(numChunks != 0u);
         REQUIRE(batchChunks != 0u);
@@ -218,7 +217,7 @@ namespace
         std::vector<IdRange> ranges;
         inputs.reserve(numChunks);
         ranges.reserve(numChunks);
-        graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
         // GenerateStage::Queue is the node queue type, i.e. the runner's non-blocking queue.
         auto initQueue = device.makeQueue(alpaka::queueKind::nonBlocking);
         std::uint64_t firstId = 0u;
@@ -334,7 +333,6 @@ namespace
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
         using Runner = graphFlow::GraphRunner<Device>;
-        std::uint32_t const threads = Runner::threadsPerBlock(device, 128u);
 
         // Default: one splitter chunk becomes at most eight one-bin chunks, and every join output
         // needs a chunk too; the pool is sized generously because the test keeps the whole graph
@@ -350,7 +348,7 @@ namespace
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
-        graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
         graphFlow::particle::TransformStage<Device, Mod8Policy> split{
             device,
             pool,
@@ -365,7 +363,7 @@ namespace
             capped,
             128u,
             batchChunks};
-        graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+        graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         PipelineOutcome outcome;
         auto sinkHooks = graphFlow::particle::hooksOf<Device>(sink);

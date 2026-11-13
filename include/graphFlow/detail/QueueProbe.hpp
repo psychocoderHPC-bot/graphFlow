@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "graphFlow/core/LaunchPolicy.hpp"
+
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
@@ -66,13 +68,19 @@ namespace graphFlow
             ALPAKA_FN_ACC void operator()(
                 alpaka::onAcc::concepts::Acc auto const& acc,
                 std::uint32_t* out,
-                std::uint64_t iterations) const
+                std::uint64_t iterations,
+                std::uint32_t count) const
             {
-                auto [threadIdx] = acc.getIdxWithin(alpaka::onAcc::origin::block, alpaka::onAcc::unit::threads);
-                std::uint32_t value = static_cast<std::uint32_t>(threadIdx) + 1u;
-                for(std::uint64_t i = 0u; i < iterations; ++i)
-                    value = value * 1664525u + 1013904223u;
-                out[threadIdx] = value;
+                for(auto [idx] : alpaka::onAcc::makeIdxMap(
+                        acc,
+                        alpaka::onAcc::worker::threadsInGrid,
+                        alpaka::IdxRange{count}))
+                {
+                    std::uint32_t value = static_cast<std::uint32_t>(idx) + 1u;
+                    for(std::uint64_t i = 0u; i < iterations; ++i)
+                        value = value * 1664525u + 1013904223u;
+                    out[idx] = value;
+                }
             }
         };
 
@@ -81,10 +89,14 @@ namespace graphFlow
         {
             ALPAKA_FN_ACC void operator()(
                 alpaka::onAcc::concepts::Acc auto const& acc,
-                std::uint32_t* out) const
+                std::uint32_t* out,
+                std::uint32_t count) const
             {
-                auto [threadIdx] = acc.getIdxWithin(alpaka::onAcc::origin::block, alpaka::onAcc::unit::threads);
-                out[threadIdx] = 0xA5A5A5A5u;
+                for(auto [idx] : alpaka::onAcc::makeIdxMap(
+                        acc,
+                        alpaka::onAcc::worker::threadsInGrid,
+                        alpaka::IdxRange{count}))
+                    out[idx] = 0xA5A5A5A5u;
             }
         };
 
@@ -120,7 +132,8 @@ namespace graphFlow
     QueueProbeResult probeQueueIndependence(
         TDevice& device,
         std::uint64_t delayIterations = 20'000'000u,
-        std::chrono::milliseconds timeout = std::chrono::milliseconds{10'000})
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{10'000},
+        std::uint32_t frameCap = defaultFrameCap)
     {
         if(delayIterations == 0u)
             throw std::invalid_argument{"graphFlow: queue probe needs a nonzero delay"};
@@ -129,6 +142,7 @@ namespace graphFlow
         result.delayIterations = delayIterations;
 
         std::uint32_t const threads = detail::queueProbeThreads(device);
+        LaunchPolicy const policy = launchPolicy(device, threads, threads, frameCap);
         auto const extents = alpaka::Vec{static_cast<std::uint64_t>(threads)};
         auto delayOut = alpaka::onHost::alloc<std::uint32_t>(device, extents);
         auto noopOut = alpaka::onHost::alloc<std::uint32_t>(device, extents);
@@ -141,13 +155,13 @@ namespace graphFlow
         auto secondEvent = device.makeEvent();
 
         firstQueue.enqueue(
-            alpaka::onHost::ThreadSpec{std::uint32_t{1u}, threads},
-            alpaka::KernelBundle{detail::QueueProbeDelayKernel{}, delayOut.data(), delayIterations});
+            policy.frameSpec(),
+            alpaka::KernelBundle{detail::QueueProbeDelayKernel{}, delayOut.data(), delayIterations, threads});
         firstQueue.enqueue(firstEvent);
 
         secondQueue.enqueue(
-            alpaka::onHost::ThreadSpec{std::uint32_t{1u}, threads},
-            alpaka::KernelBundle{detail::QueueProbeNoopKernel{}, noopOut.data()});
+            policy.frameSpec(),
+            alpaka::KernelBundle{detail::QueueProbeNoopKernel{}, noopOut.data(), threads});
         secondQueue.enqueue(secondEvent);
 
         auto const start = std::chrono::steady_clock::now();

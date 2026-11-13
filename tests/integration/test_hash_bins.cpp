@@ -77,7 +77,6 @@ namespace
         std::uint32_t capacity,
         TPolicy policy)
     {
-        std::uint32_t const threads = graphFlow::GraphRunner<TDevice>::threadsPerBlock(device, 128u);
         std::uint64_t const reserve
             = graphFlow::outputChunkBound(capacity, capacity, TPolicy::maxBins);
         std::uint64_t const chunks = particles / capacity + 2u * reserve + 10u;
@@ -92,7 +91,7 @@ namespace
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
-        graphFlow::particle::GenerateStage<TDevice> generate{pool, 0u, threads};
+        graphFlow::particle::GenerateStage<TDevice> generate{device, pool, 0u, 128u};
         // The transform takes the logical tile width T and resolves the block extent itself.
         graphFlow::particle::TransformStage<TDevice, TPolicy, TBinTable> transform{
             device,
@@ -100,7 +99,7 @@ namespace
             policy,
             capped,
             128u};
-        graphFlow::particle::SinkStage<TDevice> sink{pool, result, threads};
+        graphFlow::particle::SinkStage<TDevice> sink{device, pool, result, 128u};
 
         std::vector<int> route(TPolicy::maxBins, 2);
         graphFlow::GraphRunner<TDevice> runner{device, pool};
@@ -287,7 +286,6 @@ TEST_CASE("hash table exhaustion aborts the batch", "[integration][hash]")
 {
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
-    std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
     // Eight slots, sixteen distinct bins in the only source chunk: the table is full.
     constexpr std::uint32_t numChunks = 64u;
@@ -301,14 +299,14 @@ TEST_CASE("hash table exhaustion aborts the batch", "[integration][hash]")
         alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
     }
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, ModPolicy<16u>, graphFlow::HashBinTable<4u>> transform{
         device,
         pool,
         ModPolicy<16u>{},
         capped,
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     std::vector<int> route(ModPolicy<16u>::maxBins, 2);
     graphFlow::GraphRunner<Device> runner{device, pool};
@@ -356,7 +354,6 @@ TEST_CASE("invalid classifier results abort the hash batch", "[integration][hash
 {
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
-    std::uint32_t const threads = graphFlow::GraphRunner<Device>::threadsPerBlock(device, 128u);
 
     graphFlow::ChunkPool pool{device, 32u, 8u};
     auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{16u}});
@@ -367,14 +364,14 @@ TEST_CASE("invalid classifier results abort the hash batch", "[integration][hash
         alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
     }
 
-    graphFlow::particle::GenerateStage<Device> generate{pool, 0u, threads};
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
     graphFlow::particle::TransformStage<Device, InvalidHashPolicy, graphFlow::HashBinTable<128u>> transform{
         device,
         pool,
         InvalidHashPolicy{},
         capped,
         128u};
-    graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     graphFlow::GraphRunner<Device> runner{device, pool};
     auto const source = runner.addNode(

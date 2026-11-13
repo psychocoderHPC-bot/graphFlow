@@ -43,10 +43,10 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 74/74, hal CUDA 75/75. The totals come
-from the supplied integrated acceptance evidence; this document does not claim
-a local run. The CUDA build adds a kernel execution test (`[cuda]`) that fails
-when no NVIDIA GPU is visible.
+Recorded integrated tests: fwk394 CPU 82/82, hal CUDA 86/86. The totals include
+the FrameSpec launch-policy and matrix tests; the CUDA totals also include the
+kernel execution and FrameSpec matrix cases. These are the rebased CTest runs.
+The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is visible.
 
 ## Historical measured baseline
 
@@ -204,7 +204,7 @@ not change them. See [numerics](docs/numerics.md).
    reserves the adaptive `outputChunkBound(sum(fill), C, B)`.
 2. `TransformStage` flattens the batch into one `TileDescriptor` per tile
    (`chunkIndex`, `tileOffset`, `count`), copies the list to the device once,
-   and launches one classify kernel with one block per descriptor.
+   and launches one classify kernel whose blocks stride over the descriptor list.
    `ClassifyKernel<Policy, B>` zeroes its shared `counts[B]` table, classifies
    its tile slice, writes `binIds[slot]`, accumulates with block-scope atomics,
    and flushes nonempty bins into the batch-wide `counts[bin]` with device-scope
@@ -213,8 +213,8 @@ not change them. See [numerics](docs/numerics.md).
    queue event covers that copy. After polling the event, it allocates exactly
    `sum_b ceil(total_b / C)` output chunks for the whole batch, builds
    `binBase[B]` plus the flat output chunk list, copies that table to the device,
-   zeroes `next[B]` on the same queue, and launches one scatter kernel with one
-   block per descriptor.
+   zeroes `next[B]` on the same queue, and launches one scatter kernel whose
+   blocks stride over the descriptor list.
 4. `ScatterKernel<Policy, B>` rebuilds per-tile counts from `binIds`, reserves
    one device-scope range per nonempty bin with `atomicAdd(next[bin], count)`,
    assigns local ranks through a shared cursor, applies the payload mutation, and
@@ -228,9 +228,14 @@ A shared-memory open-addressing hash table (`HashBinTable`, `2*T` entries by
 default) covers large bin counts. A full table is a hard batch error, not a
 dense fallback. The example uses the dense path.
 
-The current launch mapping is one `ThreadSpec` with one block per
-`TileDescriptor`. A `FrameSpec` refactor is still pending. Polling is a bounded
-spin followed by `std::this_thread::yield()`; the scheduler never uses
+Every kernel launch uses `FrameSpec` from `graphFlow/core/LaunchPolicy.hpp`.
+The frame count is
+`min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)` with
+`frameCap` defaulting to 8. On CUDA/HIP the frame extent is `T`; on the host
+backend it is 1 because the host executors require one real thread per block.
+Kernels stride over the batch-wide tile descriptor list with
+`worker::blocksInGrid`, so one block may process several tiles. Polling is a
+bounded spin followed by `std::this_thread::yield()`; the scheduler never uses
 `enqueueHostFn`.
 
 ## Queue independence
@@ -280,8 +285,9 @@ The full design is in [architecture](docs/architecture.md).
 - `--batch-chunks Q` has no upper cap beyond the 32-bit parse limit. Large `Q`
   sizes tile-descriptor, table, and staging buffers even when the ready list is
   short. An optional cap is not implemented.
-- The launch still uses `ThreadSpec` with one block per tile descriptor. The
-  `FrameSpec` refactor is pending.
+- The frame launch is implemented. `--frame-cap F` bounds the grid to
+  `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
+  the host backend uses a unit frame extent.
 - No AMD GPU is visible on hal. HIP is compile-only for `gfx90a`; HIP execution
   is blocked until an AMD runtime device is available; no HIP runtime result is
   claimed.
@@ -322,10 +328,10 @@ The full design is in [architecture](docs/architecture.md).
    test_pressure.cpp`, `tests/integration/test_batching.cpp`, and
    `tests/unit/test_pool_budget.cpp` pin the bound and the budget.
 3. **The host backend requires a block extent of one.** `api/host/exec/Serial.hpp`
-   throws when `numThreads.product() != 1`, so `ThreadSpec{1, T}` is only valid
-   for accelerators; `GraphRunner::threadsPerBlock` maps it to 1 for `api::Host`.
-   The accelerator branch validates against `maxThreadsPerBlock` and throws
-   rather than passing an invalid extent.
+   throws when `numThreads.product() != 1`, so `launchPolicy` sets the frame
+   extent to 1 on `api::Host` and to `T` on an accelerator. `numFrames` still
+   follows the `T`-based formula, and `T > maxThreadsPerBlock` is rejected before
+   the launch.
 4. **Histogram multiset equality is the acceptance gate.** Scatter order is
    unspecified, so the 64-bin test compares sorted multisets. Per-particle
    comparisons remain a diagnostic for lost or duplicated ids.

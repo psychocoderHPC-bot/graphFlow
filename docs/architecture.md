@@ -124,22 +124,28 @@ chunk.
 slot of the tile within the chunk, and `count` is the number of particles the
 tile owns. The host flattens every input chunk of a batch into one descriptor
 list and copies it to the device once. Classify and scatter each launch one
-kernel with one thread block per descriptor, so a batch is two launches
+kernel whose blocks stride over the descriptor list, so a batch is two launches
 regardless of how many chunks or tiles it carries. `ChunkPool` rejects
 `numChunks*C > UINT32_MAX`, so the descriptor index arithmetic stays in 32 bits.
 
-The current launch mapping is one `ThreadSpec` with one block per descriptor.
-A `FrameSpec` refactor is still pending.
+The launch mapping is a `FrameSpec` from `launchPolicy`. `numFrames` is
+`min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)`, with
+`frameCap` defaulting to 8. On CUDA/HIP the frame extent is `T`; on `api::Host`
+it is 1. The blocks stride over the descriptor list with
+`worker::blocksInGrid`, so a block may process several tiles and a capped grid
+never drops the remaining descriptors.
 
 ## Classify and scatter
 
-Both dense and hash stages launch one block per tile descriptor. The block index
-selects the descriptor, and `T` is passed separately from the real block
+Both dense and hash stages launch one `FrameSpec` per batch. Each block strides
+over the batch-wide tile descriptor list with
+`onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles})`, so a
+block may process several tiles. `T` is passed separately from the real block
 extent. On `api::Host` the block extent is one real thread; on an accelerator it
-is `T`, rejected when `T` exceeds `maxThreadsPerBlock`. Kernels stride with
-`onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count})`, so the
-same code is correct for one or for `T` real threads. Every thread reaches every
-barrier, including inactive tail lanes.
+is `T`, rejected when `T` exceeds `maxThreadsPerBlock`. Within a tile the threads
+stride with `onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock,
+IdxRange{count})`, so the same code is correct for one or for `T` real threads.
+Every thread reaches every barrier, including inactive tail lanes.
 
 ### Dense path
 
@@ -253,7 +259,7 @@ rejected.
 - Q is unbounded apart from the 32-bit parse limit. An optional cap is not
   implemented.
 - One in-flight batch per node.
-- The launch still uses one `ThreadSpec` per batch with one block per tile
-  descriptor. The `FrameSpec` refactor is pending.
+- Each batch uses one `FrameSpec` launch for classify and one for scatter. The
+  frame count is capped, so a block may process several tiles.
 - A single transform output plan per batch.
 - No generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` model.

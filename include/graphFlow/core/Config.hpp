@@ -51,6 +51,7 @@ namespace graphFlow
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
         std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
+        std::uint32_t frameCap = 8u;    // blocks per multiprocessor cap of the frame launch
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
 
@@ -81,6 +82,8 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: tileSize must be non-zero"};
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow::Config: batchChunks must be non-zero"};
+            if(frameCap == 0u)
+                throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};
             if(maxBins > denseBinLimit)

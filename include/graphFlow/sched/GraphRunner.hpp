@@ -222,40 +222,6 @@ namespace graphFlow
             m_stallTimeout = timeout;
         }
 
-        /** Threads per block for a node launch.
-         *
-         * The host backend executes exactly one real thread per block (`api/host/exec/Serial.hpp`
-         * rejects any other block extent), so `ThreadSpec{numBlocks, T}` maps its thread extent to
-         * `1` on `api::Host` while the kernel keeps the tile and barrier structure required by
-         * accelerators. The transform stages launch one block per tile and pass the logical tile
-         * width `T` separately from this resolved block extent.
-         *
-         * Accelerator launches use the requested extent but never exceed
-         * `DeviceProperties::maxThreadsPerBlock`. An invalid extent (zero, or larger than the
-         * device limit) is rejected here instead of being handed to `ThreadSpec`.
-         */
-        [[nodiscard]] static std::uint32_t threadsPerBlock(TDevice const& device, std::uint32_t requested)
-        {
-            if(requested == 0u)
-                throw std::invalid_argument{"graphFlow: threads per block must be nonzero"};
-            if constexpr(std::same_as<ALPAKA_TYPEOF(device.getApi()), alpaka::api::Host>)
-            {
-                alpaka::unused(device);
-                return 1u;
-            }
-            else
-            {
-                std::uint32_t const limit = device.getDeviceProperties().maxThreadsPerBlock;
-                if(limit == 0u)
-                    throw std::runtime_error{"graphFlow: device reports maxThreadsPerBlock == 0"};
-                if(requested > limit)
-                    throw std::invalid_argument{
-                        "graphFlow: requested " + std::to_string(requested)
-                        + " threads per block exceeds maxThreadsPerBlock " + std::to_string(limit)};
-                return requested;
-            }
-        }
-
         SchedulerStats run()
         {
             if(!m_sourceNode)

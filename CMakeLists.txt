@@ -126,6 +126,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         graphFlow_tests
         tests/unit/test_reservation.cpp
         tests/unit/test_backend.cpp
+        tests/unit/test_launch_policy.cpp
         tests/unit/test_cli_contract.cpp
         tests/unit/test_chunk_pool.cpp
         tests/unit/test_pool_budget.cpp
@@ -138,6 +139,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_pressure.cpp
         tests/integration/test_failure_paths.cpp
         tests/integration/test_batching.cpp
+        tests/integration/test_framespec.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
         target_sources(graphFlow_tests PRIVATE tests/unit/test_cuda_kernel.cpp)

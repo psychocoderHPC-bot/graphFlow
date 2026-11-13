@@ -46,6 +46,7 @@ namespace
                   << " live-particles=" << result.liveParticles
                   << " tile-size=" << parameters.tileSize
                   << " batch-chunks=" << parameters.batchChunks
+                  << " frame-cap=" << parameters.frameCap
                   << " seed=" << parameters.seed
                   << " max-visits=" << parameters.maxVisits << '\n';
         std::cout << "# pool-chunks=" << result.stats.poolChunks

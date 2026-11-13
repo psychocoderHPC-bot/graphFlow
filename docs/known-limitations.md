@@ -15,12 +15,14 @@ and staging buffers are sized for the largest Q-chunk batch. A very large Q can
 therefore allocate memory that a short ready list never uses. An optional upper
 cap is not implemented.
 
-## FrameSpec refactor is pending
+## Frame launch is implemented
 
-The transform launch still uses one `ThreadSpec` with one block per
-`TileDescriptor`. The plan's `FrameSpec` mapping is not implemented. The current
-tile-per-block mapping is correct for the host and accelerator launches, but it
-is not the final frame-based dispatch.
+Graph kernels launch with `FrameSpec` from `graphFlow/core/LaunchPolicy.hpp`.
+`numFrames` is
+`min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)`; `frameCap`
+defaults to 8, and the host backend uses a unit frame extent. Blocks stride over
+the batch tile list, so several tiles may share a block. The former pending
+FrameSpec item is closed.
 
 ## AMD execution is blocked
 
