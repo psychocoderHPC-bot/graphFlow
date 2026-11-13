@@ -107,7 +107,7 @@ namespace graphFlow
             std::uint32_t const old = alpaka::onAcc::atomicCas(
                 acc,
                 &table[slot].key,
-                hashEmptyKey,
+                static_cast<std::uint32_t>(hashEmptyKey),
                 bin,
                 alpaka::onAcc::scope::block);
             if(old == hashEmptyKey || old == bin)
