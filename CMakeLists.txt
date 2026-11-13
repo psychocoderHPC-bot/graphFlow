@@ -160,4 +160,60 @@ if(GRAPHFLOW_BUILD_TESTS)
 
     include(Catch)
     catch_discover_tests(graphFlow_tests)
+
+    # Binary-level contract for the example CLI. This complements, rather than
+    # replaces, the in-process Catch2 matrix: every case runs the real
+    # executable and checks its exit status and histogram sum.
+    set(GRAPHFLOW_EXAMPLE_CLI_PARTICLES 0 1 17 127 128 4097)
+    set(GRAPHFLOW_EXAMPLE_CLI_CHUNKS 1 31 127 128)
+    set(GRAPHFLOW_EXAMPLE_CLI_SEED 42)
+    set(GRAPHFLOW_EXAMPLE_CLI_MAX_VISITS 64)
+    set(GRAPHFLOW_EXAMPLE_CLI_TIMEOUT 300)
+
+    if(TARGET graphFlow_particle_feedback)
+        set(
+            GRAPHFLOW_EXAMPLE_CLI_BINARY
+            "$<TARGET_FILE:graphFlow_particle_feedback>"
+        )
+    else()
+        # Keep the CPU contract active even when examples are disabled: the
+        # driver reports the missing binary and the CTest case fails.
+        set(
+            GRAPHFLOW_EXAMPLE_CLI_BINARY
+            "${CMAKE_CURRENT_BINARY_DIR}/graphFlow_particle_feedback${CMAKE_EXECUTABLE_SUFFIX}"
+        )
+    endif()
+
+    function(graphflow_add_example_cli_test backend particles chunk_size)
+        set(test_name "example.particle_feedback.${backend}.N${particles}.C${chunk_size}")
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DBINARY=${GRAPHFLOW_EXAMPLE_CLI_BINARY}"
+                "-DBACKEND=${backend}"
+                "-DPARTICLES=${particles}"
+                "-DCHUNK_SIZE=${chunk_size}"
+                "-DSEED=${GRAPHFLOW_EXAMPLE_CLI_SEED}"
+                "-DMAX_VISITS=${GRAPHFLOW_EXAMPLE_CLI_MAX_VISITS}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_cli.cmake"
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                TIMEOUT ${GRAPHFLOW_EXAMPLE_CLI_TIMEOUT}
+                LABELS "example;cli;${backend}"
+        )
+    endfunction()
+
+    # The CPU backend is always built. A CUDA build adds the CUDA cases; a CUDA
+    # case fails when no usable CUDA device is visible instead of being skipped.
+    foreach(particles IN LISTS GRAPHFLOW_EXAMPLE_CLI_PARTICLES)
+        foreach(chunk_size IN LISTS GRAPHFLOW_EXAMPLE_CLI_CHUNKS)
+            graphflow_add_example_cli_test(cpu ${particles} ${chunk_size})
+            if(GRAPHFLOW_ENABLE_CUDA)
+                graphflow_add_example_cli_test(cuda ${particles} ${chunk_size})
+            endif()
+        endforeach()
+    endforeach()
 endif()
