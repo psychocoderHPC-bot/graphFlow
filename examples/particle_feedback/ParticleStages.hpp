@@ -31,6 +31,12 @@
 
 namespace graphFlow::particle
 {
+    /** Bin count shared by Filter, A and B in this example. */
+    inline constexpr std::uint32_t FlowBins = 2u;
+
+    /** Number of transform nodes in the particle-feedback graph. */
+    inline constexpr std::uint32_t TransformNodes = 3u;
+
     /** Runtime knobs of the particle-feedback example. */
     struct Parameters
     {
@@ -44,7 +50,29 @@ namespace graphFlow::particle
         std::uint32_t tileSize = 128u;
         std::uint32_t deviceIndex = 0u;
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per transform batch
+        std::uint64_t poolPayloadBudgetBytes = 0u; // total pool cap, zero uses the Config default
     };
+
+    /** Total payload budget of the fixed-capacity pool.
+     *
+     * The device policy budget bounds the live working set `P*C`. The pool also holds the
+     * `K*R` transform output-credit chunks, so the example budget is the policy budget plus the
+     * payload of exactly those credits. `R` is bounded by `FlowBins` for `n=C`, so the reserve is
+     * independent of N and does not grow with the run size.
+     */
+    inline std::uint64_t poolPayloadBudgetBytes(
+        std::uint64_t policyBudgetBytes,
+        std::uint32_t chunkCapacity)
+    {
+        if(policyBudgetBytes == 0u)
+            throw std::invalid_argument{"graphFlow::particle: policy payload budget must be non-zero"};
+        std::uint64_t const reserveChunks = static_cast<std::uint64_t>(TransformNodes)
+            * outputChunkBound(chunkCapacity, chunkCapacity, FlowBins);
+        std::uint64_t const reserveBytes = requiredPayloadBytes(reserveChunks, chunkCapacity);
+        if(policyBudgetBytes > std::numeric_limits<std::uint64_t>::max() - reserveBytes)
+            throw std::overflow_error{"graphFlow::particle: pool payload budget overflows 64 bits"};
+        return policyBudgetBytes + reserveBytes;
+    }
 
     /** Checked number of tiles needed by a chunk.
      *

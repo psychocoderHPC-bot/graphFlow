@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "graphFlow/core/PoolBudget.hpp"
+
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -27,6 +29,13 @@ namespace graphFlow
      * `graphFlow/core/DevicePolicy.hpp`: `makeDevicePolicy` reads them through `policyConfigOf()`
      * and `applyDevicePolicy()` writes the chosen `chunkCapacity`, `liveParticles` and `tileSize`
      * back. A zero `policyMemoryBudgetBytes` derives the budget from the device properties.
+     *
+     * `poolPayloadBudgetBytes` bounds the fixed-capacity pool payload arrays, not just the live
+     * working set: `numChunks * chunkCapacity * payloadBytesPerSlot` must fit. Its default is the
+     * documented accelerator default; the example replaces it with the resolved device-policy
+     * budget plus the `K*R` output-credit reserve. Zero is rejected because it would disable the
+     * cap. The slot-based pool remains the next memory optimization; this budget only makes the
+     * current fixed-capacity design explicit and enforceable.
      */
     struct Config
     {
@@ -39,6 +48,7 @@ namespace graphFlow
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
         std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
+        std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
 
         // Device-aware chunk policy knobs, see include/graphFlow/core/DevicePolicy.hpp.
         std::uint32_t policyWaves = 1u;
@@ -55,6 +65,14 @@ namespace graphFlow
         {
             if(chunkCapacity == 0u)
                 throw std::invalid_argument{"graphFlow::Config: chunkCapacity must be non-zero"};
+            if(poolPayloadBudgetBytes == 0u)
+                throw std::invalid_argument{"graphFlow::Config: poolPayloadBudgetBytes must be non-zero"};
+            if(numChunks != 0u)
+                validatePayloadBudget(
+                    numChunks,
+                    chunkCapacity,
+                    poolPayloadBudgetBytes,
+                    "graphFlow::Config");
             if(tileSize == 0u)
                 throw std::invalid_argument{"graphFlow::Config: tileSize must be non-zero"};
             if(batchChunks == 0u)

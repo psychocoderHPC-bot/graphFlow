@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/Chunk.hpp"
+#include "graphFlow/core/PoolBudget.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -31,18 +32,20 @@ namespace graphFlow
     class ChunkPool
     {
     public:
-        using IdView = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint64_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
-        using U32View = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using IdView
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolIdValue>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using U32View
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         ChunkPool(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
             : m_numChunks{numChunks}
             , m_chunkCapacity{chunkCapacity}
             , m_slots{checkedSlotCount(numChunks, chunkCapacity)}
-            , m_ids{alpaka::onHost::alloc<std::uint64_t>(device, alpaka::Vec{m_slots})}
-            , m_properties{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
-            , m_weights{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
-            , m_visits{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
-            , m_binIds{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
+            , m_ids{alpaka::onHost::alloc<PoolIdValue>(device, alpaka::Vec{m_slots})}
+            , m_properties{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_weights{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_visits{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_binIds{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_generations(numChunks, 0u)
             , m_leases(numChunks, 0u)
         {

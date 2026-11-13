@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/Config.hpp"
+#include "graphFlow/core/PoolBudget.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -17,13 +18,13 @@
 
 namespace graphFlow
 {
-    /** Payload bytes per particle slot in the chunk pool.
+    /** Backwards-compatible name of the per-slot payload size.
      *
-     * SoA payload arrays: `id` (uint64), `property`, `weight`, `visit` and the bin id (four
-     * uint32). The policy memory budget covers these pool arrays only. Per-chunk host metadata
-     * and the `O(N)` result buffer of the example are counted separately.
+     * The value is derived once from the pool array types in `PoolBudget.hpp`; all budget
+     * arithmetic uses `payloadBytesPerSlot`. Per-chunk host metadata and the `O(N)` result
+     * buffer of the example are counted separately.
      */
-    inline constexpr std::uint64_t payloadBytesPerParticle = 8u + 4u + 4u + 4u + 4u;
+    inline constexpr std::uint64_t payloadBytesPerParticle = payloadBytesPerSlot;
 
     /** Default payload budget of the host backend in bytes.
      *
@@ -39,7 +40,7 @@ namespace graphFlow
      * 24 GiB device this selects `C=8192`, `P=16384`, about 3 GiB of payload instead of the
      * previous 12.9 GB `C=8192`, `P=65536` pool. `Config::policyMemoryBudgetBytes` overrides it.
      */
-    inline constexpr std::uint64_t acceleratorMemoryBudgetCapBytes = 3ull * 1024ull * 1024ull * 1024ull;
+    inline constexpr std::uint64_t acceleratorMemoryBudgetCapBytes = defaultPoolPayloadBudgetBytes;
 
     /** Bytes per entry of the per-tile shared-memory hash table.
      *
@@ -106,7 +107,7 @@ namespace graphFlow
             return lhs * rhs;
         }
 
-        /** Whether `liveParticles * chunkCapacity * payloadBytesPerParticle` fits the budget.
+        /** Whether `liveParticles * chunkCapacity * payloadBytesPerSlot` fits the budget.
          *
          * Both products are checked with division so no intermediate value can overflow.
          */
@@ -119,7 +120,7 @@ namespace graphFlow
                 return true;
             if(liveParticles > budgetBytes / chunkCapacity)
                 return false;
-            return liveParticles * chunkCapacity <= budgetBytes / payloadBytesPerParticle;
+            return liveParticles * chunkCapacity <= budgetBytes / payloadBytesPerSlot;
         }
 
         /** Largest C in `[0, upperBound]` whose default P fits the budget.
@@ -183,7 +184,7 @@ namespace graphFlow
      *   (a chunk needs `ceil(C/T)` tiles), by `maxChunkCapacity`, by the run size and by the
      *   payload memory budget. A derived C is rounded down to a multiple of T.
      * - Default `P` is `min(numParticles, liveParticlesPerChunk * C)` and is clamped so
-     *   `P * C * payloadBytesPerParticle` stays inside the budget. The pool bound is
+     *   `P * C * payloadBytesPerSlot` stays inside the budget. The pool bound is
      *   `S = P + K*R` chunks; the policy budget covers the `P` term and leaves the `K*R` output
      *   credits to the configured pool size.
      *
@@ -314,7 +315,7 @@ namespace graphFlow
             if(overrides.liveParticles)
             {
                 std::uint64_t const liveBytes
-                    = detail::saturatedProduct(*overrides.liveParticles, payloadBytesPerParticle);
+                    = detail::saturatedProduct(*overrides.liveParticles, payloadBytesPerSlot);
                 std::uint64_t const byBudget = budgetBytes / liveBytes;
                 if(byBudget < candidate)
                 {
@@ -357,7 +358,7 @@ namespace graphFlow
             if(!detail::payloadFitsBudget(live, chunkCapacity, budgetBytes))
             {
                 // Only reachable with an explicit C: keep C and squeeze the derived P.
-                std::uint64_t const maxLive = budgetBytes / payloadBytesPerParticle / chunkCapacity;
+                std::uint64_t const maxLive = budgetBytes / payloadBytesPerSlot / chunkCapacity;
                 live = std::min(live, maxLive);
             }
             live = std::min<std::uint64_t>(live, std::numeric_limits<std::uint32_t>::max());

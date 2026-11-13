@@ -186,6 +186,10 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
+        // The policy budget bounds the live set P*C; the fixed-capacity pool additionally holds
+        // the K*R transform output-credit chunks, so resolve the total pool budget here.
+        resolved.parameters.poolPayloadBudgetBytes
+            = particle::poolPayloadBudgetBytes(resolved.policy.memoryBudgetBytes, resolved.policy.chunkCapacity);
         return resolved;
     }
 } // namespace graphFlow::cli

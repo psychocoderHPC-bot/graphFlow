@@ -57,6 +57,11 @@ chunks immediately; the minimum applies only to source admission.
 ## Memory note
 
 With `C=8192` and `P=65536`, the plan's safe bound `S = P + K*R` gives 65542
-chunks and about 12.9 GB of payload storage. Observed peak live is under 1000
-chunks. A slot-based pool or a smaller configured `P` is the next memory
-optimisation; it does not affect the measured throughput at these settings.
+chunks and about 12.9 GB of payload storage. That configuration is now rejected:
+`Config::poolPayloadBudgetBytes` defaults to the documented accelerator cap, and
+`requiredPayloadBytes(S, C)` must fit it before the pool allocates. The
+device-aware policy selects `C=8192`, `P=16384` on a 24 GiB device and the CLI
+budgets the live set plus the `K*R` output-credit reserve. The per-slot payload
+size is derived from the pool array types rather than a literal. A slot-based
+pool remains the next memory optimisation; it does not affect the measured
+throughput at these settings.

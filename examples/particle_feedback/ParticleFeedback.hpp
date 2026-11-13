@@ -17,12 +17,6 @@
 
 namespace graphFlow::particle
 {
-    /** Bin count shared by Filter, A and B in this example. */
-    inline constexpr std::uint32_t FlowBins = 2u;
-
-    /** Number of transform nodes in the particle-feedback graph. */
-    inline constexpr std::uint32_t TransformNodes = 3u;
-
     /** Default source-admission capacity P when the caller does not configure one.
      *
      * P is a working-set knob, not a function of N: capping it at `8*C` means the pool is sized by
@@ -124,6 +118,11 @@ namespace graphFlow::particle
         config.maxVisits = parameters.maxVisits;
         config.numParticles = parameters.numParticles;
         config.batchChunks = parameters.batchChunks;
+        // The programmatic default leaves the documented Config cap in place; the CLI passes the
+        // resolved device-policy budget plus the K*R output-credit reserve. Validation rejects a
+        // pool whose S*C payload exceeds this budget before any allocation happens.
+        if(parameters.poolPayloadBudgetBytes != 0u)
+            config.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
         config.validate();
 
         std::uint32_t const threads = GraphRunner<TDevice>::threadsPerBlock(device, config.tileSize);

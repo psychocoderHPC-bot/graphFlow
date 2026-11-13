@@ -128,6 +128,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_backend.cpp
         tests/unit/test_cli_contract.cpp
         tests/unit/test_chunk_pool.cpp
+        tests/unit/test_pool_budget.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_philox.cpp
         tests/integration/test_dense_bins.cpp
