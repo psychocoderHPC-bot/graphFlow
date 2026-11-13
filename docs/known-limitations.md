@@ -103,9 +103,10 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
 
 ## Other open items
 
-- The example binary is not registered as a separate CTest entry. CLI parsing is
-  covered by Catch2 unit tests, but there is no end-to-end example matrix in
-  CTest.
+- The example binary is registered in CTest as 24 CLI cases per backend
+  (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`) plus one
+  `example.public_api` source-contract case. A CPU build registers 25 example
+  tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract).
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall

@@ -3,10 +3,11 @@
 
 # graphFlow acceptance record
 
-Integrated revision: rebased FrameSpec launch on policy/docs main
-`cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13, T14a).
-This record includes the rebased CTest runs on fwk394 CPU and hal CUDA; the
-historical T13 performance table remains the supplied integrated evidence.
+Integrated T4 revision: typed Flow execution and the particle example port at
+`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd`. The earlier integrated revision
+was `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13,
+T14a); its counts and historical T13 performance table remain below as
+historical evidence. This docs commit adds no new build or test run.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -27,8 +28,8 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 82/82 passed |
-| CUDA CTest on hal | 86/86 passed |
+| CPU CTest on fwk394 | 158/158 passed at T4 |
+| CUDA CTest on hal (`sm_80`) | 194/194 passed at T4 |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
@@ -38,6 +39,26 @@ The CTest totals include `tests/unit/test_launch_policy.cpp` and
 `T > maxThreadsPerBlock` rejection. The CUDA build adds
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
 GPU and fails when no GPU is visible; the FrameSpec matrix also runs on CUDA.
+
+### T4 public Flow example
+
+T4 ports `graphFlow_particle_feedback` to the public `Flow<graphFlow::Particle>`
+API. The graph is declared with source/partition/sink handles and named outcome
+ports; `ParticleFeedback.hpp` is 121 lines and no longer includes the deprecated
+`ParticleStages.hpp`. CTest registers 24 CLI cases per backend
+(`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`) plus one
+`example.public_api` source-contract case: 25 example tests in a CPU build and
+49 in a CUDA build (24 CPU, 24 CUDA, 1 contract).
+
+Recorded at `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` with
+`-Dalpaka_COMPILE_PEDANTIC=ON`: **158/158 CTest pass on fwk394 CPU Release**
+and **194/194 pass on hal CUDA `sm_80` Release**. A fixed-seed 33-invocation
+CLI comparison (the 24 N/C cases plus nine Q/P/T/frameCap and max-visits cases)
+matched the pre-change binary on both backends. The example header (including
+`live-particles`), policy line, histogram rows, non-terminating count, and
+exit status are identical. The derived pool reserve changes from `P+6` to
+`P+8` because the A/B partitions now expose three named outcomes; that
+diagnostic is not a numeric result.
 
 ### PR-A generic graph API core
 

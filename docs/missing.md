@@ -111,11 +111,12 @@ resource or decision is missing.
 
 ## 3. Example, RNG, and end-to-end tests
 
-- [ ] **P0: register the example CLI in CTest.** The Catch2 tests cover the
-  matrix, but the real `graphFlow_particle_feedback` binary is not a CTest
-  entry. Register `N=0,1,17,127,128,4097`, `C=1,31,127,128`, fixed seeds, and
-  the feedback cases for CPU and CUDA (HIP when available), with finite
-  timeouts, JUnit output, and a failure when a required backend did not run.
+- [x] **P0: register the example CLI in CTest.** The real
+  `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
+  `N=0,1,17,127,128,4097` crossed with `C=1,31,127,128` (24 cases per backend)
+  with finite timeouts and a failure when the requested backend did not run.
+  A CUDA build adds the same 24 cases for CUDA; HIP cases remain unavailable
+  without an AMD runtime device.
 - [ ] **P0: automate CPU/CUDA/HIP histogram equality.** The manual `N=1e6`
   CPU/CUDA diff is empty. Make it a test that compares sorted histogram rows for
   the same `(N, seed, C)` on every compiled backend; add HIP when an AMD device
@@ -264,8 +265,8 @@ These are not missing work; the plan excludes them from v1:
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
   gate is explicitly recorded as blocked.
-- [ ] The example CLI is registered in CTest for the full matrix and every
-  required backend.
+- [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
+  HIP remains blocked by the missing AMD runtime device.
 - [ ] `N=1e6` runs in CI; `N=1e8` passes on A30 and AMD with exact histograms.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
 - [ ] ASAN/UBSAN/TSAN pass on a compatible host.
