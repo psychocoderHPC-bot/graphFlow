@@ -5,12 +5,14 @@
 #include "ParticleFeedback.hpp"
 #include "ScalarModel.hpp"
 #include "graphFlow/core/LaunchPolicy.hpp"
+#include "graphFlow/rng/ParticleRng.hpp"
 
 #include <alpaka/alpaka.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstdint>
 #include <iostream>
@@ -54,6 +56,42 @@ namespace
                     std::uint32_t const index = offset + static_cast<std::uint32_t>(i);
                     output[index] = input[index] * 3u + index + salt;
                 }
+            }
+        }
+    };
+
+    /** Four-purpose photon mapping compiled for the device. */
+    struct PhotonPurposeDrawKernel
+    {
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            std::uint32_t* output,
+            std::uint64_t seed,
+            std::uint64_t id,
+            std::uint32_t visit) const
+        {
+            for(auto [i] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{1u}))
+            {
+                (void) i;
+                output[0] = graphFlow::rng::draw<
+                    graphFlow::rng::purposeFlight,
+                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
+                output[1] = graphFlow::rng::draw<
+                    graphFlow::rng::purposeCollisionKind,
+                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
+                output[2] = graphFlow::rng::draw<
+                    graphFlow::rng::purposeCosine,
+                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
+                output[3] = graphFlow::rng::draw<
+                    graphFlow::rng::purposeAzimuth,
+                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
+                output[4] = graphFlow::rng::draw(
+                    seed,
+                    id,
+                    visit,
+                    graphFlow::rng::purposeAzimuth,
+                    graphFlow::rng::photonPurposesPerVisit);
             }
         }
     };
@@ -162,4 +200,37 @@ TEST_CASE("CUDA frame launch rejects a tile wider than maxThreadsPerBlock", "[cu
     CHECK_THROWS_AS(
         graphFlow::launchPolicy(device, 1024u, properties.maxThreadsPerBlock + 1u, 8u),
         std::invalid_argument);
+}
+
+TEST_CASE("CUDA four-purpose photon draws match the host mapping", "[cuda][rng]")
+{
+    auto selector = alpaka::onHost::makeDeviceSelector(alpaka::api::Cuda{}, alpaka::deviceKind::nvidiaGpu);
+    if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+        FAIL("CUDA is compiled in but no NVIDIA GPU is visible; this [cuda] test requires real hardware");
+    auto device = selector.makeDevice(0u);
+
+    constexpr std::uint64_t seed = 42u;
+    constexpr std::uint64_t id = 7u;
+    constexpr std::uint32_t visit = 2u;
+    constexpr std::uint32_t count = 5u;
+    constexpr std::uint32_t sentinel = 0xDEAD'BEEFu;
+
+    std::array<std::uint32_t, count> expected{};
+    for(std::uint32_t purpose = 0u; purpose < graphFlow::rng::photonPurposesPerVisit; ++purpose)
+        expected[purpose]
+            = graphFlow::rng::draw(seed, id, visit, purpose, graphFlow::rng::photonPurposesPerVisit);
+    expected[4] = expected[graphFlow::rng::purposeAzimuth];
+
+    auto outputDevice = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{count}});
+    auto queue = device.makeQueue(alpaka::queueKind::blocking);
+    alpaka::onHost::fill(queue, outputDevice, sentinel);
+    queue.enqueue(
+        alpaka::onHost::FrameSpec{std::uint32_t{1u}, std::uint32_t{1u}},
+        alpaka::KernelBundle{PhotonPurposeDrawKernel{}, outputDevice.data(), seed, id, visit});
+
+    std::array<std::uint32_t, count> host{};
+    alpaka::onHost::memcpy(queue, host, outputDevice);
+    CHECK(host == expected);
+    CHECK(
+        std::none_of(host.begin(), host.end(), [](std::uint32_t value) { return value == sentinel; }));
 }

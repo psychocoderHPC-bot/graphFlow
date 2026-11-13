@@ -10,7 +10,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -22,6 +25,16 @@ namespace
             engine();
         return engine();
     }
+
+    // Compile-time purpose checks. An invalid purpose must not compile; these instantiate both the
+    // three-purpose particle and the four-purpose photon mapping.
+    static_assert(graphFlow::rng::checkedDecisionOffset<graphFlow::rng::purposeFilter>(0u) == 4u);
+    static_assert(graphFlow::rng::checkedDecisionOffset<graphFlow::rng::purposeProcessB>(3u) == 48u);
+    static_assert(
+        graphFlow::rng::checkedDecisionOffset<
+            graphFlow::rng::purposeAzimuth,
+            graphFlow::rng::photonPurposesPerVisit>(1u)
+        == 32u);
 } // namespace
 
 TEST_CASE("drawAt equals advancing a fresh engine", "[rng]")
@@ -130,4 +143,90 @@ TEST_CASE("scalar oracle uses an independent Philox mapping", "[rng]")
             }
         }
     }
+}
+
+TEST_CASE("three and four purpose visits own disjoint draw blocks", "[rng]")
+{
+    auto checkMapping = [](std::uint32_t purposes)
+    {
+        std::vector<std::uint64_t> offsets;
+        offsets.reserve(8u * purposes);
+        for(std::uint32_t visit = 0u; visit < 8u; ++visit)
+        {
+            for(std::uint32_t purpose = 0u; purpose < purposes; ++purpose)
+            {
+                std::uint64_t const offset = graphFlow::rng::decisionOffset(visit, purpose, purposes);
+                CAPTURE(purposes, visit, purpose);
+                CHECK(offset == 4ull * (1ull + static_cast<std::uint64_t>(purposes) * visit + purpose));
+                offsets.push_back(offset);
+            }
+        }
+
+        CHECK(offsets.front() == 4u);
+        std::sort(offsets.begin(), offsets.end());
+        CHECK(std::adjacent_find(offsets.begin(), offsets.end()) == offsets.end());
+        // Every purpose owns one four-word Philox block, so neighbouring positions cannot overlap.
+        for(std::size_t i = 1u; i < offsets.size(); ++i)
+            CHECK(offsets[i] - offsets[i - 1u] >= 4u);
+    };
+
+    checkMapping(graphFlow::rng::purposesPerVisit);
+    checkMapping(graphFlow::rng::photonPurposesPerVisit);
+
+    using graphFlow::rng::decisionOffset;
+    using graphFlow::rng::photonPurposesPerVisit;
+    CHECK(decisionOffset(0u, graphFlow::rng::purposeFlight, photonPurposesPerVisit) == 4u);
+    CHECK(decisionOffset(0u, graphFlow::rng::purposeCollisionKind, photonPurposesPerVisit) == 8u);
+    CHECK(decisionOffset(0u, graphFlow::rng::purposeCosine, photonPurposesPerVisit) == 12u);
+    CHECK(decisionOffset(0u, graphFlow::rng::purposeAzimuth, photonPurposesPerVisit) == 16u);
+    CHECK(decisionOffset(1u, graphFlow::rng::purposeAzimuth, photonPurposesPerVisit) == 32u);
+}
+
+TEST_CASE("checked draw offsets reject overflow and out-of-range purposes", "[rng]")
+{
+    using graphFlow::rng::checkedDecisionOffset;
+
+    CHECK(checkedDecisionOffset(0u, graphFlow::rng::purposeProperty) == 4u);
+    CHECK(checkedDecisionOffset(3u, graphFlow::rng::purposeProcessB) == 48u);
+    CHECK_THROWS_AS(checkedDecisionOffset(0u, graphFlow::rng::photonPurposesPerVisit), std::invalid_argument);
+    CHECK_THROWS_AS(checkedDecisionOffset(0u, 0u, 0u), std::invalid_argument);
+
+    constexpr std::uint64_t maxOffset = std::numeric_limits<std::uint64_t>::max();
+    constexpr std::uint64_t largestBlock = maxOffset / 4u;
+    std::uint64_t const visit = (largestBlock - 1u) / graphFlow::rng::purposesPerVisit;
+    CHECK(checkedDecisionOffset(visit, 0u) <= maxOffset);
+    CHECK_THROWS_AS(checkedDecisionOffset(largestBlock, 0u), std::overflow_error);
+    CHECK_THROWS_AS(checkedDecisionOffset(maxOffset, 0u), std::overflow_error);
+}
+
+TEST_CASE("fixed-seed photon draws reproduce the independent mapping", "[rng]")
+{
+    constexpr std::uint64_t seed = 42u;
+    constexpr std::uint64_t id = 7u;
+    constexpr std::uint32_t visit = 2u;
+    using graphFlow::rng::photonPurposesPerVisit;
+
+    std::array<std::uint32_t, photonPurposesPerVisit> first{};
+    std::array<std::uint32_t, photonPurposesPerVisit> second{};
+    for(std::uint32_t purpose = 0u; purpose < photonPurposesPerVisit; ++purpose)
+    {
+        first[purpose] = graphFlow::rng::draw(seed, id, visit, purpose, photonPurposesPerVisit);
+        second[purpose] = graphFlow::rng::draw(seed, id, visit, purpose, photonPurposesPerVisit);
+        CAPTURE(purpose);
+        CHECK(
+            first[purpose]
+            == advance(seed, id, graphFlow::rng::decisionOffset(visit, purpose, photonPurposesPerVisit)));
+    }
+    CHECK(first == second);
+    CHECK(
+        graphFlow::rng::draw<graphFlow::rng::purposeFlight, photonPurposesPerVisit>(seed, id, visit)
+        == first[0]);
+    CHECK(
+        graphFlow::rng::draw<graphFlow::rng::purposeCollisionKind, photonPurposesPerVisit>(seed, id, visit)
+        == first[1]);
+    CHECK(
+        graphFlow::rng::draw<graphFlow::rng::purposeCosine, photonPurposesPerVisit>(seed, id, visit) == first[2]);
+    CHECK(
+        graphFlow::rng::draw<graphFlow::rng::purposeAzimuth, photonPurposesPerVisit>(seed, id, visit)
+        == first[3]);
 }
