@@ -9,10 +9,11 @@ repository state, not on the intended final state.
 
 Current validated state:
 
-- Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (private),
-  branch `main`, HEAD `11dd90153700c3c68632e6bbe7f0149fb15ddf33`.
-- CPU and CUDA builds and tests pass: 42/42 CTest cases.
-- ASAN+UBSAN pass: 42/42 cases, no report.
+- Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public),
+  branch `main`, HEAD `2877c8578047702506eb71fc024570e5ba052790`.
+- Last recorded validation on the integrated revision: 74/74 CTest cases on
+  fwk394 CPU, 75/75 on hal CUDA, per `docs/acceptance.md`; no new test run is
+  claimed here.
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible, so no HIP
   execution is claimed.
 - CUDA example: `N=1e5` 0.58 s, `N=1e6` 2.24 s, `N=1e8` 187.5 s with an exact

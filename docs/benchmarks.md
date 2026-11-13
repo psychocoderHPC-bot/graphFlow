@@ -6,10 +6,9 @@
 This page contains the historical pre-T5/T7 baseline and the integrated T13
 result. The integrated numbers are the recorded T13 evidence for main
 `68124ad3875e42cbe09247f64bd218a7ac8d58fc`, supplied from the run on that
-revision. They are not a fresh run in this worktree, and no number here
-predates its provenance. The full matrix, budget rejections, and raw-row
-provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md) (PR #8);
-that file is not yet on `main`.
+revision. They are not a fresh run in this worktree, and every number on this
+page states its provenance. The full matrix, budget rejections, and raw-row
+provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md) (PR #8).
 
 ## Historical environment
 
@@ -103,7 +102,8 @@ hal A30, CUDA sm_80, `C=8192`, seed 42:
 These runs used `P=16128`, the largest live-particle count the measured A30
 budget admits (see the budget row below); the `P=16384` policy default is
 rejected on this device. The sorted histogram rows are identical across Q
-within each N; identical SHA-256 across all six runs.
+within each N (identical SHA-256 per N; the `N=1e8` and `N=1e6` row sets
+differ, as expected for different particle counts).
 
 CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42:
 
