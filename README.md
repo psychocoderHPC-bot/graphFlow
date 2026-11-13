@@ -14,6 +14,7 @@ Documentation:
 - [Benchmarks](docs/benchmarks.md)
 - [Known limitations](docs/known-limitations.md)
 - [alpaka3 API map](docs/alpaka-api-map.md)
+- [Public API contract](docs/public-api.md)
 - [Approved plan](docs/plan.md)
 - [Missing work](docs/missing.md)
 - [Acceptance record](docs/acceptance.md)
