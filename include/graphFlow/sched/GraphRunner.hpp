@@ -17,6 +17,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -35,6 +36,13 @@ namespace graphFlow
         source,
         transform,
         sink
+    };
+
+    /** Failure-injection points used by the failure-path tests. */
+    enum class FailurePoint
+    {
+        eventEnqueue,
+        leaseAcquire
     };
 
     /** Batch error raised by a node hook, e.g. a device status word or a planning mismatch. */
@@ -73,9 +81,15 @@ namespace graphFlow
      * Source admission is expressed in particles, not in free-list entries: a source chunk is only
      * admitted while fewer than `liveParticles` (P) particles are between source and sink, and its
      * fill is capped at `P - liveParticles`, so the data-carrying chunk count never exceeds P. The
-     * pool therefore holds P data chunks plus the `K*R` output credits of the live transform
-     * batches, independent of the total particle count N. (`ceil(P/C)` alone is not a safe bound
-     * once split routing can fragment particles into one chunk each; see derivePoolSize.)
+     * pool therefore holds P data chunks plus `K*R` output credits for the live transform batches,
+     * where `R = outputChunkBound(C, C, B)` and K is the number of transform nodes. The bound is
+     * independent of the total particle count N. (`ceil(P/C)` alone is not a safe bound once split
+     * routing can fragment particles into one chunk each; see derivePoolSize.)
+     *
+     * A transform batch reserves the adaptive amount `outputChunkBound(sum(fill), C, B)` for the
+     * chunks it actually takes and starts only when `availableChunks()` covers it. A ready list with
+     * Q chunks is therefore a cap, not a requirement: under fragmentation the batch shrinks to the
+     * largest prefix that fits the current credits, so progress never depends on a full Q batch.
      */
     template<typename TDevice>
     class GraphRunner
@@ -119,7 +133,20 @@ namespace graphFlow
              * of output chunks physically acquired from the pool during host planning. */
             std::function<bool(Queue const&, Batch const&, std::uint32_t& allocated)> advance;
             std::function<void(Batch const&, std::vector<ChunkDescriptor>&)> finish;
+            /** Release resources a batch acquired but never published. The runner calls this
+             * exactly once per in-flight node from teardown, after the node queue is drained. */
+            std::function<void()> abort;
         };
+
+        /** Test hook: `hook(point, node, item)` runs before the injected operation and may throw.
+         *
+         * `item` is the 1-based event-enqueue count of the node for `eventEnqueue`, and the 0-based
+         * position within the batch for `leaseAcquire`. Production callers leave the hook empty.
+         */
+        void setFailureHook(std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> hook)
+        {
+            m_failureHook = std::move(hook);
+        }
 
         GraphRunner(TDevice device, ChunkPool<TDevice>& pool)
             : m_device{device}
@@ -156,7 +183,8 @@ namespace graphFlow
                 std::move(route),
                 std::move(hooks),
                 m_device.makeQueue(alpaka::queueKind::nonBlocking),
-                m_device.makeEvent());
+                m_device.makeEvent(),
+                static_cast<std::uint32_t>(m_nodes.size()));
             m_nodes.push_back(std::move(node));
             return static_cast<std::uint32_t>(m_nodes.size() - 1u);
         }
@@ -288,8 +316,7 @@ namespace graphFlow
 
                         if(moreWork)
                         {
-                            node.queue.enqueue(node.event);
-                            node.armed = true;
+                            enqueueEvent(node);
                         }
                         else
                         {
@@ -325,8 +352,15 @@ namespace graphFlow
                                     }
                                     throw;
                                 }
-                                node.inputOwned = false;
                             }
+
+                            // A source publishes its input chunks as outputs, so a fully routed
+                            // batch has transferred them downstream. Every other node still owns
+                            // its input chunks and releases them below. Setting this per routed
+                            // output would drop the input release when a later output is
+                            // unroutable.
+                            if(node.role == NodeRole::source)
+                                node.inputOwned = false;
 
                             if(node.role == NodeRole::sink)
                                 sunkParticles += batch.particles();
@@ -394,8 +428,7 @@ namespace graphFlow
                         source.inflight = batch;
                         source.inputOwned = true;
                         source.hooks.launch(source.queue, batch);
-                        source.queue.enqueue(source.event);
-                        source.armed = true;
+                        enqueueEvent(source);
                         progress = true;
                     }
 
@@ -415,56 +448,66 @@ namespace graphFlow
                         // cannot leave an un-armed batch in the slot or let the same chunk be owned
                         // by `ready` and `inflight` at the same time.
                         bool const batchable = node.role == NodeRole::transform;
-                        std::size_t const wanted
+                        std::size_t wanted
                             = batchable ? std::min<std::size_t>(m_batchChunks, node.ready.size()) : 1u;
-                        std::vector<ChunkDescriptor> selected;
-                        selected.reserve(wanted);
                         std::uint32_t reserve = 0u;
-                        std::uint64_t particles = 0u;
-                        for(std::size_t i = 0u; i < wanted; ++i)
+                        if(batchable)
                         {
-                            ChunkDescriptor const& candidate = node.ready[i];
-                            std::uint64_t const nextParticles = particles + candidate.fill;
-                            std::uint32_t nextReserve = 0u;
-                            if(batchable)
+                            // Start with the largest requested prefix and shrink it until its
+                            // adaptive reserve fits the storage credits. Because
+                            // outputChunkBound(sum(fill)) is monotone in sum(fill), the fitting
+                            // prefixes are contiguous and this finds the largest one; a fragmented
+                            // ready list dispatches a smaller batch instead of stalling.
+                            std::uint64_t particles = 0u;
+                            for(std::size_t i = 0u; i < wanted; ++i)
+                                particles += node.ready[i].fill;
+                            while(wanted != 0u)
                             {
-                                nextReserve = static_cast<std::uint32_t>(outputChunkBound(
-                                    nextParticles,
-                                    m_pool.chunkCapacity(),
-                                    node.bins));
-                                if(availableChunks() < nextReserve)
+                                std::uint32_t const bound = checkedReserveBound(particles, node.bins);
+                                if(availableChunks() >= bound)
                                 {
-                                    // The first chunk waits for storage credits exactly like the
-                                    // single-chunk path; a further chunk ends the batch here.
-                                    if(selected.empty())
-                                        return false;
+                                    reserve = bound;
                                     break;
                                 }
+                                --wanted;
+                                particles -= node.ready[wanted].fill;
                             }
-                            selected.push_back(candidate);
-                            particles = nextParticles;
-                            reserve = nextReserve;
+                            if(wanted == 0u)
+                                return false; // keep the batch queued until one chunk fits
                         }
+                        std::vector<ChunkDescriptor> selected;
+                        selected.reserve(wanted);
+                        for(std::size_t i = 0u; i < wanted; ++i)
+                            selected.push_back(node.ready[i]);
 
                         Batch const batch{selected, 0u};
                         node.inflight = batch;
                         node.inputOwned = true;
+                        std::size_t leased = 0u;
                         try
                         {
                             if(node.role != NodeRole::source)
                             {
-                                for(ChunkDescriptor const& input : selected)
-                                    m_pool.acquireLease(input.handle);
+                                for(std::size_t i = 0u; i < selected.size(); ++i)
+                                {
+                                    if(m_failureHook)
+                                        m_failureHook(
+                                            FailurePoint::leaseAcquire,
+                                            node.id,
+                                            static_cast<std::uint32_t>(i));
+                                    m_pool.acquireLease(selected[i].handle);
+                                    leased = i + 1u;
+                                }
                                 node.leaseHeld = true;
                             }
                             node.hooks.launch(node.queue, batch);
-                            node.queue.enqueue(node.event);
+                            enqueueEvent(node);
                         }
                         catch(...)
                         {
                             // Roll the reserved slot and the leases back while preserving the queued
-                            // chunks. The device may have observed a partially enqueued stage, so
-                            // drain the queue before `ready` ownership is released by teardown.
+                            // chunks. `leased` counts the acquisitions that completed, so a throw
+                            // in the middle of the loop cannot strand a lease.
                             try
                             {
                                 alpaka::onHost::wait(node.queue);
@@ -473,18 +516,15 @@ namespace graphFlow
                             {
                                 // Keep the original launch error; teardown releases `ready` anyway.
                             }
-                            if(node.leaseHeld)
+                            node.leaseHeld = false;
+                            for(std::size_t i = 0u; i < leased; ++i)
                             {
-                                node.leaseHeld = false;
-                                for(ChunkDescriptor const& input : selected)
+                                try
                                 {
-                                    try
-                                    {
-                                        m_pool.releaseLease(input.handle);
-                                    }
-                                    catch(...)
-                                    {
-                                    }
+                                    m_pool.releaseLease(selected[i].handle);
+                                }
+                                catch(...)
+                                {
                                 }
                             }
                             node.inputOwned = false;
@@ -497,7 +537,6 @@ namespace graphFlow
                         reservedTotal += reserve;
                         if(reservedTotal > stats.peakReservedChunks)
                             stats.peakReservedChunks = reservedTotal;
-                        node.armed = true;
                         return true;
                     };
 
@@ -604,7 +643,8 @@ namespace graphFlow
                 std::vector<int> nodeRoute,
                 Hooks nodeHooks,
                 Queue nodeQueue,
-                Event nodeEvent)
+                Event nodeEvent,
+                std::uint32_t nodeId)
                 : name{std::move(nodeName)}
                 , role{nodeRole}
                 , bins{nodeBins}
@@ -612,6 +652,7 @@ namespace graphFlow
                 , hooks{std::move(nodeHooks)}
                 , queue{std::move(nodeQueue)}
                 , event{std::move(nodeEvent)}
+                , id{nodeId}
             {
             }
 
@@ -622,6 +663,7 @@ namespace graphFlow
             Hooks hooks;
             Queue queue;
             Event event;
+            std::uint32_t id;
             std::deque<ChunkDescriptor> ready;
             std::optional<Batch> inflight;
             bool armed = false;
@@ -629,7 +671,34 @@ namespace graphFlow
             bool inputOwned = false;
             std::uint32_t reserved = 0u;
             std::uint32_t completedChunks = 0u;
+            std::uint32_t eventEnqueues = 0u;
         };
+
+        /** Adaptive output-chunk reserve of a transform batch with `particles` input particles.
+         *
+         * Host planning never acquires more than `outputChunkBound(sum(fill), C, B)`, so reserving
+         * exactly this amount is sufficient for the batch. The single-chunk pool bound `K*R` stays
+         * in place; a batch that does not fit shrinks its chunk prefix rather than the pool.
+         */
+        [[nodiscard]] std::uint32_t checkedReserveBound(
+            std::uint64_t particles,
+            std::uint32_t bins) const
+        {
+            std::uint64_t const bound = outputChunkBound(particles, m_pool.chunkCapacity(), bins);
+            if(bound > std::numeric_limits<std::uint32_t>::max())
+                throw std::overflow_error{"graphFlow: transform batch output reserve exceeds 32 bits"};
+            return static_cast<std::uint32_t>(bound);
+        }
+
+        /** Enqueue the node completion event, with an optional injected failure for tests. */
+        void enqueueEvent(Node& node)
+        {
+            ++node.eventEnqueues;
+            if(m_failureHook)
+                m_failureHook(FailurePoint::eventEnqueue, node.id, node.eventEnqueues);
+            node.queue.enqueue(node.event);
+            node.armed = true;
+        }
 
         /** True when `handle` is one of the batch's input chunks. */
         [[nodiscard]] static bool isInput(Batch const& batch, ChunkHandle handle)
@@ -678,6 +747,19 @@ namespace graphFlow
                     else
                         alpaka::onHost::wait(node.queue);
                     node.armed = false;
+                    // A batch that acquired output chunks but never published them (for example
+                    // when the completion-event enqueue failed) must hand them back exactly once.
+                    if(node.hooks.abort)
+                    {
+                        try
+                        {
+                            node.hooks.abort();
+                        }
+                        catch(...)
+                        {
+                            // A release failure must not hide the original batch error.
+                        }
+                    }
                     if(node.leaseHeld)
                     {
                         for(ChunkDescriptor const& input : node.inflight->chunks)
@@ -707,6 +789,7 @@ namespace graphFlow
         std::uint32_t m_sourceLiveParticles = 0u;
         std::size_t m_roundRobin = 0u;
         std::uint32_t m_batchChunks = 1u;
+        std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
         std::chrono::milliseconds m_stallTimeout{120'000};
     };
 } // namespace graphFlow

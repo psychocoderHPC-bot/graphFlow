@@ -42,15 +42,21 @@ namespace graphFlow::particle
      * split-routing feedback graph: every transform may split one input chunk into one chunk per
      * bin, and repeated feedback can fragment the P live particles into as many as P chunks
      * (one particle per chunk). The pool must therefore hold one chunk per live particle plus the
-     * `K*R` output credits of the live transform batches:
+     * output credits of the live transform batches:
      *
-     *     S = P + K*R,   R = outputChunkBound(C, C, B),   K = TransformNodes
+     *     R = outputChunkBound(C, C, B)
+     *     S = P + K*R,   K = TransformNodes
+     *
+     * The pool uses the single-chunk R, not a Q-scaled bound. A transform batch reserves the
+     * adaptive `outputChunkBound(sum(fill), C, B)` for the chunks it actually takes and only starts
+     * when the credits cover it; under fragmentation the scheduler shrinks the batch prefix instead
+     * of enlarging the pool. Q therefore never changes S.
      *
      * Source admission caps the fill of every admitted chunk at `P - liveParticles`, so the number
      * of live particles (and therefore the number of data-carrying chunks) never exceeds P. The
      * result is independent of N; `P == 0` selects `defaultLiveParticles`. `tests/integration/
      * test_pressure.cpp` pins the N=4097, C=128, P=256 case and records why the smaller formula
-     * deadlocks.
+     * deadlocks; `tests/integration/test_batching.cpp` pins a bounded-P Q=8 batch inside S=P+K*R.
      */
     inline std::uint32_t derivePoolSize(
         std::uint64_t numParticles,
@@ -67,9 +73,14 @@ namespace graphFlow::particle
             live = 1u;
 
         std::uint64_t const perTransform = outputChunkBound(chunkSize, chunkSize, maxBins);
-        std::uint64_t const chunks = live + static_cast<std::uint64_t>(TransformNodes) * perTransform;
-        if(chunks > std::numeric_limits<std::uint32_t>::max())
+        std::uint64_t const maxChunks = std::numeric_limits<std::uint32_t>::max();
+        if(perTransform > maxChunks)
+            throw std::overflow_error{"graphFlow: one transform reserve exceeds 2^32 chunks"};
+        std::uint64_t const transformCredits
+            = static_cast<std::uint64_t>(TransformNodes) * perTransform;
+        if(live > maxChunks || transformCredits > maxChunks - live)
             throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
+        std::uint64_t const chunks = live + transformCredits;
         return static_cast<std::uint32_t>(chunks == 0u ? 1u : chunks);
     }
 
@@ -83,7 +94,12 @@ namespace graphFlow::particle
             [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
             { return stage.advance(queue, batch, allocated); },
             [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
-            { stage.finish(batch, outputs); }};
+            { stage.finish(batch, outputs); },
+            [&stage]()
+            {
+                if constexpr(requires { stage.abort(); })
+                    stage.abort();
+            }};
     }
 
     /** Build and run the Generate -> Filter -> {A, B} -> Sink feedback graph. */

@@ -17,7 +17,9 @@ namespace graphFlow
      * `chunkIndex` selects the chunk in the pool, `tileOffset` is the first particle slot of the
      * tile within the chunk and `count` is the number of particles this tile owns
      * (`count <= tileSize`, the tail tile is shorter). The kernels index payload and metadata with
-     * `chunkIndex * chunkCapacity + tileOffset + i`.
+     * the 32-bit expression `chunkIndex * chunkCapacity + tileOffset + i`. `ChunkPool` rejects
+     * `numChunks * chunkCapacity > UINT32_MAX`, so every slot index is representable and the
+     * descriptor arithmetic cannot wrap.
      */
     struct TileDescriptor
     {

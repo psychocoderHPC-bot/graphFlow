@@ -12,11 +12,16 @@ namespace graphFlow
 {
     /** Static configuration of one graph run.
      *
-     * `chunkCapacity` (C) is the number of particle slots per chunk, `numChunks` the pool size,
+     * `chunkCapacity` (C) is the number of particle slots per chunk, `numChunks` (S) the pool size,
      * `liveParticles` (P) the configured source-admission capacity in particles, `tileSize` (T) the
-     * requested threads per block and the per-tile histogram width, `batchChunks` (Q) the number of
-     * ready chunks a future batching scheduler may process together, and `maxBins` the runtime upper
+     * requested threads per block and the per-tile histogram width, `batchChunks` (Q) the maximum
+     * number of ready chunks one transform batch dispatches, and `maxBins` (B) the runtime upper
      * bound for the compile-time bin count of a node.
+     *
+     * The pool is `S = P + K*R` with `R = outputChunkBound(C, C, B)` for K transform nodes, while a
+     * transform batch reserves the adaptive `outputChunkBound(sum(fill), C, B)` for the chunks it
+     * actually takes. `batchChunks` (Q) caps the batch size; under fragmentation a smaller prefix
+     * is dispatched, so Q does not enlarge the pool.
      *
      * The `policy*` fields are the knobs of the device-aware chunk policy in
      * `graphFlow/core/DevicePolicy.hpp`: `makeDevicePolicy` reads them through `policyConfigOf()`
@@ -26,14 +31,14 @@ namespace graphFlow
     struct Config
     {
         std::uint32_t chunkCapacity = 128u; // C
-        std::uint32_t numChunks = 0u;       // S, zero means "derive from N"
+        std::uint32_t numChunks = 0u;       // S = P + K*R, zero means "derive"
         std::uint32_t liveParticles = 0u;   // P, zero means "derive from N and C"
         std::uint32_t tileSize = 128u;      // T
         std::uint32_t maxBins = 64u;        // B upper bound
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
-        std::uint32_t batchChunks = 1u; // Q, ready-chunk batch size (reserved for batching)
+        std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
 
         // Device-aware chunk policy knobs, see include/graphFlow/core/DevicePolicy.hpp.
         std::uint32_t policyWaves = 1u;

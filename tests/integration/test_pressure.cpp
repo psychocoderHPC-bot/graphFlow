@@ -71,7 +71,12 @@ namespace
                 return base.advance(queue, batch, allocated);
             },
             [base](typename Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
-            { base.finish(batch, outputs); }};
+            { base.finish(batch, outputs); },
+            [base]()
+            {
+                if(base.abort)
+                    base.abort();
+            }};
     }
 } // namespace
 

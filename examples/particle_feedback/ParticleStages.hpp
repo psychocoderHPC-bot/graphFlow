@@ -407,9 +407,28 @@ namespace graphFlow::particle
             return false;
         }
 
-        void finish(Batch const&, std::vector<ChunkDescriptor>& outputs) const
+        /** Transfer ownership of the planned output chunks to the scheduler.
+         *
+         * The descriptors move out of the stage, so a later teardown cannot release a published
+         * chunk a second time.
+         */
+        void finish(Batch const&, std::vector<ChunkDescriptor>& outputs)
         {
             outputs.insert(outputs.end(), m_pending.begin(), m_pending.end());
+            m_pending.clear();
+        }
+
+        /** Release output chunks of a batch that will never be published.
+         *
+         * The scheduler calls this once from its teardown path, for example when the completion
+         * event could not be enqueued after planning had already acquired output chunks. The stage
+         * becomes single-use because device work may still be outstanding.
+         */
+        void abort()
+        {
+            releasePending();
+            resetBatchState();
+            m_failed = true;
         }
 
         /** Conservative number of output chunks one batch may need; used by tests/docs. */
