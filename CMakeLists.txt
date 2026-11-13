@@ -126,6 +126,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         graphFlow_tests
         tests/unit/test_reservation.cpp
         tests/unit/test_backend.cpp
+        tests/unit/test_cli_contract.cpp
         tests/unit/test_chunk_pool.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_philox.cpp

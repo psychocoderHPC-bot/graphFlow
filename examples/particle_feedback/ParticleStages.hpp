@@ -42,6 +42,7 @@ namespace graphFlow::particle
         std::uint32_t maxVisits = 64u;
         std::uint32_t tileSize = 128u;
         std::uint32_t deviceIndex = 0u;
+        std::uint32_t batchChunks = 1u; // Q, consumed by the later batching task
     };
 
     /** Checked number of tiles needed by a chunk.
