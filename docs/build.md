@@ -169,9 +169,12 @@ The repository has no `.github/workflows` and no CI runners. The commands above
 are the documented local entry points. The recorded integrated results cover
 the FrameSpec revision `327f74f`: the fwk394 CPU build with CTest 82/82 and the
 hal CUDA A30 `sm_80` build with CTest 86/86; the HIP `gfx90a` compile gate also
-passes. These counts were recorded at that revision, and this documentation
-commit does not claim a new build or test run. The `sm_75` CUDA build still
-fails with the CUDA 12.5 nvcc internal compiler error
-(`docs/known-limitations.md`); HIP execution and an integrated ASAN/UBSAN count
-have no recorded run. Format and REUSE metadata are present; no CI job runs
-them yet.
+passes. The later additive PR-A graph API core at
+`60a34302b1c3cf205304916c7233f13118591dd0` was validated with **97/97 CPU
+CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
+both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
+revision, and this documentation commit does not claim a new build or test run.
+The `sm_75` CUDA build still fails with the CUDA 12.5 nvcc internal compiler
+error (`docs/known-limitations.md`); HIP execution and an integrated
+ASAN/UBSAN count have no recorded run. Format and REUSE metadata are present;
+no CI job runs them yet.

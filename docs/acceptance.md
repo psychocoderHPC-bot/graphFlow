@@ -39,6 +39,20 @@ The CTest totals include `tests/unit/test_launch_policy.cpp` and
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
 GPU and fails when no GPU is visible; the FrameSpec matrix also runs on CUDA.
 
+### PR-A generic graph API core
+
+The additive graph API core was validated at
+`60a34302b1c3cf205304916c7233f13118591dd0` on the environment above:
+**97/97 CTest passed on fwk394 CPU Release** and **101/101 passed on hal CUDA
+`sm_80` Release**, both with `-Dalpaka_COMPILE_PEDANTIC=ON`. The change adds
+`NodeBase`, `RouteTable`, `Graph`, and `GraphBuilder` over the existing
+`GraphRunner` hooks without changing the example, T5 batching, FrameSpec
+launches, or policy semantics. The particle-feedback example still assembles
+its graph by hand, so the full generic-graph-API item (PR-B example port)
+remains open. No HIP runtime is claimed; the HIP gate remains compile-only.
+This documentation commit records the existing runs and claims no new build or
+test run.
+
 ## Historical performance baseline
 
 The numbers below are the pre-T5/T7 result. They are not a current integrated
