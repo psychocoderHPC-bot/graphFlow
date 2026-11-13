@@ -37,8 +37,8 @@ The older `4780dc786a2eb1a5452a1c66d94a8b442d411ab8` reference pin is not used:
 the repository records the newer validated alpaka tree above. Change the
 `ALPAKA_REF` workflow variable only after a full CPU/CUDA/HIP probe and a new
 acceptance record. Change the Catch2 pin only if `ubuntu-latest` stops shipping
-3.4.0; the `cpu` and `sanitizers` jobs fail when the installed package version
-does not start with 3.4.0.
+3.4.0. Only the `cpu` and `sanitizers` apt jobs enforce 3.4.0; the self-hosted
+CUDA, TSAN, and HIP jobs use the runner-provided Catch2 3.x.
 
 ## Exact commands
 
@@ -229,7 +229,8 @@ registered:
   CMake 3.28.3, Ninja 1.11.1, g++ 13.3, Catch2 3.4.0.
 - It is the compatible TSAN host for the validated subset
   `-R 'pool|dense|pressure|scripted|lease'`; CTest reports the selected test
-  count. The subset runs without any race or memory-mapping report.
+  count. The recorded fwk394 baseline is clean (no race or memory-mapping
+  report); CI execution is pending runner registration.
 - No `/opt/rocm` toolkit or HIP compiler; only AMD runtime libraries are
   installed. It cannot run the `hip-compile` job as written.
 - It is not an A30 host. A CUDA compile/run check there must override
@@ -252,10 +253,9 @@ in three ways on the CUDA job:
    CUDA device was selected and that the kernels ran on it.
 
 No CUDA or HIP job sets `continue-on-error`, and no missing device is allowed to
-degrade to the CPU backend. The CUDA build includes a CUDA-specific CTest case in
-addition to the CPU-side tests compiled with the CUDA language. The
-`--backend cuda` example smoke remains the explicit selected-backend and
-histogram gate.
+degrade to the CPU backend. Once T3 is merged, the CUDA build will also include
+its CUDA-specific CTest case. This branch predates T3, so the `--backend cuda`
+example smoke remains the explicit selected-backend and histogram gate.
 
 ## Artifacts and retention
 
