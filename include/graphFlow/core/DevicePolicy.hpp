@@ -71,6 +71,8 @@ namespace graphFlow
         std::uint64_t hostBudgetBytes = hostMemoryBudgetBytes;
         /** Upper bound of the derived accelerator budget. */
         std::uint64_t acceleratorBudgetCapBytes = acceleratorMemoryBudgetCapBytes;
+        /** Payload bytes of one storage slot; the particle SoA default keeps old budgets. */
+        std::uint64_t slotBytes = payloadBytesPerSlot;
     };
 
     /** Optional explicit overrides; an absent value is derived from the device.
@@ -98,6 +100,7 @@ namespace graphFlow
         std::uint32_t targetBlocksPerSm = 0u; // blocks per multiprocessor used for the estimate
         std::uint64_t memoryBudgetBytes = 0u; // resolved payload budget
         std::string description;              // short human-readable summary
+        std::uint64_t slotBytes = payloadBytesPerSlot; // payload bytes per storage slot
     };
 
     namespace detail
@@ -110,20 +113,21 @@ namespace graphFlow
             return lhs * rhs;
         }
 
-        /** Whether `liveParticles * chunkCapacity * payloadBytesPerSlot` fits the budget.
+        /** Whether `liveParticles * chunkCapacity * slotBytes` fits the budget.
          *
          * Both products are checked with division so no intermediate value can overflow.
          */
         inline bool payloadFitsBudget(
             std::uint64_t liveParticles,
             std::uint64_t chunkCapacity,
-            std::uint64_t budgetBytes)
+            std::uint64_t budgetBytes,
+            std::uint64_t slotBytes = payloadBytesPerSlot)
         {
             if(liveParticles == 0u || chunkCapacity == 0u)
                 return true;
             if(liveParticles > budgetBytes / chunkCapacity)
                 return false;
-            return liveParticles * chunkCapacity <= budgetBytes / payloadBytesPerSlot;
+            return liveParticles * chunkCapacity <= budgetBytes / slotBytes;
         }
 
         /** Largest C in `[0, upperBound]` whose default P fits the budget.
@@ -137,7 +141,8 @@ namespace graphFlow
             std::uint64_t numParticles,
             std::uint64_t particlesPerChunk,
             std::uint64_t budgetBytes,
-            std::uint64_t upperBound)
+            std::uint64_t upperBound,
+            std::uint64_t slotBytes = payloadBytesPerSlot)
         {
             std::uint64_t lower = 0u;
             std::uint64_t upper = upperBound;
@@ -145,7 +150,7 @@ namespace graphFlow
             {
                 std::uint64_t const middle = lower + (upper - lower + 1u) / 2u;
                 std::uint64_t const live = std::min(numParticles, saturatedProduct(particlesPerChunk, middle));
-                if(payloadFitsBudget(live, middle, budgetBytes))
+                if(payloadFitsBudget(live, middle, budgetBytes, slotBytes))
                     lower = middle;
                 else
                     upper = middle - 1u;
@@ -160,7 +165,7 @@ namespace graphFlow
 
         /** Largest live-particle capacity that fits the budget for a fixed chunk capacity.
          *
-         * The budget caps the live working set `P * C * payloadBytesPerSlot`, not the chunk
+         * The budget caps the live working set `P * C * slotBytes`, not the chunk
          * capacity. The result is rounded down to a whole tile when that leaves at least one
          * tile, so the default clamp does not sit exactly on the usable-memory boundary. A
          * result of zero means not even one live particle fits.
@@ -168,11 +173,12 @@ namespace graphFlow
         inline std::uint64_t largestLiveParticlesForBudget(
             std::uint64_t chunkCapacity,
             std::uint64_t budgetBytes,
-            std::uint64_t tileSize)
+            std::uint64_t tileSize,
+            std::uint64_t slotBytes = payloadBytesPerSlot)
         {
             if(chunkCapacity == 0u)
                 return 0u;
-            std::uint64_t maxLive = budgetBytes / (chunkCapacity * payloadBytesPerSlot);
+            std::uint64_t maxLive = budgetBytes / (chunkCapacity * slotBytes);
             if(tileSize > 1u && maxLive >= tileSize)
                 maxLive = roundDownToMultiple(maxLive, tileSize);
             return maxLive;
@@ -245,6 +251,8 @@ namespace graphFlow
         if(config.acceleratorBudgetCapBytes == 0u)
             throw std::invalid_argument{
                 "graphFlow::DevicePolicy: acceleratorBudgetCapBytes must be non-zero"};
+        if(config.slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::DevicePolicy: slotBytes must be non-zero"};
 
         std::uint64_t const warpSize = properties.warpSize == 0u ? 1u : properties.warpSize;
         std::uint64_t const threadLimit = properties.maxThreadsPerBlock;
@@ -346,7 +354,7 @@ namespace graphFlow
                 // An explicit P is kept; shrink the derived C so that P*C fits the budget. The
                 // final P clamp below covers the explicit-C path.
                 std::uint64_t const liveBytes
-                    = detail::saturatedProduct(*overrides.liveParticles, payloadBytesPerSlot);
+                    = detail::saturatedProduct(*overrides.liveParticles, config.slotBytes);
                 std::uint64_t const byBudget = budgetBytes / liveBytes;
                 if(byBudget < candidate)
                 {
@@ -360,7 +368,8 @@ namespace graphFlow
                     numParticles,
                     config.liveParticlesPerChunk,
                     budgetBytes,
-                    candidate);
+                    candidate,
+                    config.slotBytes);
                 if(byBudget < candidate)
                 {
                     candidate = byBudget;
@@ -397,12 +406,12 @@ namespace graphFlow
         if(liveParticles != 0u)
         {
             std::uint64_t maxLive
-                = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile);
+                = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile, config.slotBytes);
             if(maxLive == 0u && !overrides.chunkCapacity)
             {
                 // Last resort: the launch C cannot hold one particle. Reduce the derived C to
                 // the largest tile multiple that still does, then clamp again.
-                std::uint64_t const maxSlots = budgetBytes / payloadBytesPerSlot;
+                std::uint64_t const maxSlots = budgetBytes / config.slotBytes;
                 std::uint64_t const shrunk = detail::roundDownToMultiple(
                     std::min<std::uint64_t>(chunkCapacity, maxSlots),
                     tile);
@@ -411,7 +420,11 @@ namespace graphFlow
                         "graphFlow::DevicePolicy: the payload memory budget cannot hold one tile of the chunk"};
                 chunkCapacity = static_cast<std::uint32_t>(shrunk);
                 capacityCap = "memory";
-                maxLive = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile);
+                maxLive = detail::largestLiveParticlesForBudget(
+                    chunkCapacity,
+                    budgetBytes,
+                    tile,
+                    config.slotBytes);
             }
             if(maxLive == 0u)
                 throw std::invalid_argument{
@@ -423,7 +436,7 @@ namespace graphFlow
                         "graphFlow::DevicePolicy: explicit liveParticles "
                         + std::to_string(liveParticles) + " with chunkCapacity "
                         + std::to_string(chunkCapacity) + " requires "
-                        + std::to_string(requiredPayloadBytes(liveParticles, chunkCapacity))
+                        + std::to_string(requiredPayloadBytes(liveParticles, chunkCapacity, config.slotBytes))
                         + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes)
                         + " bytes; the largest feasible P is " + std::to_string(maxLive)};
             }
@@ -435,7 +448,7 @@ namespace graphFlow
             }
         }
 
-        if(!detail::payloadFitsBudget(liveParticles, chunkCapacity, budgetBytes))
+        if(!detail::payloadFitsBudget(liveParticles, chunkCapacity, budgetBytes, config.slotBytes))
             throw std::invalid_argument{
                 "graphFlow::DevicePolicy: liveParticles and chunkCapacity exceed the payload memory budget"};
 
@@ -447,6 +460,7 @@ namespace graphFlow
         policy.waves = config.waves;
         policy.targetBlocksPerSm = config.targetBlocksPerSm;
         policy.memoryBudgetBytes = budgetBytes;
+        policy.slotBytes = config.slotBytes;
         policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P="
                              + std::to_string(liveParticles) + " T=" + std::to_string(tile)
                              + " waves=" + std::to_string(config.waves) + " blocksPerSm="
@@ -467,6 +481,7 @@ namespace graphFlow
         policyConfig.maxChunkCapacity = config.policyMaxChunkCapacity;
         policyConfig.liveParticlesPerChunk = config.policyLiveParticlesPerChunk;
         policyConfig.memoryBudgetBytes = config.policyMemoryBudgetBytes;
+        policyConfig.slotBytes = config.slotBytes;
         return policyConfig;
     }
 
@@ -482,9 +497,11 @@ namespace graphFlow
         config.chunkCapacity = policy.chunkCapacity;
         config.liveParticles = policy.liveParticles;
         config.tileSize = policy.tileSize;
+        config.slotBytes = policy.slotBytes;
         config.poolPayloadBudgetBytes = payloadBudgetWithReserve(
             policy.memoryBudgetBytes,
             policy.chunkCapacity,
-            config.poolOutputReserveChunks);
+            config.poolOutputReserveChunks,
+            policy.slotBytes);
     }
 } // namespace graphFlow

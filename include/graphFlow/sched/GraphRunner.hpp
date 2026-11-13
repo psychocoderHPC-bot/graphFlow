@@ -6,6 +6,7 @@
 
 #include "graphFlow/core/Chunk.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
+#include "graphFlow/core/ChunkStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -91,12 +92,17 @@ namespace graphFlow
      * Q chunks is therefore a cap, not a requirement: under fragmentation the batch shrinks to the
      * largest prefix that fits the current credits, so progress never depends on a full Q batch.
      */
-    template<typename TDevice>
+    template<typename TDevice, typename TStorage = ChunkPool<TDevice>>
     class GraphRunner
     {
+        static_assert(
+            ChunkStorage<TStorage>,
+            "graphFlow::GraphRunner: the storage type does not satisfy ChunkStorage");
+
     public:
         using Queue = ALPAKA_TYPEOF(std::declval<TDevice&>().makeQueue(alpaka::queueKind::nonBlocking));
         using Event = ALPAKA_TYPEOF(std::declval<TDevice&>().makeEvent());
+        using Storage = TStorage;
 
         /** One scheduler dispatch: the input chunks a node owns plus the source id cursor.
          *
@@ -148,9 +154,9 @@ namespace graphFlow
             m_failureHook = std::move(hook);
         }
 
-        GraphRunner(TDevice device, ChunkPool<TDevice>& pool)
+        GraphRunner(TDevice device, TStorage& storage)
             : m_device{device}
-            , m_pool{pool}
+            , m_storage{storage}
         {
         }
 
@@ -244,9 +250,9 @@ namespace graphFlow
 
             auto availableChunks = [&]() -> std::uint32_t
             {
-                if(reservedTotal > m_pool.freeCount())
+                if(reservedTotal > m_storage.freeCount())
                     throw std::logic_error{"graphFlow: reservation accounting underflow"};
-                return m_pool.freeCount() - reservedTotal;
+                return m_storage.freeCount() - reservedTotal;
             };
 
             try
@@ -314,7 +320,7 @@ namespace graphFlow
                                     {
                                         if(isInput(batch, outputs[rest].handle))
                                             node.inputOwned = false;
-                                        m_pool.release(outputs[rest].handle);
+                                        m_storage.release(outputs[rest].handle);
                                     }
                                     throw;
                                 }
@@ -339,11 +345,11 @@ namespace graphFlow
                                 if(node.leaseHeld)
                                 {
                                     for(ChunkDescriptor const& input : batch.chunks)
-                                        m_pool.releaseLease(input.handle);
+                                        m_storage.releaseLease(input.handle);
                                     node.leaseHeld = false;
                                 }
                                 for(ChunkDescriptor const& input : batch.chunks)
-                                    m_pool.release(input.handle);
+                                    m_storage.release(input.handle);
                                 node.inputOwned = false;
                             }
                             node.inflight.reset();
@@ -358,7 +364,7 @@ namespace graphFlow
                     Node& source = *m_nodes[*m_sourceNode];
                     std::uint64_t const liveParticles = generated - sunkParticles;
                     std::uint64_t const remaining = m_sourceParticles - generated;
-                    std::uint64_t const capacity = m_pool.chunkCapacity();
+                    std::uint64_t const capacity = m_storage.chunkCapacity();
                     std::uint64_t const configuredLive = m_sourceLiveParticles;
                     // A source chunk must be large enough to amortise one classify/plan/scatter
                     // round trip. With a configured budget P, require min(C, P, remaining)
@@ -374,19 +380,19 @@ namespace graphFlow
                         = configuredLive == 0u
                           || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
                     if(generated < m_sourceParticles && !source.inflight && withinAdmission && enoughBudget
-                       && m_pool.freeCount() > reservedTotal)
+                       && m_storage.freeCount() > reservedTotal)
                     {
                         std::uint64_t budget = remaining;
                         std::uint32_t const fillCap
                             = configuredLive == 0u
-                                  ? m_pool.chunkCapacity()
+                                  ? m_storage.chunkCapacity()
                                   : static_cast<std::uint32_t>(configuredLive - liveParticles);
                         if(budget > fillCap)
                             budget = fillCap;
-                        if(budget > m_pool.chunkCapacity())
-                            budget = m_pool.chunkCapacity();
+                        if(budget > m_storage.chunkCapacity())
+                            budget = m_storage.chunkCapacity();
                         std::uint32_t const fill = static_cast<std::uint32_t>(budget);
-                        ChunkDescriptor chunk{m_pool.acquire(), fill, 0u};
+                        ChunkDescriptor chunk{m_storage.acquire(), fill, 0u};
                         Batch const batch{{chunk}, generated};
                         generated += fill;
                         // Publish the in-flight batch before the hook so a throwing launch is
@@ -461,7 +467,7 @@ namespace graphFlow
                                             FailurePoint::leaseAcquire,
                                             node.id,
                                             static_cast<std::uint32_t>(i));
-                                    m_pool.acquireLease(selected[i].handle);
+                                    m_storage.acquireLease(selected[i].handle);
                                     leased = i + 1u;
                                 }
                                 node.leaseHeld = true;
@@ -487,7 +493,7 @@ namespace graphFlow
                             {
                                 try
                                 {
-                                    m_pool.releaseLease(selected[i].handle);
+                                    m_storage.releaseLease(selected[i].handle);
                                 }
                                 catch(...)
                                 {
@@ -586,11 +592,11 @@ namespace graphFlow
                 alpaka::onHost::wait(nodePtr->queue);
                 nodePtr->armed = false;
             }
-            if(m_pool.freeCount() != m_pool.numChunks())
+            if(m_storage.freeCount() != m_storage.numChunks())
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
 
-            stats.poolChunks = m_pool.numChunks();
-            stats.peakLiveChunks = m_pool.peakLive();
+            stats.poolChunks = m_storage.numChunks();
+            stats.peakLiveChunks = m_storage.peakLive();
             return stats;
         }
 
@@ -655,7 +661,7 @@ namespace graphFlow
             std::uint64_t particles,
             std::uint32_t bins) const
         {
-            std::uint64_t const bound = outputChunkBound(particles, m_pool.chunkCapacity(), bins);
+            std::uint64_t const bound = outputChunkBound(particles, m_storage.chunkCapacity(), bins);
             if(bound > std::numeric_limits<std::uint32_t>::max())
                 throw std::overflow_error{"graphFlow: transform batch output reserve exceeds 32 bits"};
             return static_cast<std::uint32_t>(bound);
@@ -691,7 +697,7 @@ namespace graphFlow
             message << "graphFlow: scheduler made no progress for " << m_stallTimeout.count()
                     << " ms (generated=" << generated << ", sunk=" << sunkParticles
                     << ", liveParticles=" << (generated - sunkParticles)
-                    << ", free=" << m_pool.freeCount() << ", reserved=" << reservedTotal << ')';
+                    << ", free=" << m_storage.freeCount() << ", reserved=" << reservedTotal << ')';
             for(auto const& nodePtr : m_nodes)
             {
                 message << "; node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
@@ -734,26 +740,26 @@ namespace graphFlow
                     if(node.leaseHeld)
                     {
                         for(ChunkDescriptor const& input : node.inflight->chunks)
-                            m_pool.releaseLease(input.handle);
+                            m_storage.releaseLease(input.handle);
                         node.leaseHeld = false;
                     }
                     if(node.inputOwned)
                     {
                         for(ChunkDescriptor const& input : node.inflight->chunks)
-                            m_pool.release(input.handle);
+                            m_storage.release(input.handle);
                         node.inputOwned = false;
                     }
                     node.inflight.reset();
                     node.reserved = 0u;
                 }
                 for(ChunkDescriptor const& chunk : node.ready)
-                    m_pool.release(chunk.handle);
+                    m_storage.release(chunk.handle);
                 node.ready.clear();
             }
         }
 
         TDevice m_device;
-        ChunkPool<TDevice>& m_pool;
+        TStorage& m_storage;
         std::vector<std::unique_ptr<Node>> m_nodes;
         std::optional<std::uint32_t> m_sourceNode;
         std::uint64_t m_sourceParticles = 0u;

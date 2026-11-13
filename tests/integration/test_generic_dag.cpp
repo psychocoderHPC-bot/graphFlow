@@ -4,7 +4,9 @@
 
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
+#include "graphFlow/core/ChunkStorage.hpp"
 #include "graphFlow/core/LaunchPolicy.hpp"
+#include "graphFlow/core/PayloadSlotStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/graph/GraphBuilder.hpp"
 #include "graphFlow/graph/NodeBase.hpp"
@@ -24,6 +26,13 @@
 namespace
 {
     using Device = decltype(graphFlow::test::makeCpuDevice());
+
+    /** Generic, non-particle payload used to exercise storage-independent execution. */
+    struct GenericPayload
+    {
+        std::uint64_t id = 0u;
+        std::uint32_t weight = 0u;
+    };
 
     constexpr std::uint32_t tileSize = 32u;
     constexpr std::uint32_t frameCap = 8u;
@@ -582,4 +591,74 @@ TEST_CASE("generic DAG rejects invalid routes and sources", "[integration][graph
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         CHECK_THROWS_AS(builder.setSource(transformId, 0u), std::invalid_argument); // not a source
     }
+}
+
+TEST_CASE("generic DAG runs on a payload-slot storage", "[integration][graph][storage]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Storage = graphFlow::PayloadSlotStorage<GenericPayload, Device>;
+    using Runner = graphFlow::GraphRunner<Device, Storage>;
+    static_assert(graphFlow::ChunkStorage<Storage>);
+
+    constexpr std::uint32_t capacity = 4u;
+    constexpr std::uint64_t particles = 8u;
+    Storage storage{device, 4u, capacity};
+
+    std::unordered_map<std::uint64_t, std::vector<GenericPayload>> readback;
+    std::vector<std::uint64_t> sunk;
+
+    Runner::Hooks sourceHooks{
+        [&storage](Runner::Queue const& queue, Runner::Batch const& batch)
+        {
+            auto const& chunk = batch.chunk();
+            std::vector<GenericPayload> values(chunk.fill);
+            for(std::uint32_t i = 0u; i < chunk.fill; ++i)
+                values[i] = GenericPayload{batch.firstId + i, i};
+            auto chunkView = storage.payload().getSubView(
+                alpaka::Vec{storage.base(chunk.handle)},
+                alpaka::Vec{std::uint64_t{chunk.fill}});
+            alpaka::onHost::memcpy(queue, chunkView, values);
+            alpaka::onHost::wait(queue);
+        },
+        [](Runner::Queue const&, Runner::Batch const&, std::uint32_t&) { return false; },
+        [](Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+        { outputs = batch.chunks; },
+        []() {}};
+
+    Runner::Hooks sinkHooks{
+        [&storage, &readback](Runner::Queue const& queue, Runner::Batch const& batch)
+        {
+            auto const& chunk = batch.chunk();
+            std::vector<GenericPayload> values(chunk.fill);
+            auto chunkView = storage.payload().getSubView(
+                alpaka::Vec{storage.base(chunk.handle)},
+                alpaka::Vec{std::uint64_t{chunk.fill}});
+            alpaka::onHost::memcpy(queue, values, chunkView);
+            alpaka::onHost::wait(queue);
+            readback.emplace(chunkKey(chunk.handle), std::move(values));
+        },
+        [](Runner::Queue const&, Runner::Batch const&, std::uint32_t&) { return false; },
+        [&readback, &sunk](Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>&)
+        {
+            auto const found = readback.find(chunkKey(batch.chunk().handle));
+            REQUIRE(found != readback.end());
+            for(GenericPayload const& payload : found->second)
+                sunk.push_back(payload.id);
+        },
+        []() {}};
+
+    Runner runner{device, storage};
+    auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks);
+    runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, sinkHooks);
+    runner.setSource(source, particles, 0u);
+
+    graphFlow::SchedulerStats const stats = runner.run();
+    CHECK(stats.completedBatches == 4u);
+    CHECK(stats.poolChunks == 4u);
+    CHECK(storage.freeCount() == storage.numChunks());
+
+    std::sort(sunk.begin(), sunk.end());
+    REQUIRE(sunk.size() == particles);
+    for(std::uint64_t i = 0u; i < particles; ++i)
+        CHECK(sunk[static_cast<std::size_t>(i)] == i);
 }

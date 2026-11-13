@@ -336,3 +336,80 @@ TEST_CASE("bounded P with Q>1 completes without a full batch", "[pool][budget][b
             parameters.liveParticles,
             particle::FlowBins));
 }
+
+TEST_CASE("pool budget arithmetic accepts a generic slot size", "[pool][budget][slot]")
+{
+    using namespace graphFlow;
+
+    CHECK(requiredPayloadBytes(2u, 3u) == std::uint64_t{2u} * 3u * payloadBytesPerSlot);
+    CHECK(requiredPayloadBytes(2u, 3u, 24u) == 144u);
+    CHECK(requiredPayloadBytes(2u, 3u, 96u) == 576u);
+    CHECK_THROWS_AS(requiredPayloadBytes(2u, 3u, 0u), std::invalid_argument);
+    CHECK_THROWS_AS(
+        requiredPayloadBytes(std::numeric_limits<std::uint64_t>::max() / 96u + 1u, 1u, 96u),
+        std::overflow_error);
+
+    CHECK_NOTHROW(validatePayloadBudget(2u, 3u, 144u, 24u));
+    CHECK_NOTHROW(validatePayloadBudget(2u, 3u, 576u, 96u));
+    CHECK_THROWS_AS(validatePayloadBudget(2u, 3u, 144u, 96u), std::invalid_argument);
+    CHECK_NOTHROW(validatePayloadBudget(2u, 3u, 576u, "graphFlow::test", 96u));
+    CHECK_THROWS_WITH(
+        validatePayloadBudget(2u, 3u, 144u, "graphFlow::test", 96u),
+        Catch::Matchers::ContainsSubstring("96 bytes"));
+
+    CHECK(payloadBudgetWithReserve(1024u, 4u, 2u, 96u) == 1024u + std::uint64_t{2u} * 4u * 96u);
+    CHECK(
+        payloadBudgetWithReserve(1024u, 4u)
+        == 1024u + defaultPoolOutputReserveChunks * 4u * payloadBytesPerSlot);
+}
+
+TEST_CASE("device policy honors the configured slot size", "[pool][budget][policy][slot]")
+{
+    using namespace graphFlow;
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+
+    DevicePolicyConfig config;
+    config.slotBytes = 96u;
+    config.memoryBudgetBytes = 96ull * 1024ull * 1024ull;
+    config.maxChunkCapacity = 4096u;
+
+    DevicePolicy const policy = makeDevicePolicy(properties, 1'000'000u, {}, config);
+    CHECK(policy.slotBytes == 96u);
+    CHECK(requiredPayloadBytes(policy.liveParticles, policy.chunkCapacity, 96u) <= policy.memoryBudgetBytes);
+
+    Config derived;
+    derived.slotBytes = 96u;
+    applyDevicePolicy(derived, policy);
+    CHECK(derived.slotBytes == 96u);
+    CHECK(
+        derived.poolPayloadBudgetBytes
+        == payloadBudgetWithReserve(
+            policy.memoryBudgetBytes,
+            policy.chunkCapacity,
+            derived.poolOutputReserveChunks,
+            96u));
+
+    // The default stays the 24-byte particle SoA slot and produces the historical budget.
+    DevicePolicy const particlePolicy = makeDevicePolicy(properties, 1'000'000u);
+    CHECK(particlePolicy.slotBytes == payloadBytesPerSlot);
+    Config particleConfig;
+    applyDevicePolicy(particleConfig, particlePolicy);
+    CHECK(particleConfig.slotBytes == payloadBytesPerSlot);
+    CHECK(
+        particleConfig.poolPayloadBudgetBytes
+        == payloadBudgetWithReserve(
+            particlePolicy.memoryBudgetBytes,
+            particlePolicy.chunkCapacity,
+            particleConfig.poolOutputReserveChunks));
+
+    // Config::validate applies the configured slot size to its pool check.
+    Config exact;
+    exact.chunkCapacity = 4u;
+    exact.numChunks = 2u;
+    exact.slotBytes = 96u;
+    exact.poolPayloadBudgetBytes = requiredPayloadBytes(2u, 4u, 96u);
+    CHECK_NOTHROW(exact.validate());
+    exact.poolPayloadBudgetBytes -= 1u;
+    CHECK_THROWS_AS(exact.validate(), std::invalid_argument);
+}

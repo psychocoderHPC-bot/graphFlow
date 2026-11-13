@@ -6,14 +6,20 @@
 
 #include "graphFlow/core/Chunk.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
+#include "graphFlow/core/PayloadSlotStorage.hpp"
 #include "graphFlow/flow/Payload.hpp"
 
 #include <concepts>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace graphFlow
 {
+    /** Canonical particle payload declared in `graphFlow/graph/Classifier.hpp`; only this exact
+     * type selects the particle SoA storage by default. */
+    struct Particle;
+
     /** Chunk-storage contract consumed by the scheduler and the public graph layer.
      *
      * The contract covers chunk geometry, ownership, generation checks, and reader leases. It
@@ -63,6 +69,9 @@ namespace graphFlow
         using Pool = ChunkPool<TDevice>;
         using IdView = typename Pool::IdView;
         using U32View = typename Pool::U32View;
+
+        /** Payload bytes of one particle slot; matches the SoA arrays of `ChunkPool`. */
+        static constexpr std::uint64_t slotBytes = payloadBytesPerSlot;
 
         ParticleStorage(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
             : m_pool{std::move(device), numChunks, chunkCapacity}
@@ -207,5 +216,18 @@ namespace graphFlow
     private:
         Pool m_pool;
     };
+
+    /** Default storage of a `Flow` payload.
+     *
+     * The canonical particle payload keeps the SoA `ParticleStorage` the kernels expect. Every
+     * other POD payload gets the generic `PayloadSlotStorage`, which treats the payload as one
+     * record per slot. Selecting the particle pool for an arbitrary payload would reinterpret its
+     * fields as ids, properties, weights and visits, so that binding is never the default.
+     */
+    template<typename TPayload, typename TDevice>
+    using DefaultStorage = std::conditional_t<
+        std::same_as<std::remove_cv_t<TPayload>, Particle>,
+        ParticleStorage<TDevice>,
+        PayloadSlotStorage<TPayload, TDevice>>;
 
 } // namespace graphFlow

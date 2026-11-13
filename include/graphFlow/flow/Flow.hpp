@@ -57,7 +57,7 @@ namespace graphFlow
      * and automatic pool derivation. The typed execution adapters are added in T3; `run()` therefore
      * validates the complete graph and then reports that execution is not available yet.
      */
-    template<typename TPayload, typename TDevice, typename TStorage = ParticleStorage<TDevice>>
+    template<typename TPayload, typename TDevice, typename TStorage = DefaultStorage<TPayload, TDevice>>
     class Flow
     {
         static_assert(Payload<TPayload>, "graphFlow::Flow: the payload type does not satisfy Payload");
@@ -72,8 +72,11 @@ namespace graphFlow
             std::constructible_from<TStorage, TDevice, std::uint32_t, std::uint32_t>,
             "graphFlow::Flow: the storage type must be constructible from (device, numChunks, chunkCapacity)");
         static_assert(
-            std::same_as<decltype(std::declval<TStorage&>().pool()), ChunkPool<TDevice>&>,
-            "graphFlow::Flow: the storage type must expose pool() as ChunkPool<TDevice>&");
+            ChunkStorage<TStorage>,
+            "graphFlow::Flow: the storage type must satisfy ChunkStorage");
+        static_assert(
+            requires { { TStorage::slotBytes } -> std::convertible_to<std::uint64_t>; },
+            "graphFlow::Flow: the storage type must expose static constexpr slotBytes");
 
         explicit Flow(TDevice device)
             : m_device{std::move(device)}
@@ -201,7 +204,7 @@ namespace graphFlow
 
             Config const config = resolveConfig(itemCount);
             m_storage = std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
-            m_runner = std::make_unique<GraphRunner<TDevice>>(m_device, m_storage->pool());
+            m_runner = std::make_unique<GraphRunner<TDevice, TStorage>>(m_device, *m_storage);
             m_runner->setBatchChunks(config.batchChunks);
 
             throw ExecutionUnavailable{
@@ -420,6 +423,7 @@ namespace graphFlow
             config.policyLiveParticlesPerChunk
                 = m_tuning.policyLiveParticlesPerChunk.value_or(config.policyLiveParticlesPerChunk);
             config.policyMemoryBudgetBytes = m_tuning.policyMemoryBudgetBytes.value_or(config.policyMemoryBudgetBytes);
+            config.slotBytes = TStorage::slotBytes;
 
             DevicePolicyOverrides overrides;
             overrides.chunkCapacity = m_tuning.chunkCapacity;
@@ -452,6 +456,6 @@ namespace graphFlow
         std::vector<NodeRecord> m_nodes;
         Tuning m_tuning;
         std::unique_ptr<TStorage> m_storage;
-        std::unique_ptr<GraphRunner<TDevice>> m_runner;
+        std::unique_ptr<GraphRunner<TDevice, TStorage>> m_runner;
     };
 } // namespace graphFlow
