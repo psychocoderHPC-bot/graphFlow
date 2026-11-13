@@ -238,10 +238,15 @@ explicit overrides, and rejects impossible combinations.
 
 The CLI resolves the policy in `examples/particle_feedback/Cli.hpp`. An absent
 `--chunk-size`, `--live-particles`, or `--tile-size` takes the policy value; an
-explicit value is passed through as an override. The policy is unit-tested with
-CPU properties and accelerator-shaped public fields. The accelerator-shaped
-test pins `C=8192`, `P=16384`, `T=128` on a 24 GiB device. The former `P=65536`
-pair is over budget and is rejected.
+explicit value is passed through as an override. An explicit `P` is rejected
+when its payload exceeds the budget; only the auto-derived default `P` is
+clamped. The policy is unit-tested with CPU properties and accelerator-shaped
+public fields. The accelerator-shaped test pins `C=8192`, `P=16384`, `T=128` on
+a nominal 24 GiB device. A device with the ECC-reduced A30 usable memory
+(`3,171,090,432 B` at a 1/8 budget) selects `P=16128`: an explicit `C=8192`
+with auto P also selects `P=16128`, while the default path budget-caps `C` to
+`8064` with the same P. Explicit `P=16384` and `P=65536` are over budget and are
+rejected.
 
 ## Current scheduler limits
 

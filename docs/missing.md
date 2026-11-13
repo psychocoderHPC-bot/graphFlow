@@ -55,10 +55,10 @@ resource or decision is missing.
   relies on full-chunk pipelining. Correctness must never depend on overlap.
 - [x] **P1: device-aware chunk sizing.** The device-aware policy is in main
   (T1) and the integrated T13 matrix is recorded (`docs/benchmarks.md`).
-  Open boundary: the policy default `P=16384` exceeds the measured A30 payload
-  budget of 3,171,090,432 B (needs 3,221,225,472 B), so the T13 `N=1e8` run
-  used an explicit `P=16128`; the default-policy clamp to the actual device
-  budget is in progress, tracked in Section 7.
+  Closed boundary: the policy default `P=16384` exceeds the measured A30
+  payload budget of 3,171,090,432 B (needs 3,221,225,472 B), so the T13 `N=1e8`
+  run used an explicit `P=16128`. The auto-derived policy now clamps `P` to
+  16,128; an explicit over-budget `P` still fails clearly.
 - [ ] **P1: reduce pool memory.** `S=P+K*R` at `C=8192`, `P=65536` allocates
   about 12.9 GB of payload storage while observed peak live is under 1000
   chunks. Implement a slot-based pool or a documented smaller `P`/memory budget
@@ -231,12 +231,12 @@ resource or decision is missing.
   `P`, or a memory-budget cap.
 - **Queue overlap:** the CUDA probe reports no overlap between distinct queues.
   Decide whether to investigate further or document the full-chunk strategy.
-- **Policy-default budget boundary:** the policy default `C=8192`, `P=16384`
-  exceeds the actual A30 payload budget of 3,171,090,432 B (it needs
-  3,221,225,472 B), so the T13 `N=1e8` run had to use an explicit `P=16128`
-  (3,170,893,824 B) to pass. The default-policy clamp to the measured device
-  budget is in progress; until it lands, an un-overridden CUDA run on this
-  device is rejected.
+- **Policy-default budget boundary:** resolved. The policy default
+  `C=8192`, `P=16384` exceeds the actual A30 payload budget of 3,171,090,432 B
+  (it needs 3,221,225,472 B), so the T13 `N=1e8` run used `P=16128`
+  (3,170,893,824 B). The auto-derived policy now clamps to the same P, so an
+  un-overridden CUDA run on this device starts; an explicit `P=16384` or
+  `P=65536` is rejected with a clear error.
 
 ## 8. Explicitly out of scope for v1
 

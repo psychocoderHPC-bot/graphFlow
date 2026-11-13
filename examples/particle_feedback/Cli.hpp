@@ -49,6 +49,7 @@ namespace graphFlow::cli
         graphFlow::Backend backend = graphFlow::Backend::cpu;
         graphFlow::particle::Parameters parameters{};
         graphFlow::DevicePolicy policy{};
+        bool liveParticlesExplicit = false; // P came from --live-particles
     };
 
     inline void usage(std::ostream& out)
@@ -159,9 +160,11 @@ namespace graphFlow::cli
 
     /** Validate the backend and resolve the device-aware `C`, `P` and `T`.
      *
-     * An explicit override is passed through unchanged; `makeDevicePolicy` rejects zero,
-     * over-limit and budget-infeasible combinations. With no override the returned values are the
-     * policy defaults, so `Parameters` always carries a complete configuration.
+     * An explicit `C` or `T` override is passed through unchanged. An explicit `P` is kept
+     * exactly and rejected when it exceeds the payload budget; only the auto-derived P is
+     * clamped. `makeDevicePolicy` rejects zero, over-limit and unsatisfiable combinations. With
+     * no override the returned values are the policy defaults, so `Parameters` always carries a
+     * complete configuration.
      */
     inline ResolvedOptions resolveOptions(
         Options const& options,
@@ -177,6 +180,7 @@ namespace graphFlow::cli
         overrides.tileSize = options.tileSize;
 
         resolved.policy = makeDevicePolicy(properties, options.numParticles, overrides, policyConfig);
+        resolved.liveParticlesExplicit = resolved.policy.liveParticlesExplicit;
 
         resolved.parameters.numParticles = options.numParticles;
         resolved.parameters.chunkSize = resolved.policy.chunkCapacity;
