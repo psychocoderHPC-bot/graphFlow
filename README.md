@@ -8,7 +8,18 @@ network and prints the sorted weight histogram.
 This slice has a validated CPU path and a runtime backend selector for CPU, CUDA and HIP:
 dense bins plus a large-bin shared-memory hash table, one input chunk per batch, one in-flight
 batch per node, a configured source-admission capacity P, a chunk pool bounded by P rather than
-by the total particle count N, and a startup queue-independence probe.
+by the total particle count N, and a startup queue-independence probe. Source admission requires
+`min(C, P, remaining)` particles per admitted chunk, so a full classify/plan/scatter round trip is
+amortised; consumer ready lists still dispatch partial chunks immediately.
+
+## Measured on hal
+
+A30, seed 42, `C=8192`, `P=65536`: `N=1e6` in 2.24 s and `N=1e8` in 187.5 s
+(about `5.33e5` particles/s), with exact histogram sums and a peak of 877 of 65542 live chunks.
+CPU `N=1e6` takes 19.45 s. CPU and CUDA CTest pass 42/42; ASAN/UBSAN pass 42/42. HIP compiles the
+full tree for `gfx90a`, but no AMD device is visible, so HIP execution is not claimed. The CUDA
+queue probe reports distinct queues with no observed overlap; the measured speedup comes from
+full-chunk pipelining, not cross-queue overlap. See `docs/acceptance.md` for the full record.
 
 ## Layout
 
