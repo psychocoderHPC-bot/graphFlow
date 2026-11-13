@@ -34,6 +34,13 @@ set(forbidden
     "ParticleStages.hpp"
 )
 
+set(graph_only_forbidden
+    "Config"
+    "numChunks"
+    "poolOutputReserveChunks"
+    "NodeId"
+)
+
 foreach(file IN LISTS user_files)
     set(path "${EXAMPLE_DIR}/${file}")
     if(NOT EXISTS "${path}")
@@ -50,6 +57,18 @@ foreach(file IN LISTS user_files)
             )
         endif()
     endforeach()
+    if(file STREQUAL "ParticleFeedback.hpp")
+        foreach(token IN LISTS graph_only_forbidden)
+            string(FIND "${content}" "${token}" position)
+            if(NOT position EQUAL -1)
+                message(
+                    FATAL_ERROR
+                    "example_public_api.cmake: '${file}' contains forbidden graph-configuration token "
+                    "'${token}'. The graph configuration must be derived by Flow."
+                )
+            endif()
+        endforeach()
+    endif()
 endforeach()
 
 message(STATUS "example_public_api: user code uses Flow handles and no low-level graph setup")
