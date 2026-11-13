@@ -48,10 +48,10 @@ docs/alpaka-api-map.md alpaka3 API selection and verification record
 CPU build:
 
 ```sh
-cmake -S /tmp/graphFlow -B /tmp/graphFlow/build-cpu -G Ninja \
+cmake -S . -B ./build-cpu -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace
-cmake --build /tmp/graphFlow/build-cpu -j 14
-ctest --test-dir /tmp/graphFlow/build-cpu --output-on-failure --no-tests=error
+cmake --build ./build-cpu -j 14
+ctest --test-dir ./build-cpu --output-on-failure --no-tests=error
 ```
 
 CUDA and HIP are separate build directories. Each option enables the matching CMake language
@@ -62,18 +62,18 @@ Configuration fails with an explicit message when the toolkit is missing.
 
 ```sh
 # CUDA, e.g. hal/A30
-cmake -S /tmp/graphFlow -B /tmp/graphFlow/build-cuda -G Ninja \
+cmake -S . -B ./build-cuda -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
   -DGRAPHFLOW_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80
-cmake --build /tmp/graphFlow/build-cuda -j 14
-ctest --test-dir /tmp/graphFlow/build-cuda --output-on-failure --no-tests=error
+cmake --build ./build-cuda -j 14
+ctest --test-dir ./build-cuda --output-on-failure --no-tests=error
 
 # HIP, e.g. an AMD runner (set the runner's gfx target)
-cmake -S /tmp/graphFlow -B /tmp/graphFlow/build-hip -G Ninja \
+cmake -S . -B ./build-hip -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
   -DGRAPHFLOW_ENABLE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx90a
-cmake --build /tmp/graphFlow/build-hip -j 14
-ctest --test-dir /tmp/graphFlow/build-hip --output-on-failure --no-tests=error
+cmake --build ./build-hip -j 14
+ctest --test-dir ./build-hip --output-on-failure --no-tests=error
 ```
 
 The CPU backend stays enabled in accelerator builds, so `--backend cpu` remains available.
