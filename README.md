@@ -193,14 +193,6 @@ Working-set control:
   reserve. The plan's `ceil(P/C) + K*R` is a lower bound that deadlocks under split
   feedback; the N=4097, C=128, P=256 run peaks at 259 live chunks, so the P term is
   necessary.
-- The payload budget is explicit and enforced. `requiredPayloadBytes(S, C)` returns the
-  checked `S*C*payloadBytesPerSlot` size, and `validatePayloadBudget` rejects a pool over
-  `Config::poolPayloadBudgetBytes` before allocation. The per-slot byte count is derived
-  from the actual pool array types; this document does not repeat the literal. The CLI
-  resolves the budget from the device policy budget plus the `K*R` output-credit reserve,
-  so the policy-derived defaults fit by construction and an oversized `C`/`P` override is
-  rejected. The fixed-capacity design still wastes `C-1` slots per fragmented chunk; a
-  slot-based pool remains the next memory optimization.
 - Non-source input chunks carry a pool reader lease from launch until the last stage's
   completion event. `ChunkPool::release` rejects a release while a lease is outstanding, so
   release-after-last-use is enforced rather than assumed.

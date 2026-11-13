@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ScalarModel.hpp"
 #include "TestDevice.hpp"
 
 #include "graphFlow/core/Config.hpp"
@@ -20,8 +21,9 @@ TEST_CASE("pool payload bytes are derived from the pool arrays", "[pool][budget]
 {
     using namespace graphFlow;
 
-    CHECK(payloadBytesPerSlot == sizeof(PoolIdValue) + 4u * sizeof(PoolU32Value));
-    CHECK(payloadBytesPerSlot == std::uint64_t{payloadBytesPerParticle});
+    CHECK(
+        payloadBytesPerSlot
+        == sizeof(PoolIdValue) + static_cast<std::uint64_t>(poolPayloadU32Arrays) * sizeof(PoolU32Value));
 
     CHECK(requiredPayloadBytes(0u, 0u) == 0u);
     CHECK(requiredPayloadBytes(0u, 7u) == 0u);
@@ -93,8 +95,58 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
     std::uint64_t const budget
         = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
     CHECK_NOTHROW(validatePayloadBudget(chunks, policy.chunkCapacity, budget));
-    // The budget replaces the former ~12.9 GB default with the documented accelerator cap.
-    CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) < std::uint64_t{4u} * 1024u * 1024u * 1024u);
+    // The budget replaces the former ~12.9 GB default with the documented pool default.
+    CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) < defaultPoolPayloadBudgetBytes);
+}
+
+TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[pool][budget][policy]")
+{
+    using namespace graphFlow;
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.multiProcessorCount = 108u;
+    properties.globalMemCapacityBytes = 24ull * 1024ull * 1024ull * 1024ull;
+
+    DevicePolicy const policy = makeDevicePolicy(properties, 100'000'000u);
+    CHECK(policy.chunkCapacity == 8192u);
+    CHECK(policy.liveParticles == 16384u);
+
+    Config config;
+    applyDevicePolicy(config, policy);
+    config.numParticles = 100'000'000u;
+    config.numChunks
+        = particle::derivePoolSize(config.numParticles, config.chunkCapacity, config.liveParticles, particle::FlowBins);
+    CHECK(config.poolPayloadBudgetBytes >= policy.memoryBudgetBytes);
+    CHECK(
+        config.poolPayloadBudgetBytes
+        == payloadBudgetWithReserve(
+            policy.memoryBudgetBytes,
+            policy.chunkCapacity,
+            config.poolOutputReserveChunks));
+    CHECK_NOTHROW(config.validate());
+
+    // A default Config that only copies the policy values also fits the documented default.
+    Config direct;
+    direct.chunkCapacity = policy.chunkCapacity;
+    direct.liveParticles = policy.liveParticles;
+    direct.numParticles = 100'000'000u;
+    direct.numChunks
+        = particle::derivePoolSize(direct.numParticles, direct.chunkCapacity, direct.liveParticles, particle::FlowBins);
+    CHECK_NOTHROW(direct.validate());
+
+    // The former C=8192, P=65536 pair still exceeds the default budget.
+    Config old;
+    old.chunkCapacity = 8192u;
+    old.liveParticles = 65536u;
+    old.numChunks = particle::derivePoolSize(
+        100'000'000u,
+        old.chunkCapacity,
+        old.liveParticles,
+        particle::FlowBins);
+    CHECK_THROWS_AS(old.validate(), std::invalid_argument);
 }
 
 TEST_CASE("the former 12.9 GB default pool is rejected", "[pool][budget]")
@@ -146,4 +198,28 @@ TEST_CASE("pool size keeps S=P+K*R for small P and N >> P", "[pool][budget]")
     CHECK(
         requiredPayloadBytes(1u, 128u) == std::uint64_t{128u} * payloadBytesPerSlot);
     CHECK_NOTHROW(validatePayloadBudget(1u, 128u, defaultPoolPayloadBudgetBytes));
+}
+
+TEST_CASE("bounded P with Q>1 completes without a full batch", "[pool][budget][batching]")
+{
+    using namespace graphFlow;
+
+    particle::Parameters parameters{};
+    parameters.numParticles = 4097u;
+    parameters.chunkSize = 128u;
+    parameters.liveParticles = 256u; // fragmented pool cannot always supply Q chunks
+    parameters.batchChunks = 8u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+    parameters.stallTimeoutMs = 10'000u;
+
+    particle::FeedbackResult const result = particle::runParticleFeedback(test::makeCpuDevice(), parameters);
+    test::ScalarOutcome const reference
+        = test::runScalarModel(parameters.seed, parameters.numParticles, parameters.maxVisits);
+
+    CHECK(result.histogram == particle::histogramOf(reference.weights));
+    CHECK(result.sunkParticles == parameters.numParticles);
+    // T5 (multi-chunk batching) is not in this tree: the runner still processes one chunk per
+    // batch and only accepts Q. After rebasing onto T5, add an assertion on the observed batch
+    // sizes (opportunistic, never requiring the full Q when the pool is fragmented).
 }

@@ -40,7 +40,7 @@ namespace graphFlow
      * 24 GiB device this selects `C=8192`, `P=16384`, about 3 GiB of payload instead of the
      * previous 12.9 GB `C=8192`, `P=65536` pool. `Config::policyMemoryBudgetBytes` overrides it.
      */
-    inline constexpr std::uint64_t acceleratorMemoryBudgetCapBytes = defaultPoolPayloadBudgetBytes;
+    inline constexpr std::uint64_t acceleratorMemoryBudgetCapBytes = 3ull * 1024ull * 1024ull * 1024ull;
 
     /** Bytes per entry of the per-tile shared-memory hash table.
      *
@@ -402,11 +402,21 @@ namespace graphFlow
         return policyConfig;
     }
 
-    /** Copy the chosen C, P and T into a `Config`. */
+    /** Copy the chosen C, P, T and the augmented pool budget into a `Config`.
+     *
+     * The policy memory budget covers the live working set `P*C`. The fixed-capacity pool also
+     * holds the `K*R` output-credit chunks, so `poolPayloadBudgetBytes` becomes the policy budget
+     * plus the payload of `Config::poolOutputReserveChunks` chunks. This keeps the documented
+     * default (`applyDevicePolicy`, then `derivePoolSize`, then `Config::validate`) consistent.
+     */
     inline void applyDevicePolicy(Config& config, DevicePolicy const& policy)
     {
         config.chunkCapacity = policy.chunkCapacity;
         config.liveParticles = policy.liveParticles;
         config.tileSize = policy.tileSize;
+        config.poolPayloadBudgetBytes = payloadBudgetWithReserve(
+            policy.memoryBudgetBytes,
+            policy.chunkCapacity,
+            config.poolOutputReserveChunks);
     }
 } // namespace graphFlow

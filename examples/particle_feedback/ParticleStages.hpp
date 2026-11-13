@@ -64,14 +64,9 @@ namespace graphFlow::particle
         std::uint64_t policyBudgetBytes,
         std::uint32_t chunkCapacity)
     {
-        if(policyBudgetBytes == 0u)
-            throw std::invalid_argument{"graphFlow::particle: policy payload budget must be non-zero"};
         std::uint64_t const reserveChunks = static_cast<std::uint64_t>(TransformNodes)
             * outputChunkBound(chunkCapacity, chunkCapacity, FlowBins);
-        std::uint64_t const reserveBytes = requiredPayloadBytes(reserveChunks, chunkCapacity);
-        if(policyBudgetBytes > std::numeric_limits<std::uint64_t>::max() - reserveBytes)
-            throw std::overflow_error{"graphFlow::particle: pool payload budget overflows 64 bits"};
-        return policyBudgetBytes + reserveBytes;
+        return payloadBudgetWithReserve(policyBudgetBytes, chunkCapacity, reserveChunks);
     }
 
     /** Checked number of tiles needed by a chunk.

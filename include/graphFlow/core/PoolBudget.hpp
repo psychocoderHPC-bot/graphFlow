@@ -32,14 +32,25 @@ namespace graphFlow
     inline constexpr std::uint64_t payloadBytesPerSlot
         = sizeof(PoolIdValue) + static_cast<std::uint64_t>(poolPayloadU32Arrays) * sizeof(PoolU32Value);
 
+    /** Conservative output-credit reserve in chunks for the reference graph.
+     *
+     * The example graph has `K=3` transform nodes and `R=2` output chunks per transform, so the
+     * documented defaults need six reserve chunks. Eight leaves a small margin and fits the
+     * fixed-capacity pool budget of the programmatic default. Callers with a larger `K*R` set
+     * `Config::poolOutputReserveChunks` explicitly.
+     */
+    inline constexpr std::uint64_t defaultPoolOutputReserveChunks = 8u;
+
     /** Default total payload budget of the fixed-capacity pool in bytes.
      *
      * This is the documented accelerator default and the value used when a caller does not
-     * resolve a tighter device-policy budget. It replaces the previous accidental ~12.9 GB pool
-     * (`C=8192`, `P=65536`) with a hard cap; the example resolves the device policy budget plus
-     * the graph's `K*R` output-credit reserve instead.
+     * resolve a tighter device-policy budget. It is larger than the T1 accelerator policy cap so
+     * the policy-derived `C=8192`, `P=16384` pair still fits after the `K*R` output-credit
+     * reserve is added. It replaces the previous accidental ~12.9 GB pool (`C=8192`, `P=65536`)
+     * with a hard cap; the example resolves the device policy budget plus the exact `K*R`
+     * reserve instead.
      */
-    inline constexpr std::uint64_t defaultPoolPayloadBudgetBytes = 3ull * 1024ull * 1024ull * 1024ull;
+    inline constexpr std::uint64_t defaultPoolPayloadBudgetBytes = 4ull * 1024ull * 1024ull * 1024ull;
 
     /** Payload bytes of `numChunks * chunkCapacity` slots, checked for 64-bit overflow.
      *
@@ -56,6 +67,25 @@ namespace graphFlow
         if(slots != 0u && payloadBytesPerSlot > std::numeric_limits<std::uint64_t>::max() / slots)
             throw std::overflow_error{"graphFlow::requiredPayloadBytes: byte count overflows 64 bits"};
         return slots * payloadBytesPerSlot;
+    }
+
+    /** Add the payload bytes of `reserveChunks` output-credit chunks to a policy budget.
+     *
+     * The device policy budget covers the live working set `P*C`; the fixed-capacity pool also
+     * holds the `K*R` output-credit chunks. The addition is checked and a zero policy budget is
+     * rejected so the cap cannot be disabled accidentally.
+     */
+    inline std::uint64_t payloadBudgetWithReserve(
+        std::uint64_t policyBudgetBytes,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks)
+    {
+        if(policyBudgetBytes == 0u)
+            throw std::invalid_argument{"graphFlow::payloadBudgetWithReserve: policy budget must be non-zero"};
+        std::uint64_t const reserveBytes = requiredPayloadBytes(reserveChunks, chunkCapacity);
+        if(policyBudgetBytes > std::numeric_limits<std::uint64_t>::max() - reserveBytes)
+            throw std::overflow_error{"graphFlow::payloadBudgetWithReserve: budget overflows 64 bits"};
+        return policyBudgetBytes + reserveBytes;
     }
 
     /** Reject a fixed-capacity pool whose payload arrays exceed `budgetBytes`.
