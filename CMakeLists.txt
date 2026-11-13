@@ -83,6 +83,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_philox.cpp
         tests/integration/test_dense_bins.cpp
+        tests/integration/test_hash_bins.cpp
         tests/integration/test_particle_feedback.cpp
         tests/integration/test_scripted_routing.cpp
         tests/integration/test_pressure.cpp

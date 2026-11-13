@@ -20,10 +20,10 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
 | Kernel launch | `ThreadSpec`, `FrameSpec`, `KernelBundle`, `enqueue` | `onHost/ThreadSpec.hpp`, `onHost/FrameSpec.hpp`, `onHost/Queue.hpp:129-200`, `KernelBundle.hpp` | `queue.enqueue(ThreadSpec{1u, threads}, KernelBundle{kernel, args...})` | CPU | `ThreadSpec` gives exact block/thread control, which the one-block-per-chunk design needs. `FrameSpec` is intentionally not used because it does not guarantee block boundaries. |
 | Block extent on the host backend | `cpu::Serial`, `cpu::OmpBlocks` | `api/host/exec/Serial.hpp:36-44`, `api/host/exec/OmpBlocks.hpp:38-46` | `GraphRunner::threadsPerBlock(device, T)` returns 1 for `api::Host` | CPU | The host executors throw unless `numThreads.product() == 1`. Kernels therefore derive the tile width from `acc.getExtentsOf(origin::block, unit::threads)`, so they are correct for 1 or T real threads and all threads reach every barrier. |
 | Index mapping | `makeIdxMap`, `worker::threadsInBlock`, `IdxRange` | `onAcc/interface.hpp:40-170`, `onAcc/WorkerGroup.hpp:118-140`, `onAcc/range.hpp` | `onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{n})` | CPU | Used for every strided loop: shared table zeroing, flush, and particle loops. No hardcoded block size. |
-| Atomics | `atomicAdd`, `atomicExch`, `scope::Block`, `scope::Device` | `onAcc/atomic.hpp:25-130`, `onAcc/scope.hpp`, `api/host/atomic.hpp` | `onAcc::atomicAdd(acc, ptr, 1u, onAcc::scope::block)` and `scope::device` | CPU | Shared per-tile histogram uses block scope; `counts[bin]`, `next[bin]` and the capped counter use device scope. `scope::system` is rejected by `static_assert` and is not used. |
-| Shared memory | `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads` | `onAcc/Acc.hpp:132-200` | `onAcc::declareSharedMdArray<uint32_t, uniqueId()>(acc, CVec<uint32_t, B>{})`, `onAcc::syncBlockThreads(acc)` | CPU | `B = 2` and `B = 64` are covered by tests. The return value is stored by value, as the API documentation requires. Three tables of `B` words per scatter block. No dynamic shared memory. |
+| Atomics | `atomicAdd`, `atomicExch`, `atomicCas`, `scope::Block`, `scope::Device` | `onAcc/atomic.hpp:25-190`, `onAcc/scope.hpp`, `api/host/atomic.hpp:211-235` | `onAcc::atomicAdd(acc, ptr, 1u, onAcc::scope::block)`, `onAcc::atomicCas(acc, ptr, compare, value, onAcc::scope::block)`, `scope::device` | CPU | Shared per-tile histogram and the hash table key/count use block scope; `counts[bin]`, `next[bin]` and the capped counter use device scope. `atomicCas` is the only writer of a hash key (`0xFFFFFFFF` to bin). `scope::system` is rejected by `static_assert` and is not used. |
+| Shared memory | `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads` | `onAcc/Acc.hpp:132-200`, `mem/MdSpanArray.hpp:45-218` | `onAcc::declareSharedMdArray<uint32_t, uniqueId()>(acc, CVec<uint32_t, B>{})`, `onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(acc, CVec<uint32_t, 2*T>{})`, `onAcc::declareSharedVar<uint32_t, uniqueId()>(acc)`, `onAcc::syncBlockThreads(acc)` | CPU | `declareSharedMdArray` is used with `uint32_t` and with the trivially copyable `HashBinEntry` struct. The hash table is a compile-time-sized array (`2*T`, optionally `4*T`) and is reinitialised by the block. Dynamic shared memory (`getDynSharedMem`) is available but not needed for this fixed size; the dense path keeps its three `B`-word tables. The return value is stored by value. |
 | RNG | `Philox4x32x10`, `PhiloxSingle`, `skip`, `advanceState` | `rand/engine/philox/philox.hpp:31-75`, `PhiloxSingle.hpp:60-140`, `PhiloxBaseCommon.hpp:55-90` | `alpaka::rand::engine::Philox4x32x10(seed, subsequence, offset)` and `operator()` | CPU | `graphFlow::rng::drawAt` constructs at offset zero and advances, because the constructor offset is not equivalent to advancing (see below). No project RNG algorithm. |
-| In-kernel scan/sort | `scan`, `reduce`, `transform`, `sort` | `onHost/algo/scan.hpp`, `onHost/algo/reduce.hpp`, `onHost/algo/transform.hpp` | **Not used** | n/a | These enqueue kernels; they are not in-kernel collectives. The dense path needs no scan and no sort. Any future device-side stable grouping is project code. |
+| In-kernel scan/sort | `scan`, `reduce`, `transform`, `sort` | `onHost/algo/scan.hpp`, `onHost/algo/reduce.hpp`, `onHost/algo/transform.hpp` | **Not used** | n/a | These enqueue kernels; they are not in-kernel collectives. The dense path and the large-bin hash path need no in-kernel scan and no sort: the hash path groups by linear probing with `atomicCas` and reserves contiguous ranges with `atomicAdd`. Ballot/shuffle are not used either, so nothing depends on a hardcoded warp size. Any future device-side stable grouping is project code. |
 
 ## Project-owned code and why
 
@@ -33,7 +33,8 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
 | `outputChunkBound`, `planDenseBins`, `buildDenseTable` | Graph policy: exact output slot assignment belongs to the graph, not to alpaka. |
 | `GraphRunner` (ready deques, routing, credits, termination) | alpaka3 has no graph, DAG or scheduler. |
 | `rng::decisionOffset`, `rng::drawAt` | Encodes the particle-id to Philox-offset mapping and normalises the pinned constructor-offset behaviour. |
-| `ClassifyKernel`, `ScatterKernel`, `GenerateKernel`, `SinkKernel` | Typed kernels for the graph; they use only alpaka primitives for launch, indexing, atomics and shared memory. |
+| `DenseBinTable`, `HashBinTable`, `HashBinEntry`, `hashInsert`, `hashFind` | Compile-time bin-table policy and the open-addressing helpers used by the large-bin path. |
+| `ClassifyKernel`, `ScatterKernel`, `HashClassifyKernel`, `HashScatterKernel`, `GenerateKernel`, `SinkKernel` | Typed kernels for the graph; they use only alpaka primitives for launch, indexing, atomics and shared memory. |
 | Scalar reference model (tests only) | Independent oracle; no device code. |
 
 ## Pinned-behaviour notes
@@ -73,3 +74,13 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
 8. **Exception teardown.** A throwing hook drains in-flight batches, releases each owned
    input and queued chunk once, and rethrows. `TransformStage` releases output chunks it
    acquired before a plan or finalise error.
+9. **Large-bin hash path.** `HashBinTable<T, factor>` sizes its shared table at the next power of
+   two of `factor * T` entries (`factor = 2` by default). `HashClassifyKernel` inserts with
+   `atomicCas` on the key and `atomicAdd` on the count, flushes each occupied entry to the global
+   `total[bin]`, and uses `scope::block` for shared memory and `scope::device` for `total[bin]`.
+   `HashScatterKernel` rebuilds the table from the stored `binIds`, reserves
+   `next[bin] = atomicAdd(next[bin], count, device)` per entry, and hands out `localRank` with a
+   block-scope `atomicAdd`. Both kernels process one whole chunk per block, so the table must have
+   at least as many entries as the chunk's distinct bins. A full table is a hard `BatchError`;
+   there is no dense fallback. The dense path remains the correctness reference and is compared
+   against the hash path in `tests/integration/test_hash_bins.cpp`.

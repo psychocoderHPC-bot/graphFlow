@@ -8,8 +8,11 @@
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/graph/Classifier.hpp"
+#include "graphFlow/graph/BinTable.hpp"
 #include "graphFlow/graph/ClassifyKernel.hpp"
 #include "graphFlow/graph/DenseBinTable.hpp"
+#include "graphFlow/graph/HashClassifyKernel.hpp"
+#include "graphFlow/graph/HashScatterKernel.hpp"
 #include "graphFlow/graph/Kernels.hpp"
 #include "graphFlow/graph/ScatterKernel.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
@@ -196,7 +199,7 @@ namespace graphFlow::particle
     };
 
     /** Transform stage: classify, plan output chunks on the host, scatter. */
-    template<typename TDevice, typename TPolicy>
+    template<typename TDevice, typename TPolicy, typename TBinTable = DenseBinTable>
     class TransformStage
     {
     public:
@@ -251,18 +254,37 @@ namespace graphFlow::particle
 
             // total[B] + status word; both start at zero for this batch.
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
-            queue.enqueue(
-                alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                alpaka::KernelBundle{
-                    ClassifyKernel<TPolicy>{m_policy},
-                    m_pool.ids(),
-                    m_pool.properties(),
-                    m_pool.weights(),
-                    m_pool.visits(),
-                    m_pool.binIds(),
-                    m_counts,
-                    static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                    chunk.fill});
+            if constexpr(TBinTable::isHash)
+            {
+                queue.enqueue(
+                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                    alpaka::KernelBundle{
+                        HashClassifyKernel<TPolicy, TBinTable>{m_policy},
+                        m_pool.ids(),
+                        m_pool.properties(),
+                        m_pool.weights(),
+                        m_pool.visits(),
+                        m_pool.binIds(),
+                        m_counts,
+                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
+                        chunk.fill,
+                        m_bins});
+            }
+            else
+            {
+                queue.enqueue(
+                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                    alpaka::KernelBundle{
+                        ClassifyKernel<TPolicy>{m_policy},
+                        m_pool.ids(),
+                        m_pool.properties(),
+                        m_pool.weights(),
+                        m_pool.visits(),
+                        m_pool.binIds(),
+                        m_counts,
+                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
+                        chunk.fill});
+            }
             // The event the scheduler arms after this call covers the metadata copy.
             alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
         }
@@ -343,26 +365,53 @@ namespace graphFlow::particle
                 alpaka::onHost::memcpy(queue, m_table, m_tableHost);
                 alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
 
-                queue.enqueue(
-                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                    alpaka::KernelBundle{
-                        ScatterKernel<TPolicy>{m_policy},
-                        m_pool.ids(),
-                        m_pool.properties(),
-                        m_pool.weights(),
-                        m_pool.visits(),
-                        m_pool.binIds(),
-                        m_pool.ids(),
-                        m_pool.properties(),
-                        m_pool.weights(),
-                        m_pool.visits(),
-                        m_table,
-                        m_next,
-                        m_counts,
-                        m_capped,
-                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                        m_capacity,
-                        chunk.fill});
+                if constexpr(TBinTable::isHash)
+                {
+                    queue.enqueue(
+                        alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                        alpaka::KernelBundle{
+                            HashScatterKernel<TPolicy, TBinTable>{m_policy},
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_pool.binIds(),
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_table,
+                            m_next,
+                            m_counts,
+                            m_capped,
+                            static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
+                            m_capacity,
+                            chunk.fill,
+                            m_bins});
+                }
+                else
+                {
+                    queue.enqueue(
+                        alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                        alpaka::KernelBundle{
+                            ScatterKernel<TPolicy>{m_policy},
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_pool.binIds(),
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_table,
+                            m_next,
+                            m_counts,
+                            m_capped,
+                            static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
+                            m_capacity,
+                            chunk.fill});
+                }
 
                 // The completion event must cover the status word and the range counters.
                 alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
