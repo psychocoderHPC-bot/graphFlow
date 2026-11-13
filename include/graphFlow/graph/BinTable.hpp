@@ -20,8 +20,16 @@ namespace graphFlow
         static constexpr bool isHash = false;
     };
 
-    /** Key value marking an unused slot of the large-bin hash table. */
-    inline constexpr std::uint32_t hashEmptyKey = 0xFFFF'FFFFu;
+    /** Key value marking an unused slot of the large-bin hash table.
+     *
+     * An unscoped enum constant is an integral constant expression and is usable from device code.
+     * A namespace-scope `inline constexpr` variable is not visible to nvcc device compilation
+     * without an extra device symbol, which broke the CUDA build.
+     */
+    enum : std::uint32_t
+    {
+        hashEmptyKey = 0xFFFF'FFFFu
+    };
 
     /** One open-addressing slot of the per-block hash table.
      *
