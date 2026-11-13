@@ -4,8 +4,8 @@
 # Known limitations
 
 This page records the current limits of the integrated tree. It separates
-missing work from platform limits. The full work list is `docs/plan.md` and
-`missing.md`.
+missing work from platform limits. The full work list is
+[docs/plan.md](plan.md) and [docs/missing.md](missing.md).
 
 ## Batch depth is unbounded
 
