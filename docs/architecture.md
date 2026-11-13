@@ -262,4 +262,4 @@ rejected.
 - Each batch uses one `FrameSpec` launch for classify and one for scatter. The
   frame count is capped, so a block may process several tiles.
 - A single transform output plan per batch.
-- No generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` model.
+- The generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is host-only; the example still assembles its graph by hand.

@@ -303,7 +303,7 @@ The full design is in [architecture](docs/architecture.md).
 - The fixed-capacity pool is budget-capped, but a slot-based pool remains future
   work.
 - One in-flight batch per node.
-- No generic graph API yet.
+- The generic graph API core is host-only and not yet used by the example.
 - No CI runners or `.github/workflows` yet.
 - The hash path is CPU-tested only. The dense/hash threshold is static.
 - The integrated performance run is recorded in

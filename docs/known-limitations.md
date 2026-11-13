@@ -69,13 +69,15 @@ Each node has one in-flight batch. A transform batch can carry up to Q chunks,
 but independent batches of the same node do not overlap. A bounded submitted
 depth per node is not implemented.
 
-## No generic graph API
+## Generic graph API is host-only and not used by the example
 
-The tree has a host runner and reusable classify, scatter, pool, and queue
-primitives. It does not have the planned `NodeBase`/`Graph`/`GraphBuilder`/
-`RouteTable` model with typed payload contracts, source/transform/sink roles,
-per-bin routing, and feedback edges as first-class objects. The
-particle-feedback example still assembles the graph by hand.
+The tree has the `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core with
+source/transform/sink roles, per-bin routing, and feedback edges as ordinary
+routes. Node objects are caller-owned and non-owning, the graph is immutable
+after `build()`, and v1 allows one source and no routes into that source.
+Typed payload contracts, runtime graph mutation, join, and broadcast remain
+open. The particle-feedback example still assembles its graph by hand; porting
+it is the next PR.
 
 ## No CI runners
 
