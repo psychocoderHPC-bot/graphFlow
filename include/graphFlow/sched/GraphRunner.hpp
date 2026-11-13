@@ -160,26 +160,32 @@ namespace graphFlow
         /** Threads per block for a node launch.
          *
          * The host backend executes exactly one real thread per block (`api/host/exec/Serial.hpp`
-         * rejects any other block extent), so the CPU path is single-threaded per block while the
-         * kernel keeps the tile and barrier structure required by accelerators.
+         * rejects any other block extent), so `ThreadSpec{1, T}` maps to `{1, 1}` on `api::Host`
+         * while the kernel keeps the tile and barrier structure required by accelerators.
          *
-         * CUDA/HIP execution is not enabled in this slice. The non-host branch is nevertheless
-         * clamped to the device's `maxThreadsPerBlock` so a future accelerator build cannot submit
-         * an invalid block shape.
+         * Accelerator launches use the requested extent but never exceed
+         * `DeviceProperties::maxThreadsPerBlock`. An invalid extent (zero, or larger than the
+         * device limit) is rejected here instead of being handed to `ThreadSpec`.
          */
         [[nodiscard]] static std::uint32_t threadsPerBlock(TDevice const& device, std::uint32_t requested)
         {
+            if(requested == 0u)
+                throw std::invalid_argument{"graphFlow: threads per block must be nonzero"};
             if constexpr(std::same_as<ALPAKA_TYPEOF(device.getApi()), alpaka::api::Host>)
             {
                 alpaka::unused(device);
-                alpaka::unused(requested);
                 return 1u;
             }
             else
             {
-                // Not exercised by this CPU slice; clamp before a CUDA/HIP build is enabled.
                 std::uint32_t const limit = device.getDeviceProperties().maxThreadsPerBlock;
-                return requested < limit ? requested : limit;
+                if(limit == 0u)
+                    throw std::runtime_error{"graphFlow: device reports maxThreadsPerBlock == 0"};
+                if(requested > limit)
+                    throw std::invalid_argument{
+                        "graphFlow: requested " + std::to_string(requested)
+                        + " threads per block exceeds maxThreadsPerBlock " + std::to_string(limit)};
+                return requested;
             }
         }
 

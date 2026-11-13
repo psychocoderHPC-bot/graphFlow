@@ -4,11 +4,15 @@
 
 #include "ParticleFeedback.hpp"
 
+#include "graphFlow/core/Backend.hpp"
+#include "graphFlow/detail/QueueProbe.hpp"
+
 #include <alpaka/alpaka.hpp>
 
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,9 +27,9 @@ namespace
 
     void usage(std::ostream& out)
     {
-        out << "usage: graphFlow_particle_feedback --backend cpu [--particles N] [--chunk-size C]\n"
-               "                                    [--live-particles P] [--seed S] [--max-visits M]\n"
-               "                                    [--device D]\n";
+        out << "usage: graphFlow_particle_feedback --backend cpu|cuda|hip [--device D]\n"
+               "                                    [--particles N] [--chunk-size C]\n"
+               "                                    [--live-particles P] [--seed S] [--max-visits M]\n";
     }
 
     std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -109,13 +113,18 @@ namespace
     }
 
     template<typename TDevice>
-    int run(Options const& options, TDevice device)
+    int run(
+        Options const& options,
+        graphFlow::Backend backend,
+        TDevice device,
+        std::string const& deviceName)
     {
         graphFlow::particle::FeedbackResult const result
             = graphFlow::particle::runParticleFeedback(device, options.parameters);
 
-        std::cout << "# graphFlow_particle_feedback backend=" << options.backend
+        std::cout << "# graphFlow_particle_feedback backend=" << graphFlow::backendName(backend)
                   << " device=" << options.parameters.deviceIndex
+                  << " device-name=" << deviceName
                   << " particles=" << options.parameters.numParticles
                   << " chunk-size=" << options.parameters.chunkSize
                   << " live-particles=" << result.liveParticles
@@ -144,27 +153,46 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    if(options.backend != "cpu")
+    graphFlow::Backend backend;
+    try
     {
-        std::cerr << "graphFlow_particle_feedback: backend '" << options.backend
-                  << "' is not available. This build implements the CPU vertical slice only; CUDA and HIP"
-                     " execution are not implemented yet (the GRAPHFLOW_ENABLE_CUDA/HIP options exist but no"
-                     " device code is compiled).\n";
+        backend = graphFlow::requireBackend(options.backend);
+    }
+    catch(graphFlow::BackendError const& error)
+    {
+        std::cerr << "graphFlow_particle_feedback: " << error.what() << '\n';
+        usage(std::cerr);
         return 2;
     }
 
     try
     {
-        auto selector = alpaka::onHost::makeDeviceSelector(
-            alpaka::onHost::DeviceSpec{alpaka::api::host, alpaka::deviceKind::cpu});
-        if(!selector.isAvailable() || options.parameters.deviceIndex >= selector.getDeviceCount())
-        {
-            std::cerr << "graphFlow_particle_feedback: device " << options.parameters.deviceIndex
-                      << " is not available (found " << selector.getDeviceCount() << " host devices)\n";
-            return 2;
-        }
-        auto device = selector.makeDevice(options.parameters.deviceIndex);
-        return run(options, device);
+        return graphFlow::withBackendDevice(
+            backend,
+            options.parameters.deviceIndex,
+            [&](auto device, graphFlow::Backend selected, std::string const& deviceName)
+            {
+                std::cout << "# selected-backend=" << graphFlow::backendName(selected)
+                          << " selected-device=" << options.parameters.deviceIndex
+                          << " device-name=" << deviceName << '\n';
+                graphFlow::QueueProbeResult const probe = graphFlow::probeQueueIndependence(device);
+                std::cout << "# queue-probe overlap=" << graphFlow::toString(probe.overlap)
+                          << " queues-alias=" << (probe.queuesAlias ? "yes" : "no")
+                          << " second-before-first="
+                          << (probe.secondCompletedWhileFirstInFlight ? "yes" : "no")
+                          << " poll-us=" << probe.pollDurationUs << '\n';
+                return run(options, selected, device, deviceName);
+            });
+    }
+    catch(graphFlow::BackendUnavailable const& error)
+    {
+        std::cerr << "graphFlow_particle_feedback: " << error.what() << '\n';
+        return 2;
+    }
+    catch(std::out_of_range const& error)
+    {
+        std::cerr << "graphFlow_particle_feedback: " << error.what() << '\n';
+        return 2;
     }
     catch(std::exception const& error)
     {

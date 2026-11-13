@@ -15,8 +15,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(GRAPHFLOW_ENABLE_CUDA "Enable the CUDA backend (not implemented in this slice)" OFF)
-option(GRAPHFLOW_ENABLE_HIP "Enable the HIP backend (not implemented in this slice)" OFF)
+option(GRAPHFLOW_ENABLE_CUDA "Compile the CUDA backend (sets alpaka_DEP_CUDA=ON)" OFF)
+option(GRAPHFLOW_ENABLE_HIP "Compile the HIP backend (sets alpaka_DEP_HIP=ON)" OFF)
 option(GRAPHFLOW_ENABLE_OPENMP "Enable the OpenMP executor" OFF)
 option(GRAPHFLOW_BUILD_TESTS "Build the Catch2 test suite" ON)
 option(GRAPHFLOW_BUILD_EXAMPLES "Build the particle-feedback example" ON)
@@ -34,11 +34,57 @@ if(NOT EXISTS "${GRAPHFLOW_ALPAKA_SOURCE_DIR}/include/alpaka/alpaka.hpp")
     )
 endif()
 
-if(GRAPHFLOW_ENABLE_CUDA AND NOT CMAKE_CUDA_COMPILER)
-    message(FATAL_ERROR "GRAPHFLOW_ENABLE_CUDA=ON but no CUDA compiler was found")
+if(GRAPHFLOW_ENABLE_CUDA AND GRAPHFLOW_ENABLE_HIP)
+    message(
+        FATAL_ERROR
+        "GRAPHFLOW_ENABLE_CUDA and GRAPHFLOW_ENABLE_HIP are mutually exclusive in one build; use one build "
+        "directory per backend"
+    )
 endif()
-if(GRAPHFLOW_ENABLE_HIP AND NOT CMAKE_HIP_COMPILER)
-    message(FATAL_ERROR "GRAPHFLOW_ENABLE_HIP=ON but no HIP compiler was found")
+
+# Accelerator languages and the matching alpaka dependency options must be established before
+# add_subdirectory(alpaka) so alpaka builds its CUDA/HIP targets and alpaka_finalize() compiles
+# the graphFlow sources for that backend. The CPU backend stays enabled in accelerator builds.
+include(CheckLanguage)
+
+if(GRAPHFLOW_ENABLE_CUDA)
+    check_language(CUDA)
+    if(NOT CMAKE_CUDA_COMPILER)
+        message(
+            FATAL_ERROR
+            "GRAPHFLOW_ENABLE_CUDA=ON but no CUDA compiler was found. Install the CUDA toolkit (nvcc) or "
+            "set CMAKE_CUDA_COMPILER."
+        )
+    endif()
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 80 CACHE STRING "CUDA architectures for graphFlow" FORCE)
+    endif()
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_EXTENSIONS OFF)
+    set(alpaka_DEP_CUDA ON CACHE BOOL "Enable the CUDA dependency in alpaka" FORCE)
+    set(alpaka_CUDA_NvidiaGpu ON CACHE BOOL "Enable api::cuda/deviceKind::nvidiaGpu in alpaka" FORCE)
+endif()
+
+if(GRAPHFLOW_ENABLE_HIP)
+    check_language(HIP)
+    if(NOT CMAKE_HIP_COMPILER)
+        message(
+            FATAL_ERROR
+            "GRAPHFLOW_ENABLE_HIP=ON but no HIP compiler was found. Install ROCm (amdclang++) or set "
+            "CMAKE_HIP_COMPILER."
+        )
+    endif()
+    if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
+        set(CMAKE_HIP_ARCHITECTURES gfx90a CACHE STRING "HIP architectures for graphFlow" FORCE)
+    endif()
+    enable_language(HIP)
+    set(CMAKE_HIP_STANDARD 20)
+    set(CMAKE_HIP_STANDARD_REQUIRED ON)
+    set(CMAKE_HIP_EXTENSIONS OFF)
+    set(alpaka_DEP_HIP ON CACHE BOOL "Enable the HIP dependency in alpaka" FORCE)
+    set(alpaka_HIP_AmdGpu ON CACHE BOOL "Enable api::hip/deviceKind::amdGpu in alpaka" FORCE)
 endif()
 
 # alpaka3 is consumed from the pinned source tree; the project only uses its public API.
@@ -79,6 +125,7 @@ if(GRAPHFLOW_BUILD_TESTS)
     add_executable(
         graphFlow_tests
         tests/unit/test_reservation.cpp
+        tests/unit/test_backend.cpp
         tests/unit/test_chunk_pool.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_philox.cpp
