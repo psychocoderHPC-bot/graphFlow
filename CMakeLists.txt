@@ -136,6 +136,9 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_pressure.cpp
         tests/integration/test_failure_paths.cpp
     )
+    if(GRAPHFLOW_ENABLE_CUDA)
+        target_sources(graphFlow_tests PRIVATE tests/unit/test_cuda_kernel.cpp)
+    endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(
         graphFlow_tests
