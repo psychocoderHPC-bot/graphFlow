@@ -5,10 +5,12 @@
 #pragma once
 
 #include "graphFlow/core/Chunk.hpp"
+#include "graphFlow/core/PoolBudget.hpp"
 
 #include <alpaka/alpaka.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -20,33 +22,33 @@ namespace graphFlow
      * Particle `i` of chunk `k` lives at slot `k * chunkCapacity + i` of every payload array.
      * Payload memory is allocated once with `onHost::alloc<T>(device, Vec{numChunks * C})`; the hot
      * path never allocates. Device views are public so kernels can be launched against the pool.
+     *
+     * Kernels index payload arrays with 32-bit slot arithmetic (`chunkIndex * C + tileOffset + i`),
+     * so the constructor rejects a pool whose total slot count exceeds `UINT32_MAX` instead of
+     * letting `numChunks * C` wrap. This caps `numChunks` for large `C`; the limit is the supported
+     * pool size, not a silent truncation.
      */
     template<typename TDevice>
     class ChunkPool
     {
     public:
-        using IdView = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint64_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
-        using U32View = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using IdView
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolIdValue>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using U32View
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         ChunkPool(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
             : m_numChunks{numChunks}
             , m_chunkCapacity{chunkCapacity}
-            , m_ids{alpaka::onHost::alloc<std::uint64_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
-            , m_properties{
-                  alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
-            , m_weights{
-                  alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
-            , m_visits{
-                  alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
-            , m_binIds{
-                  alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
+            , m_slots{checkedSlotCount(numChunks, chunkCapacity)}
+            , m_ids{alpaka::onHost::alloc<PoolIdValue>(device, alpaka::Vec{m_slots})}
+            , m_properties{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_weights{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_visits{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_binIds{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_generations(numChunks, 0u)
             , m_leases(numChunks, 0u)
         {
-            if(numChunks == 0u)
-                throw std::invalid_argument{"graphFlow::ChunkPool: numChunks must be non-zero"};
-            if(chunkCapacity == 0u)
-                throw std::invalid_argument{"graphFlow::ChunkPool: chunkCapacity must be non-zero"};
             m_free.reserve(numChunks);
             // Deterministic free list order; the last entry is handed out first.
             for(std::uint32_t i = 0u; i < numChunks; ++i)
@@ -217,8 +219,25 @@ namespace graphFlow
         }
 
     private:
+        /** Validated total slot count; kernels address slots with a 32-bit index. */
+        [[nodiscard]] static std::uint64_t checkedSlotCount(
+            std::uint32_t numChunks,
+            std::uint32_t chunkCapacity)
+        {
+            if(numChunks == 0u)
+                throw std::invalid_argument{"graphFlow::ChunkPool: numChunks must be non-zero"};
+            if(chunkCapacity == 0u)
+                throw std::invalid_argument{"graphFlow::ChunkPool: chunkCapacity must be non-zero"};
+            std::uint64_t const slots = static_cast<std::uint64_t>(numChunks) * chunkCapacity;
+            if(slots > std::numeric_limits<std::uint32_t>::max())
+                throw std::overflow_error{
+                    "graphFlow::ChunkPool: numChunks * chunkCapacity exceeds the 32-bit slot index"};
+            return slots;
+        }
+
         std::uint32_t m_numChunks;
         std::uint32_t m_chunkCapacity;
+        std::uint64_t m_slots;
         IdView m_ids;
         U32View m_properties;
         U32View m_weights;

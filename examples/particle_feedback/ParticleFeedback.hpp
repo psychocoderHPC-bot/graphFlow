@@ -17,12 +17,6 @@
 
 namespace graphFlow::particle
 {
-    /** Bin count shared by Filter, A and B in this example. */
-    inline constexpr std::uint32_t FlowBins = 2u;
-
-    /** Number of transform nodes in the particle-feedback graph. */
-    inline constexpr std::uint32_t TransformNodes = 3u;
-
     /** Default source-admission capacity P when the caller does not configure one.
      *
      * P is a working-set knob, not a function of N: capping it at `8*C` means the pool is sized by
@@ -42,15 +36,21 @@ namespace graphFlow::particle
      * split-routing feedback graph: every transform may split one input chunk into one chunk per
      * bin, and repeated feedback can fragment the P live particles into as many as P chunks
      * (one particle per chunk). The pool must therefore hold one chunk per live particle plus the
-     * `K*R` output credits of the live transform batches:
+     * output credits of the live transform batches:
      *
-     *     S = P + K*R,   R = outputChunkBound(C, C, B),   K = TransformNodes
+     *     R = outputChunkBound(C, C, B)
+     *     S = P + K*R,   K = TransformNodes
+     *
+     * The pool uses the single-chunk R, not a Q-scaled bound. A transform batch reserves the
+     * adaptive `outputChunkBound(sum(fill), C, B)` for the chunks it actually takes and only starts
+     * when the credits cover it; under fragmentation the scheduler shrinks the batch prefix instead
+     * of enlarging the pool. Q therefore never changes S.
      *
      * Source admission caps the fill of every admitted chunk at `P - liveParticles`, so the number
      * of live particles (and therefore the number of data-carrying chunks) never exceeds P. The
      * result is independent of N; `P == 0` selects `defaultLiveParticles`. `tests/integration/
      * test_pressure.cpp` pins the N=4097, C=128, P=256 case and records why the smaller formula
-     * deadlocks.
+     * deadlocks; `tests/integration/test_batching.cpp` pins a bounded-P Q=8 batch inside S=P+K*R.
      */
     inline std::uint32_t derivePoolSize(
         std::uint64_t numParticles,
@@ -67,9 +67,14 @@ namespace graphFlow::particle
             live = 1u;
 
         std::uint64_t const perTransform = outputChunkBound(chunkSize, chunkSize, maxBins);
-        std::uint64_t const chunks = live + static_cast<std::uint64_t>(TransformNodes) * perTransform;
-        if(chunks > std::numeric_limits<std::uint32_t>::max())
+        std::uint64_t const maxChunks = std::numeric_limits<std::uint32_t>::max();
+        if(perTransform > maxChunks)
+            throw std::overflow_error{"graphFlow: one transform reserve exceeds 2^32 chunks"};
+        std::uint64_t const transformCredits
+            = static_cast<std::uint64_t>(TransformNodes) * perTransform;
+        if(live > maxChunks || transformCredits > maxChunks - live)
             throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
+        std::uint64_t const chunks = live + transformCredits;
         return static_cast<std::uint32_t>(chunks == 0u ? 1u : chunks);
     }
 
@@ -80,10 +85,15 @@ namespace graphFlow::particle
         return typename Runner::Hooks{
             [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
             { stage.launch(queue, batch); },
-            [&stage](typename Runner::Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
-            { return stage.advance(queue, chunk, allocated); },
-            [&stage](ChunkDescriptor const& chunk, std::vector<ChunkDescriptor>& outputs)
-            { stage.finish(chunk, outputs); }};
+            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
+            { return stage.advance(queue, batch, allocated); },
+            [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
+            { stage.finish(batch, outputs); },
+            [&stage]()
+            {
+                if constexpr(requires { stage.abort(); })
+                    stage.abort();
+            }};
     }
 
     /** Build and run the Generate -> Filter -> {A, B} -> Sink feedback graph. */
@@ -108,6 +118,11 @@ namespace graphFlow::particle
         config.maxVisits = parameters.maxVisits;
         config.numParticles = parameters.numParticles;
         config.batchChunks = parameters.batchChunks;
+        // The programmatic default leaves the documented Config cap in place; the CLI passes the
+        // resolved device-policy budget plus the K*R output-credit reserve. Validation rejects a
+        // pool whose S*C payload exceeds this budget before any allocation happens.
+        if(parameters.poolPayloadBudgetBytes != 0u)
+            config.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
         config.validate();
 
         std::uint32_t const threads = GraphRunner<TDevice>::threadsPerBlock(device, config.tileSize);
@@ -131,9 +146,27 @@ namespace graphFlow::particle
         ProcessBPolicy processBPolicy{parameters.seed, parameters.maxVisits};
 
         GenerateStage<TDevice> generate{pool, parameters.seed, threads};
-        TransformStage<TDevice, FilterPolicy> filter{device, pool, filterPolicy, capped, config.tileSize};
-        TransformStage<TDevice, ProcessAPolicy> processA{device, pool, processAPolicy, capped, config.tileSize};
-        TransformStage<TDevice, ProcessBPolicy> processB{device, pool, processBPolicy, capped, config.tileSize};
+        TransformStage<TDevice, FilterPolicy> filter{
+            device,
+            pool,
+            filterPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
+        TransformStage<TDevice, ProcessAPolicy> processA{
+            device,
+            pool,
+            processAPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
+        TransformStage<TDevice, ProcessBPolicy> processB{
+            device,
+            pool,
+            processBPolicy,
+            capped,
+            config.tileSize,
+            config.batchChunks};
         SinkStage<TDevice> sink{pool, result, threads};
 
         GraphRunner<TDevice> runner{device, pool};
@@ -151,6 +184,7 @@ namespace graphFlow::particle
         alpaka::unused(nFilter, nProcessA, nProcessB, nSink);
 
         runner.setSource(nGenerate, parameters.numParticles, config.liveParticles);
+        runner.setBatchChunks(config.batchChunks);
         runner.setStallTimeout(std::chrono::milliseconds{parameters.stallTimeoutMs});
         SchedulerStats const stats = runner.run();
 

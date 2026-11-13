@@ -128,6 +128,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_backend.cpp
         tests/unit/test_cli_contract.cpp
         tests/unit/test_chunk_pool.cpp
+        tests/unit/test_pool_budget.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_philox.cpp
         tests/integration/test_dense_bins.cpp
@@ -136,6 +137,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_scripted_routing.cpp
         tests/integration/test_pressure.cpp
         tests/integration/test_failure_paths.cpp
+        tests/integration/test_batching.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
         target_sources(graphFlow_tests PRIVATE tests/unit/test_cuda_kernel.cpp)

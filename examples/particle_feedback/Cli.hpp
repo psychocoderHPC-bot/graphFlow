@@ -26,7 +26,8 @@ namespace graphFlow::cli
      *
      * `chunkSize`, `liveParticles` and `tileSize` are optional so the resolver can tell an
      * explicit override from a value derived by the device policy. `batchChunks` is parsed and
-     * validated here but only consumed by the batching task; the current runner ignores it.
+     * validated here and forwarded to the transform nodes as the maximum number of ready input
+     * chunks per batch.
      */
     struct Options
     {
@@ -185,6 +186,10 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
+        // The policy budget bounds the live set P*C; the fixed-capacity pool additionally holds
+        // the K*R transform output-credit chunks, so resolve the total pool budget here.
+        resolved.parameters.poolPayloadBudgetBytes
+            = particle::poolPayloadBudgetBytes(resolved.policy.memoryBudgetBytes, resolved.policy.chunkCapacity);
         return resolved;
     }
 } // namespace graphFlow::cli

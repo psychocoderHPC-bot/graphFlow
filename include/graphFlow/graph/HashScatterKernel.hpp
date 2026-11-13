@@ -6,6 +6,7 @@
 
 #include "graphFlow/graph/BinTable.hpp"
 #include "graphFlow/graph/Classifier.hpp"
+#include "graphFlow/graph/TileDescriptor.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -15,8 +16,9 @@ namespace graphFlow
 {
     /** Large-bin scatter kernel for one tile of one input chunk.
      *
-     * The launch uses one thread block per tile, so the block index selects the slice
-     * `[tileOffset, tileOffset + count)` this block owns. It rebuilds the per-bin counts from the
+     * The launch uses one thread block per `TileDescriptor` of the batch, so the block index
+     * selects a tile of a chunk and the descriptor supplies `chunkIndex`, `tileOffset` and
+     * `count`. It rebuilds the per-bin counts from the
      * stored `binIds` into a per-block hash table, reserves one device-scope range
      * `base[bin] = atomicAdd(&next[bin], count, device)` per occupied entry, resets the per-entry
      * `localRank`, and then lets every particle claim `rank = atomicAdd(&localRank, 1, block)`.
@@ -50,10 +52,8 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto next,
             alpaka::concepts::IMdSpan auto counts,
             alpaka::concepts::IMdSpan auto capped,
-            std::uint32_t chunkIndex,
+            alpaka::concepts::IMdSpan auto tiles,
             std::uint32_t chunkCapacity,
-            std::uint32_t fill,
-            std::uint32_t tileSize,
             std::uint32_t maxBins) const
         {
             using namespace alpaka;
@@ -63,11 +63,10 @@ namespace graphFlow
                 CVec<std::uint32_t, TBinTable::entries>{});
             auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
 
-            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
-            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
-            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
-            std::uint32_t const inBase = chunkIndex * chunkCapacity;
+            auto const [block] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            TileDescriptor const tile = tiles[static_cast<std::uint32_t>(block)];
+            std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+            std::uint32_t const count = tile.count;
 
             for(auto [entry] : onAcc::makeIdxMap(
                     acc,
@@ -84,7 +83,7 @@ namespace graphFlow
             // Rebuild the per-bin counts from the stored bin ids; never recompute the classifier.
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const bin = binIds[inBase + tileOffset + i];
+                std::uint32_t const bin = binIds[inBase + i];
                 if(bin >= maxBins)
                 {
                     onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
@@ -125,7 +124,7 @@ namespace graphFlow
 
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const slotIn = inBase + tileOffset + i;
+                std::uint32_t const slotIn = inBase + i;
                 std::uint32_t const bin = binIds[slotIn];
                 if(bin >= maxBins)
                     continue;

@@ -62,16 +62,21 @@ namespace
         return typename Runner::Hooks{
             [&, base](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
             {
-                recorded = batch.chunk.handle;
+                recorded = batch.chunk().handle;
                 base.launch(queue, batch);
             },
-            [&, base](typename Runner::Queue const& queue, graphFlow::ChunkDescriptor const& chunk, std::uint32_t& allocated)
+            [&, base](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
             {
                 CHECK(pool.isLive(recorded));
-                return base.advance(queue, chunk, allocated);
+                return base.advance(queue, batch, allocated);
             },
-            [base](graphFlow::ChunkDescriptor const& chunk, std::vector<graphFlow::ChunkDescriptor>& outputs)
-            { base.finish(chunk, outputs); }};
+            [base](typename Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+            { base.finish(batch, outputs); },
+            [base]()
+            {
+                if(base.abort)
+                    base.abort();
+            }};
     }
 } // namespace
 

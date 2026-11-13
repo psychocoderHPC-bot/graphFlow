@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/graph/Classifier.hpp"
+#include "graphFlow/graph/TileDescriptor.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -12,20 +13,23 @@
 
 namespace graphFlow
 {
-    /** Dense scatter kernel for one tile of one input chunk.
+    /** Dense scatter kernel for one batch of input chunks.
      *
-     * The launch uses one thread block per tile, so the block index selects the tile; the block
-     * then:
-     *  1. rebuilds the per-bin counts from the stored `binIds` (the classifier is not recomputed),
+     * The launch uses one thread block per `TileDescriptor`, so the block index selects a tile of a
+     * chunk. The descriptor supplies `chunkIndex`, `tileOffset` and `count`; the block then:
+     *  1. rebuilds the per-bin counts from the stored `binIds` of that tile (the classifier is not
+     *     recomputed),
      *  2. reserves one device-scope range `base[bin] = atomicAdd(&next[bin], count, device)` per
      *     nonempty bin,
      *  3. assigns `j = base[bin] + localRank` with a block-scope shared cursor,
      *  4. resolves `outChunk = table[T_B + table[bin] + j / C]` and `offset = j % C`,
      *  5. applies the policy payload mutation and writes the payload fields to the output slot.
      *
-     * Ranges of different tiles in the same bin are disjoint; a range may span chunk boundaries.
-     * `counts[T_B]` is the status word and is set to 1 on a checked weight overflow. Every thread
-     * reaches every block barrier, including inactive tail lanes.
+     * `next[bin]` is shared by all descriptors of the batch, so ranges of different tiles and of
+     * different input chunks are disjoint; a range may span several output chunk boundaries. The
+     * output table `[binBase[B], chunkIndex[R]]` is planned across the whole batch, exactly as the
+     * single-chunk path did per chunk. `counts[T_B]` is the status word and is set to 1 on a checked
+     * weight overflow. Every thread reaches every block barrier, including inactive tail lanes.
      */
     template<typename TPolicy, std::uint32_t T_B = TPolicy::maxBins>
     struct ScatterKernel
@@ -49,10 +53,8 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto next,
             alpaka::concepts::IMdSpan auto counts,
             alpaka::concepts::IMdSpan auto capped,
-            std::uint32_t chunkIndex,
-            std::uint32_t chunkCapacity,
-            std::uint32_t fill,
-            std::uint32_t tileSize) const
+            alpaka::concepts::IMdSpan auto tiles,
+            std::uint32_t chunkCapacity) const
         {
             using namespace alpaka;
 
@@ -62,11 +64,10 @@ namespace graphFlow
             auto tileCursor
                 = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
 
-            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
-            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
-            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
-            std::uint32_t const inBase = chunkIndex * chunkCapacity;
+            auto const [block] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            TileDescriptor const tile = tiles[static_cast<std::uint32_t>(block)];
+            std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+            std::uint32_t const count = tile.count;
 
             for(auto [bin] :
                 onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
@@ -75,7 +76,7 @@ namespace graphFlow
 
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const bin = binIds[inBase + tileOffset + i];
+                std::uint32_t const bin = binIds[inBase + i];
                 onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
             }
             onAcc::syncBlockThreads(acc);
@@ -94,7 +95,7 @@ namespace graphFlow
 
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const slotIn = inBase + tileOffset + i;
+                std::uint32_t const slotIn = inBase + i;
                 std::uint32_t const bin = binIds[slotIn];
                 std::uint32_t const rank = onAcc::atomicAdd(acc, &tileCursor[bin], std::uint32_t{1u}, onAcc::scope::block);
                 std::uint32_t const j = tileBase[bin] + rank;
