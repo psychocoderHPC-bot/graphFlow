@@ -39,7 +39,7 @@ run selection:
   --live-particles LIST    source-admission capacities P
   --batch-chunks LIST      Q values
   --seeds LIST             seeds S
-  --matrix PRESET          smoke (default), acceptance, or full
+  --matrix PRESET          smoke (default), acceptance, fwk394, or full
   --timeout S              per-run wall-clock limit in seconds (default: preset)
 
 reference hook:
@@ -141,8 +141,8 @@ done
 [[ -n "$out_dir" ]] || die "missing required --out DIR"
 
 case "$matrix" in
-    smoke|acceptance|full) ;;
-    *) die "--matrix must be smoke, acceptance, or full (got '$matrix')" ;;
+    smoke|acceptance|fwk394|full) ;;
+    *) die "--matrix must be smoke, acceptance, fwk394, or full (got '$matrix')" ;;
 esac
 
 # Presets only fill values the caller did not override. Smoke is deliberately
@@ -158,10 +158,23 @@ case "$matrix" in
         [[ "$timeout_set" == "1" ]] || timeout_s="120"
         ;;
     acceptance)
+        # T7 budget: 24 GiB / 8 = 3 GiB, and 8192 * 16384 * 24 B == 3 GiB.
         [[ "$backend_set" == "1" ]] || backend_list="cuda"
         [[ "$n_set" == "1" ]] || n_list="100000000"
         [[ "$c_set" == "1" ]] || c_list="8192"
-        [[ "$p_set" == "1" ]] || p_list="65536"
+        [[ "$p_set" == "1" ]] || p_list="16384"
+        [[ "$q_set" == "1" ]] || q_list="1"
+        [[ "$seeds_set" == "1" ]] || seeds_list="42"
+        [[ "$timeout_set" == "1" ]] || timeout_s="1800"
+        ;;
+    fwk394)
+        # Requested 2080 Ti pair. On an 11 GiB card T7's 1/8 policy budget is
+        # 1.375 GiB, so this ~1.5 GiB pair is the documented negative case;
+        # override --live-particles 8192 for the passing fwk394 run.
+        [[ "$backend_set" == "1" ]] || backend_list="cuda"
+        [[ "$n_set" == "1" ]] || n_list="100000000"
+        [[ "$c_set" == "1" ]] || c_list="4096"
+        [[ "$p_set" == "1" ]] || p_list="16384"
         [[ "$q_set" == "1" ]] || q_list="1"
         [[ "$seeds_set" == "1" ]] || seeds_list="42"
         [[ "$timeout_set" == "1" ]] || timeout_s="1800"
@@ -351,7 +364,7 @@ run_case()
     local name log err timing hist_raw hist_sorted
     local rc="0" wall="NA" maxrss="NA" pps="NA" timing_line=""
     local selected="NA" policy="NA" pool="NA" peak_live="NA" peak_reserved="NA"
-    local hist_rows="0" hist_sum="0" status failure
+    local hist_rows="0" hist_sum="0" status failure stderr_first=""
     local has_hist="0" pool_line=""
 
     case_index=$(( case_index + 1 ))
@@ -430,7 +443,23 @@ run_case()
         if (( rc == 124 || rc == 137 )); then
             failure="exit=$rc (timeout ${timeout_s}s)"
         else
+            # Prefer the example's graphFlow:: exception line. A T7 budget
+            # rejection is an std::invalid_argument that exits 2 and prints
+            # "graphFlow_particle_feedback: graphFlow::DevicePolicy: ...".
+            # Otherwise keep the first non-blank stderr line and skip the
+            # abnormal-termination lines added by /usr/bin/time.
+            stderr_first="$(grep -m1 'graphFlow::' "$err" 2>/dev/null || true)"
+            if [[ -z "$stderr_first" ]]; then
+                stderr_first="$(grep -m1 -v -e '^[[:space:]]*$' \
+                    -e '^Command exited with non-zero status' \
+                    -e '^Command terminated by signal' "$err" 2>/dev/null || true)"
+            fi
+            stderr_first="${stderr_first#graphFlow_particle_feedback: }"
+            stderr_first="${stderr_first//$'\t'/ }"
             failure="exit=$rc"
+            if [[ -n "$stderr_first" ]]; then
+                failure="${failure}: ${stderr_first:0:200}"
+            fi
         fi
     fi
     if [[ "$selected" == "NA" ]]; then

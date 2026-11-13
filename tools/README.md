@@ -2,9 +2,10 @@
 
 `tools/bench_matrix.sh` runs `graphFlow_particle_feedback` over a repeatable
 matrix and writes a machine-readable CSV plus a Markdown summary. The driver
-never builds the project, never runs `N = 1e8` unless the `acceptance` preset is
-selected, and never invents a bandwidth number. This document contains no
-measured result; every number in a report comes from a real run of the binary.
+never builds the project, never runs `N = 1e8` unless the `acceptance` or
+`fwk394` preset is selected, and never invents a bandwidth number. This
+document contains no measured result; every number in a report comes from a real
+run of the binary.
 
 ## Requirements
 
@@ -30,7 +31,7 @@ measured result; every number in a report comes from a real run of the binary.
 | `--live-particles LIST` | source-admission capacities `P` |
 | `--batch-chunks LIST` | `Q` values |
 | `--seeds LIST` | seeds `S` (also accepts `0`) |
-| `--matrix smoke\|acceptance\|full` | preset, default `smoke` |
+| `--matrix smoke\|acceptance\|fwk394\|full` | preset, default `smoke` |
 | `--timeout S` | per-run wall-clock limit in seconds |
 | `--copy-reference [CMD]` | optional copy-bandwidth hook, see below |
 
@@ -44,16 +45,54 @@ across dimensions; the driver runs the full Cartesian product.
 | Preset | Backends | N | C | P | Q | Seeds | Timeout | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `smoke` | `cpu` | 4097, 100000 | 128 | 1024 | 1 | 42 | 120 s | default; small and local-safe |
-| `acceptance` | `cuda` | 100000000 | 8192 | 65536 | 1 | 42 | 1800 s | the documented A30 acceptance shape; never the default |
-| `full` | `cpu,cuda` | 100000, 1000000 | 1024, 8192 | 2048, 8192 | 1, 2, 8 | 42, 7 | 900 s | long sweep; stays below the acceptance working set |
+| `acceptance` | `cuda` | 100000000 | 8192 | 16384 | 1 | 42 | 1800 s | A30 acceptance shape; exactly 3.0 GiB |
+| `fwk394` | `cuda` | 100000000 | 4096 | 16384 | 1 | 42 | 1800 s | requested 2080 Ti pair; over budget on 11 GiB, see below |
+| `full` | `cpu,cuda` | 100000, 1000000 | 1024, 8192 | 2048, 8192 | 1, 2, 8 | 42, 7 | 900 s | long sweep; over-budget cases are recorded as negatives |
 
-The `acceptance` preset is sized for a 24 GiB A30. The pool bound is
-`S = P + K*R` with `K = 3` and `R = 2`, so `C = 8192, P = 65536` allocates
-about 12.9 GB of payload storage. That does not fit an 11 GiB RTX 2080 Ti.
-Reduce `P` and `C` on that card, or run `smoke`. The `full` preset stops at
-`P = 8192` so its largest pool is about 1.6 GB; it never uses the `P = 65536`
-acceptance working set. A CPU-only build needs `--backend cpu` with `full`,
-because the preset also schedules CUDA cases.
+## Payload budget (T7)
+
+T7 derives the accelerator policy budget as `min(device memory / 8, 3 GiB)`.
+`makeDevicePolicy` rejects a pair whose `P*C*24 bytes` exceeds that budget with:
+
+```text
+graphFlow::DevicePolicy: liveParticles and chunkCapacity exceed the payload memory budget
+```
+
+The example then adds the `K*R` output-credit reserve to the pool budget, and
+`Config::validate` checks `S*C*24` against it. A pool overrun uses the
+`graphFlow::Config: ... exceeding the payload budget of ... bytes` message. The
+example prints either message after `graphFlow_particle_feedback: ` and exits
+2. The driver records `status=fail`, `exit_status=2`, and the first stderr line
+in the CSV `failure` column; the full text stays in `logs/<case>.err`. A matrix
+that contains a negative case exits 1 at the end.
+
+| Host | Policy budget | Pair | Payload | Result |
+| --- | ---: | --- | ---: | --- |
+| A30 24 GiB | 3 GiB | C=8192, P=16384 | 3 GiB | passes at the boundary |
+| A30 24 GiB | 3 GiB | C=8192, P=65536 | ~12.9 GB | rejected, canonical negative case |
+| fwk394 11 GiB | 1.375 GiB | C=4096, P=16384 | 1.5 GiB | rejected |
+| fwk394 11 GiB | 1.375 GiB | C=4096, P=8192 | 0.75 GiB | passes |
+
+`--matrix acceptance` is the A30 pair. The former `P=65536` pair remains
+reachable through `--live-particles 65536`; run it deliberately to record the
+rejection:
+
+```sh
+mkdir -p /tmp/gf-bench-negative
+env CUDA_VISIBLE_DEVICES=0 \
+  bash tools/bench_matrix.sh \
+    --binary build-cuda/graphFlow_particle_feedback \
+    --backend cuda --device 0 --matrix acceptance \
+    --live-particles 65536 --out /tmp/gf-bench-negative
+```
+
+Expect the case to exit 2 with the DevicePolicy message and the driver to exit
+1. That is a successful negative test, not a working-set result.
+
+The CPU backend has a 16 MiB host policy budget. GPU-sized explicit pairs in
+`full` therefore fail on CPU and are recorded as T7 negatives. Use
+`--backend cuda` on a device whose 1/8 budget covers the pair, or narrow the
+C/P lists, for an all-pass sweep.
 
 ## Outputs
 
@@ -84,8 +123,11 @@ Wall time is the whole process, including device init and the queue probe.
 A case fails on a nonzero exit, a missing `# selected-backend=` header, a
 missing `# pool-chunks=` header, a missing `# weight,count` header, or a
 histogram sum that differs from `N`. The driver continues through the matrix so
-the report is complete, marks each failed case, and exits `1` at the end. Exit
-`2` is a usage, path, or validation error.
+the report is complete, marks each failed case, and exits `1` at the end. A
+nonzero example exit appends the first stderr line to the `failure` column, so
+a T7 budget rejection carries the DevicePolicy message in the CSV. The example
+exits `2` for invalid arguments including that rejection; driver-level usage
+and path errors also exit `2`, but before any case runs.
 
 Each case is checked for the selected backend, the pool counters, the policy
 text, and the histogram evidence before it can be marked `ok`.
@@ -143,9 +185,11 @@ env CUDA_VISIBLE_DEVICES=0 \
 
 ## fwk394 (RTX 2080 Ti, sm_75, 11 GiB)
 
-The default acceptance working set does not fit 11 GiB. Use the smoke preset,
-or a 1e8 run with a reduced working set as shown. The reduced run is not the
-A30 acceptance configuration and must be labelled as such in any report.
+T7 gives this card a 1.375 GiB policy budget. The `fwk394` preset is
+C=4096, P=16384 (about 1.6 GB, 1.5 GiB), so that pair is the documented
+over-budget negative case on this card. The passing 1e8 run overrides P to 8192
+(about 0.75 GiB). Neither value is the A30 acceptance configuration, so label
+any fwk394 report accordingly.
 
 ```sh
 cd <graphFlow checkout>
@@ -155,8 +199,8 @@ cmake -S . -B build-fwk394 -G Ninja \
   -DGRAPHFLOW_BUILD_TESTS=OFF
 cmake --build build-fwk394 -j 14
 
-mkdir -p /tmp/gf-bench-fwk394
 # pick an idle GPU from nvidia-smi; this example uses index 0
+mkdir -p /tmp/gf-bench-fwk394-smoke
 env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
   bash tools/bench_matrix.sh \
@@ -164,14 +208,24 @@ env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
     --backend cuda --device 0 \
     --matrix smoke --out /tmp/gf-bench-fwk394-smoke
 
-# 1e8 with a working set that fits 11 GiB (about 1.6 GB payload)
+# requested fwk394 pair: expected T7 negative case on 11 GiB
+mkdir -p /tmp/gf-bench-fwk394-negative
 env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
   bash tools/bench_matrix.sh \
     --binary build-fwk394/graphFlow_particle_feedback \
-    --backend cuda --device 0 --matrix acceptance \
-    --chunk-sizes 4096 --live-particles 16384 \
-    --timeout 1800 --out /tmp/gf-bench-fwk394
+    --backend cuda --device 0 \
+    --matrix fwk394 --out /tmp/gf-bench-fwk394-negative
+
+# passing 1e8 run on 11 GiB: same C, P reduced to 8192
+mkdir -p /tmp/gf-bench-fwk394
+env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
+  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+  bash tools/bench_matrix.sh \
+    --binary build-fwk394/graphFlow_particle_feedback \
+    --backend cuda --device 0 \
+    --matrix fwk394 --live-particles 8192 \
+    --out /tmp/gf-bench-fwk394
 ```
 
 `CUDA_VISIBLE_DEVICES` is the only supported device selector. Set it to the
@@ -215,8 +269,8 @@ generated on a shared host is a recorded baseline.
 
 The example parses `--batch-chunks Q` but the current runner still processes one
 chunk per batch (`Cli.hpp` and `ParticleStages.hpp` say so). Until T5 lands,
-`Q = 1, 2, 8` execute the same path and a Q sweep only repeats work. A
-`rows_equal=yes` across Q values proves that the flag is accepted; it does not
-prove batch-level planning, output fill levels, or exact chunk-boundary
-crossings. The pair key keeps Q so the same driver becomes meaningful once T5
+`Q = 1, 2, 8` execute the same path and a Q sweep only repeats work. `Q > 1`
+rows are not batching evidence yet. A `rows_equal=yes` across Q values proves
+that the flag is accepted; it does not prove batch-level planning, output fill
+levels, or exact chunk-boundary crossings. The pair key keeps Q so the same driver becomes meaningful once T5
 wires the value into the scheduler.
