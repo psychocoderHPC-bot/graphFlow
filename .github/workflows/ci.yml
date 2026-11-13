@@ -43,7 +43,15 @@ jobs:
           sudo apt-get install --yes --no-install-recommends cmake ninja-build catch2
           cmake --version
           ninja --version
-          dpkg-query -W -f='${Version}\n' catch2
+          catch2_version="$(dpkg-query -W -f='${Version}' catch2)"
+          echo "Catch2 ${catch2_version}"
+          case "${catch2_version}" in
+            "${CATCH2_APT_VERSION}"*) ;;
+            *)
+              echo "::error::expected Catch2 ${CATCH2_APT_VERSION}, got ${catch2_version}"
+              exit 1
+              ;;
+          esac
 
       - name: Clone pinned alpaka
         run: |
@@ -100,7 +108,15 @@ jobs:
           sudo apt-get install --yes --no-install-recommends cmake ninja-build catch2
           cmake --version
           ninja --version
-          dpkg-query -W -f='${Version}\n' catch2
+          catch2_version="$(dpkg-query -W -f='${Version}' catch2)"
+          echo "Catch2 ${catch2_version}"
+          case "${catch2_version}" in
+            "${CATCH2_APT_VERSION}"*) ;;
+            *)
+              echo "::error::expected Catch2 ${CATCH2_APT_VERSION}, got ${catch2_version}"
+              exit 1
+              ;;
+          esac
 
       - name: Clone pinned alpaka
         run: |
@@ -378,23 +394,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for .clang-format
-        id: preflight
+      - name: Require .clang-format
         run: |
-          if [ -f .clang-format ]; then
-            echo "ready=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "ready=false" >> "${GITHUB_OUTPUT}"
-            echo "::warning::.clang-format is not present yet; the format gate becomes active when it lands"
-            {
-              echo "### Format gate inactive"
-              echo ""
-              echo ".clang-format has not landed yet. The job installs nothing and skips the check."
-            } >> "${GITHUB_STEP_SUMMARY}"
+          set -euo pipefail
+          if [ ! -f .clang-format ]; then
+            echo "::error::.clang-format is missing; the format gate cannot run"
+            exit 1
           fi
 
       - name: Install clang-format 20.1.8
-        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -406,7 +414,6 @@ jobs:
           "${RUNNER_TEMP}/clang-format-venv/bin/clang-format" --version
 
       - name: Verify clang-format version
-        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           version="$(clang-format --version)"
@@ -420,7 +427,6 @@ jobs:
           esac
 
       - name: Check formatting
-        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files 'include' 'examples' 'tests' | grep -E '\.(cpp|hpp)$')
@@ -437,23 +443,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for license metadata
-        id: preflight
+      - name: Require license metadata
         run: |
-          if [ -f LICENSES/MPL-2.0.txt ]; then
-            echo "ready=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "ready=false" >> "${GITHUB_OUTPUT}"
-            echo "::warning::LICENSES/MPL-2.0.txt is not present yet; the REUSE gate becomes active when it lands"
-            {
-              echo "### REUSE gate inactive"
-              echo ""
-              echo "The license file and SPDX headers have not landed yet. The job installs nothing and skips the check."
-            } >> "${GITHUB_STEP_SUMMARY}"
+          set -euo pipefail
+          if [ ! -f LICENSES/MPL-2.0.txt ]; then
+            echo "::error::LICENSES/MPL-2.0.txt is missing; the REUSE gate cannot run"
+            exit 1
           fi
 
       - name: Install reuse 6.3.0
-        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -472,7 +470,6 @@ jobs:
           esac
 
       - name: Lint
-        if: steps.preflight.outputs.ready == 'true'
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/reuse-venv/bin/reuse" lint

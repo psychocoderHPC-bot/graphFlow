@@ -17,11 +17,12 @@ concurrency cancellation for superseded runs.
 | `format` | `ubuntu-latest` | clang-format 20.1.8 | dry-run over `include/`, `examples/`, `tests/` | 15 min |
 | `reuse` | `ubuntu-latest` | reuse 6.3.0 | `reuse lint` | 15 min |
 
-The CUDA, TSAN, and HIP jobs require registered self-hosted runners with exactly
-the labels shown. The workflow does not emulate those runners, does not fall back
-to another host, and does not substitute the CPU backend. `hal` and `fwk394` are
-the two hosts used during the handover; runner registration for the `fwk394`
-label is external to the repository.
+The CUDA, TSAN, and HIP jobs require external self-hosted runners with the exact
+labels shown. This workflow neither creates nor emulates those runners. Until the
+labels are registered and reachable, treat the three jobs as non-required checks
+and do not mark them required in branch protection. `hal` and `fwk394` are the
+handover hosts measured for these jobs; that is not proof that a GitHub Actions
+runner is registered under any label.
 
 ## Pins
 
@@ -36,7 +37,8 @@ The older `4780dc786a2eb1a5452a1c66d94a8b442d411ab8` reference pin is not used:
 the repository records the newer validated alpaka tree above. Change the
 `ALPAKA_REF` workflow variable only after a full CPU/CUDA/HIP probe and a new
 acceptance record. Change the Catch2 pin only if `ubuntu-latest` stops shipping
-3.4.0; the CPU jobs print the installed package version.
+3.4.0; the `cpu` and `sanitizers` jobs fail when the installed package version
+does not start with 3.4.0.
 
 ## Exact commands
 
@@ -190,7 +192,7 @@ python3 -m venv "$RUNNER_TEMP/reuse-venv"
 
 ## Environment scrub
 
-The CUDA runner applies this prefix to configure, build, test, and the example:
+The CUDA job applies this prefix to configure, build, test, and the example:
 
 ```sh
 env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CMAKE_PREFIX_PATH \
@@ -209,24 +211,25 @@ that job.
 
 ## Host expectations
 
-`hal` is the A30 host used for the CUDA job:
+`hal` is the A30 handover host expected to serve the CUDA job once a runner is
+registered:
 
 - Ubuntu 24.04, CUDA 13.4, NVIDIA A30 (`sm_80`), CMake 3.28.3, Ninja 1.11.1,
   g++ 13.3, Catch2 3.4.0.
 - ROCm 7.2.0 is installed under `/opt/rocm`, so `hal` can also serve the
   `hip-compile` job, but it has no AMD GPU. `gfx90a` is a compile target only.
-- `hal` reports `sharing=unknown`. CI timings from this host are shared-host
+- `hal` reports `sharing=unknown`. Timings from this host are shared-host
   baselines, not exclusive-hardware acceptance numbers.
 - It cannot run TSAN: the kernel aborts with `FATAL: ThreadSanitizer: unexpected
   memory mapping`, even for a non-PIE binary.
 
-`fwk394` is a second Ubuntu 24.04 host:
+`fwk394` is a second Ubuntu 24.04 handover host:
 
 - 28 CPUs, CUDA 12.5, one RTX 2080 Ti (`sm_75`), one Quadro GV100 (`sm_70`),
   CMake 3.28.3, Ninja 1.11.1, g++ 13.3, Catch2 3.4.0.
-- It is the compatible TSAN host. The validated subset is
-  `-R 'pool|dense|pressure|scripted|lease'` with 14 tests, and it passes without
-  any race or memory-mapping report.
+- It is the compatible TSAN host for the validated subset
+  `-R 'pool|dense|pressure|scripted|lease'`; CTest reports the selected test
+  count. The subset runs without any race or memory-mapping report.
 - No `/opt/rocm` toolkit or HIP compiler; only AMD runtime libraries are
   installed. It cannot run the `hip-compile` job as written.
 - It is not an A30 host. A CUDA compile/run check there must override
@@ -249,9 +252,10 @@ in three ways on the CUDA job:
    CUDA device was selected and that the kernels ran on it.
 
 No CUDA or HIP job sets `continue-on-error`, and no missing device is allowed to
-degrade to the CPU backend. CTest in the CUDA build currently exercises the
-CPU-side test suite compiled with the CUDA language; the example supplies the
-device-execution evidence until a CUDA-specific CTest case lands.
+degrade to the CPU backend. The CUDA build includes a CUDA-specific CTest case in
+addition to the CPU-side tests compiled with the CUDA language. The
+`--backend cuda` example smoke remains the explicit selected-backend and
+histogram gate.
 
 ## Artifacts and retention
 
@@ -267,19 +271,17 @@ Artifacts are kept for 14 days and uploaded with `if: always()` so a failure
 still leaves diagnostics. Logs and JUnit files are written under
 `$RUNNER_TEMP/artifacts` and never into the repository.
 
-## Bootstrap gates
+## Bootstrap prerequisites
 
-Two gates depend on files that arrive in a follow-up task:
+Two gates depend on files owned by a follow-up task:
 
-- `format` activates when `.clang-format` exists. Until then it prints a
-  warning and a job summary, installs nothing, and passes.
-- `reuse` activates when `LICENSES/MPL-2.0.txt` exists. Until then it prints a
-  warning and a job summary, installs nothing, and passes.
+- `format` requires `.clang-format`.
+- `reuse` requires `LICENSES/MPL-2.0.txt`, plus the SPDX headers and
+  `.reuse/dep5` if needed.
 
-Both gates become enforcing automatically once their prerequisites land. This
-keeps the workflow green during the bootstrap without weakening the eventual
-checks. This change deliberately does not add `.clang-format`, `LICENSES/`, or
-SPDX headers.
+Both jobs fail with an explicit `::error::` when their prerequisite is missing.
+They do not skip the check and do not report success. This change deliberately
+does not add `.clang-format`, `LICENSES/`, or SPDX headers.
 
 ## Known blockers
 
@@ -288,22 +290,20 @@ SPDX headers.
   runner.
 - **TSAN host split.** `hal` aborts TSAN with `FATAL: ThreadSanitizer:
   unexpected memory mapping`, even for a non-PIE binary. The `tsan` job is
-  pinned to `fwk394`, which runs the validated 14-test subset. The `fwk394`
+  pinned to `fwk394`, which runs the validated TSAN subset. The `fwk394`
   label must be registered externally. No suppression is used.
 - **Shared `hal`.** `hal` reports `sharing=unknown`; performance results from the
   CUDA job are baselines, not exclusive allocations.
-- **Self-hosted capacity.** The A30, ROCm, and fwk394 labels must be provided by
-  registered runners with the matching toolchains. A missing runner blocks the
-  job; it must not be replaced by a CPU fallback.
+- **Self-hosted capacity.** The A30, ROCm, and fwk394 labels are external
+  requirements: the matching runners and toolchains must be registered. Until
+  then the jobs are non-required checks. A missing runner blocks the job; it
+  must not be replaced by a CPU fallback.
 - **Bootstrap metadata.** `.clang-format`, `LICENSES/MPL-2.0.txt`, `.reuse/dep5`
-  if needed, and SPDX headers are still missing. The format and REUSE jobs stay
-  inactive until they land.
+  if needed, and SPDX headers are still missing. The format and REUSE jobs
+  fail until they land.
 - **Pinned commit availability.** The workflow fetches
   `eb677e8d7f70d79b35df25d9002f94ba669b6f44` by SHA. If the upstream repository
   stops serving that object, update the pin deliberately and re-run the probe.
-- **CUDA-specific CTest case.** The CUDA job proves device execution through the
-  example, not through a CUDA-only CTest entry. That entry remains a separate
-  task.
 
 ## Manager validation on hal and fwk394
 
@@ -316,7 +316,7 @@ is the only HIP claim.
 
 On `fwk394`, run the CPU Release and Debug jobs, the sanitizer job, the TSAN
 job, and a CUDA compile with `CMAKE_CUDA_ARCHITECTURES=75`. For TSAN, confirm
-the selected subset reports 14 tests and that neither the CTest log nor the JUnit
-report contains `ThreadSanitizer`. Do not label that CUDA result as an A30
+the selected subset runs and that neither the CTest log nor the JUnit report
+contains `ThreadSanitizer`. Do not label that CUDA result as an A30
 acceptance run. `fwk394` cannot run the ROCm job without a ROCm install. Do not
 run TSAN on `hal`; it aborts with the unexpected-memory-mapping error.
