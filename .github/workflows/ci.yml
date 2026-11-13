@@ -142,6 +142,81 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  tsan:
+    name: TSAN (self-hosted fwk394)
+    # Requires a runner registered with this label. Registration is external to
+    # the repository. The job is pinned to fwk394 because hal cannot map TSAN.
+    runs-on: [self-hosted, linux, fwk394]
+    timeout-minutes: 60
+    env:
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/artifacts"
+          g++ --version | tee "${RUNNER_TEMP}/artifacts/tsan-gxx-version.txt"
+          cmake --version
+          ninja --version
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/alpaka"
+          git init "${RUNNER_TEMP}/alpaka"
+          git -C "${RUNNER_TEMP}/alpaka" remote add origin "${ALPAKA_REPOSITORY}"
+          git -C "${RUNNER_TEMP}/alpaka" fetch --depth 1 origin "${ALPAKA_REF}"
+          git -C "${RUNNER_TEMP}/alpaka" checkout --detach FETCH_HEAD
+          test "$(git -C "${RUNNER_TEMP}/alpaka" rev-parse HEAD)" = "${ALPAKA_REF}"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="${RUNNER_TEMP}/alpaka" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -fno-pie -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread -no-pie" \
+            -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+            -Dalpaka_DEP_OMP=OFF \
+            -DGRAPHFLOW_BUILD_TESTS=ON \
+            -DGRAPHFLOW_BUILD_EXAMPLES=ON \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/tsan-configure.log"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/tsan-build.log"
+
+      - name: Test (TSAN subset, no suppressions)
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R 'pool|dense|pressure|scripted|lease' \
+            --output-junit "${RUNNER_TEMP}/artifacts/tsan-junit.xml" \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/tsan-ctest.log"
+          if grep -q 'ThreadSanitizer' "${RUNNER_TEMP}/artifacts/tsan-ctest.log"; then
+            echo "::error::ThreadSanitizer output detected; TSAN warnings are hard failures and suppressions are not allowed"
+            exit 1
+          fi
+          if [ -f "${RUNNER_TEMP}/artifacts/tsan-junit.xml" ] \
+            && grep -q 'ThreadSanitizer' "${RUNNER_TEMP}/artifacts/tsan-junit.xml"; then
+            echo "::error::ThreadSanitizer output detected in the JUnit report; suppressions are not allowed"
+            exit 1
+          fi
+
+      - name: Upload TSAN logs and JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-fwk394-artifacts
+          path: ${{ runner.temp }}/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
   cuda:
     name: CUDA A30 (self-hosted)
     # Requires a runner registered with all of these labels. The workflow never

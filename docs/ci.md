@@ -1,8 +1,8 @@
 # Continuous integration
 
-`.github/workflows/ci.yml` is the only CI workflow. It runs seven jobs: CPU
-Release, CPU Debug, ASAN+UBSAN, CUDA on an A30, HIP compile-only, format, and
-REUSE. Every job has a finite timeout, read-only repository permissions, and
+`.github/workflows/ci.yml` is the only CI workflow. It runs eight jobs: CPU
+Release, CPU Debug, ASAN+UBSAN, TSAN, CUDA on an A30, HIP compile-only, format,
+and REUSE. Every job has a finite timeout, read-only repository permissions, and
 concurrency cancellation for superseded runs.
 
 ## Job matrix
@@ -11,15 +11,17 @@ concurrency cancellation for superseded runs.
 | --- | --- | --- | --- | ---: |
 | `cpu` (`Release`, `Debug`) | `ubuntu-latest` | CMake + Ninja, CPU only | CTest, JUnit | 60 min |
 | `sanitizers` | `ubuntu-latest` | Debug, `-fsanitize=address,undefined` | CTest, JUnit | 90 min |
+| `tsan` | `[self-hosted, linux, fwk394]` | Debug, non-PIE, `-fsanitize=thread` | CTest subset `pool\|dense\|pressure\|scripted\|lease`, JUnit | 60 min |
 | `cuda` | `[self-hosted, linux, cuda, a30]` | Release, `CMAKE_CUDA_ARCHITECTURES=80` | CTest + JUnit skip gate + `--backend cuda` example at `N=1e6` | 90 min |
 | `hip-compile` | `[self-hosted, linux, rocm]` | Release, HIP `gfx90a`, compile-only | none (build must succeed) | 90 min |
 | `format` | `ubuntu-latest` | clang-format 20.1.8 | dry-run over `include/`, `examples/`, `tests/` | 15 min |
 | `reuse` | `ubuntu-latest` | reuse 6.3.0 | `reuse lint` | 15 min |
 
-The CUDA and HIP jobs require registered self-hosted runners with exactly the
-labels shown. The workflow does not emulate those runners, does not fall back to
-another host, and does not substitute the CPU backend. `hal` and `fwk394` are
-the two hosts used during the handover.
+The CUDA, TSAN, and HIP jobs require registered self-hosted runners with exactly
+the labels shown. The workflow does not emulate those runners, does not fall back
+to another host, and does not substitute the CPU backend. `hal` and `fwk394` are
+the two hosts used during the handover; runner registration for the `fwk394`
+label is external to the repository.
 
 ## Pins
 
@@ -85,6 +87,31 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
   ctest --test-dir build --output-on-failure --no-tests=error \
     --output-junit "$RUNNER_TEMP/artifacts/sanitizers-junit.xml"
 ```
+
+TSAN on `fwk394`:
+
+```sh
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$RUNNER_TEMP/alpaka" \
+  -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -fno-pie -g" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread -no-pie" \
+  -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+  -Dalpaka_DEP_OMP=OFF \
+  -DGRAPHFLOW_BUILD_TESTS=ON \
+  -DGRAPHFLOW_BUILD_EXAMPLES=ON
+cmake --build build --parallel
+mkdir -p "$RUNNER_TEMP/artifacts"
+TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+  ctest --test-dir build --output-on-failure --no-tests=error \
+    -R 'pool|dense|pressure|scripted|lease' \
+    --output-junit "$RUNNER_TEMP/artifacts/tsan-junit.xml"
+```
+
+The TSAN job fails if the CTest log or JUnit report contains any
+`ThreadSanitizer` string. No suppression file and no `suppressions=` option is
+used. `hal` is not a TSAN host: its kernel aborts with `FATAL: ThreadSanitizer:
+unexpected memory mapping`. `fwk394` is the compatible host for this subset.
 
 CUDA on the A30 runner:
 
@@ -190,11 +217,16 @@ that job.
   `hip-compile` job, but it has no AMD GPU. `gfx90a` is a compile target only.
 - `hal` reports `sharing=unknown`. CI timings from this host are shared-host
   baselines, not exclusive-hardware acceptance numbers.
+- It cannot run TSAN: the kernel aborts with `FATAL: ThreadSanitizer: unexpected
+  memory mapping`, even for a non-PIE binary.
 
 `fwk394` is a second Ubuntu 24.04 host:
 
-- CUDA 12.5, one RTX 2080 Ti (`sm_75`), one Quadro GV100 (`sm_70`), CMake 3.28.3,
-  Ninja 1.11.1, g++ 13.3, Catch2 3.4.0.
+- 28 CPUs, CUDA 12.5, one RTX 2080 Ti (`sm_75`), one Quadro GV100 (`sm_70`),
+  CMake 3.28.3, Ninja 1.11.1, g++ 13.3, Catch2 3.4.0.
+- It is the compatible TSAN host. The validated subset is
+  `-R 'pool|dense|pressure|scripted|lease'` with 14 tests, and it passes without
+  any race or memory-mapping report.
 - No `/opt/rocm` toolkit or HIP compiler; only AMD runtime libraries are
   installed. It cannot run the `hip-compile` job as written.
 - It is not an A30 host. A CUDA compile/run check there must override
@@ -227,6 +259,7 @@ device-execution evidence until a CUDA-specific CTest case lands.
 | --- | --- |
 | `junit-cpu-Release`, `junit-cpu-Debug` | CTest JUnit XML |
 | `junit-sanitizers` | CTest JUnit XML |
+| `tsan-fwk394-artifacts` | compiler version, configure/build/CTest logs, JUnit XML |
 | `cuda-a30-artifacts` | `nvidia-smi` output, `nvcc` version, configure/build/CTest logs, JUnit XML, example log |
 | `hip-compile-logs` | `amdclang++` version, configure/build logs, runtime-note |
 
@@ -253,15 +286,15 @@ SPDX headers.
 - **No AMD GPU target.** Neither `hal` nor `fwk394` exposes an AMD device. HIP is
   compile-only; the HIP runtime gate and the AMD acceptance run need a real AMD
   runner.
-- **TSAN mapping on `hal`.** The `hal` kernel aborts TSAN with
-  `FATAL: ThreadSanitizer: unexpected memory mapping`, even for a non-PIE binary.
-  There is no TSAN job until a compatible host is available. A suppression is
-  not added without evidence.
+- **TSAN host split.** `hal` aborts TSAN with `FATAL: ThreadSanitizer:
+  unexpected memory mapping`, even for a non-PIE binary. The `tsan` job is
+  pinned to `fwk394`, which runs the validated 14-test subset. The `fwk394`
+  label must be registered externally. No suppression is used.
 - **Shared `hal`.** `hal` reports `sharing=unknown`; performance results from the
   CUDA job are baselines, not exclusive allocations.
-- **Self-hosted capacity.** The A30 and ROCm labels must be provided by
-  registered runners with CUDA/ROCm toolchains. A missing runner blocks the job;
-  it must not be replaced by a CPU fallback.
+- **Self-hosted capacity.** The A30, ROCm, and fwk394 labels must be provided by
+  registered runners with the matching toolchains. A missing runner blocks the
+  job; it must not be replaced by a CPU fallback.
 - **Bootstrap metadata.** `.clang-format`, `LICENSES/MPL-2.0.txt`, `.reuse/dep5`
   if needed, and SPDX headers are still missing. The format and REUSE jobs stay
   inactive until they land.
@@ -281,6 +314,9 @@ prints `# selected-backend=cuda ` with a histogram sum of `1000000`. Re-run
 the HIP compile with the exact `hip-compile` configure line; a successful build
 is the only HIP claim.
 
-On `fwk394`, run the CPU Release and Debug jobs, the sanitizer job, and a CUDA
-compile with `CMAKE_CUDA_ARCHITECTURES=75`. Do not label that result as an A30
-acceptance run. `fwk394` cannot run the ROCm job without a ROCm install.
+On `fwk394`, run the CPU Release and Debug jobs, the sanitizer job, the TSAN
+job, and a CUDA compile with `CMAKE_CUDA_ARCHITECTURES=75`. For TSAN, confirm
+the selected subset reports 14 tests and that neither the CTest log nor the JUnit
+report contains `ThreadSanitizer`. Do not label that CUDA result as an A30
+acceptance run. `fwk394` cannot run the ROCm job without a ROCm install. Do not
+run TSAN on `hal`; it aborts with the unexpected-memory-mapping error.
