@@ -44,14 +44,15 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 126/126, hal CUDA 154/154. The totals
+Recorded integrated tests: fwk394 CPU 156/156, hal CUDA 184/184. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
 include the kernel execution and FrameSpec matrix cases. These are the rebased
 CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
 visible.
 
-The public contract is frozen in [public API contract](docs/public-api.md); the
-`Flow<T>` implementation follows in T2.
+The public contract is frozen in [public API contract](docs/public-api.md). The typed
+`Flow<T>` execution path now runs source, transform, partition, and sink stages; the
+particle-feedback example keeps its own stages until the example migration lands.
 
 ## Historical measured baseline
 
@@ -84,6 +85,8 @@ include/graphFlow/
   graph/   Classifier.hpp, ClassifyKernel.hpp, ScatterKernel.hpp, Kernels.hpp,
            DenseBinTable.hpp, BinTable.hpp, HashClassifyKernel.hpp,
            HashScatterKernel.hpp, TileDescriptor.hpp
+  flow/    Flow.hpp, Execution.hpp, PayloadStorage.hpp, Concepts.hpp,
+           NodeHandle.hpp, Ports.hpp, Tuning.hpp
   sched/   GraphRunner.hpp
   rng/     ParticleRng.hpp
   detail/  QueueProbe.hpp
