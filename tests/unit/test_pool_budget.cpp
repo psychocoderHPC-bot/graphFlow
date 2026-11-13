@@ -99,6 +99,94 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
     CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) < defaultPoolPayloadBudgetBytes);
 }
 
+TEST_CASE("A30 usable memory clamps the default P below 2*C", "[pool][budget][policy]")
+{
+    using namespace graphFlow;
+
+    // The A30 reports a 1/8 budget of 3,171,090,432 B after ECC, just below the 3 GiB cap.
+    // The documented C=8192, P=2*C=16384 pair needs 3,221,225,472 B and does not fit.
+    std::uint64_t const usableBytes = 8ull * 3'171'090'432ull;
+    CHECK(usableBytes / 8u == 3'171'090'432ull);
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.multiProcessorCount = 56u; // A30
+    properties.globalMemCapacityBytes = usableBytes;
+
+    DevicePolicy const policy = makeDevicePolicy(properties, 100'000'000u);
+    CHECK(policy.memoryBudgetBytes == 3'171'090'432ull);
+    CHECK(policy.chunkCapacity > 0u);
+    CHECK(policy.chunkCapacity % policy.tileSize == 0u);
+    CHECK(policy.liveParticles == 16128u);
+    CHECK(policy.liveParticles < 16384u);
+    CHECK(requiredPayloadBytes(policy.liveParticles, policy.chunkCapacity) <= policy.memoryBudgetBytes);
+
+    // An explicit documented C keeps the chunk size and clamps the derived P instead.
+    DevicePolicyOverrides chunkOnly;
+    chunkOnly.chunkCapacity = 8192u;
+    DevicePolicy const documented = makeDevicePolicy(properties, 100'000'000u, chunkOnly);
+    CHECK(documented.chunkCapacity == 8192u);
+    CHECK(documented.liveParticles == 16128u);
+    CHECK(requiredPayloadBytes(documented.liveParticles, documented.chunkCapacity) <= documented.memoryBudgetBytes);
+
+    // The former default pair is the exact rejection this clamp fixes.
+    CHECK(requiredPayloadBytes(16384u, 8192u) == 3'221'225'472ull);
+    CHECK_THROWS_AS(
+        validatePayloadBudget(16384u, 8192u, policy.memoryBudgetBytes),
+        std::invalid_argument);
+
+    // applyDevicePolicy + derivePoolSize + Config::validate must accept the clamped default.
+    Config config;
+    applyDevicePolicy(config, policy);
+    config.numParticles = 100'000'000u;
+    config.numChunks = particle::derivePoolSize(
+        config.numParticles,
+        config.chunkCapacity,
+        config.liveParticles,
+        particle::FlowBins);
+    CHECK_NOTHROW(config.validate());
+    CHECK(requiredPayloadBytes(config.numChunks, config.chunkCapacity) <= config.poolPayloadBudgetBytes);
+
+    // The CLI path adds the exact K*R(C) reserve instead of Config::poolOutputReserveChunks.
+    std::uint64_t const cliBudget
+        = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
+    CHECK_NOTHROW(validatePayloadBudget(config.numChunks, config.chunkCapacity, cliBudget));
+}
+
+TEST_CASE("explicit C and P clamp to the A30 budget boundary", "[pool][budget][policy]")
+{
+    using namespace graphFlow;
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.multiProcessorCount = 56u;
+    properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
+
+    // The T13 acceptance preset used C=8192, P=16384 explicitly. On the real A30 that pair
+    // exceeds the usable budget, so the policy clamps P instead of throwing.
+    DevicePolicyOverrides overrides;
+    overrides.chunkCapacity = 8192u;
+    overrides.liveParticles = 16384u;
+    DevicePolicy const policy = makeDevicePolicy(properties, 100'000'000u, overrides);
+    CHECK(policy.chunkCapacity == 8192u);
+    CHECK(policy.liveParticles == 16128u);
+    CHECK(requiredPayloadBytes(policy.liveParticles, policy.chunkCapacity) <= policy.memoryBudgetBytes);
+
+    Config config;
+    applyDevicePolicy(config, policy);
+    config.numParticles = 100'000'000u;
+    config.numChunks = particle::derivePoolSize(
+        config.numParticles,
+        config.chunkCapacity,
+        config.liveParticles,
+        particle::FlowBins);
+    CHECK_NOTHROW(config.validate());
+}
+
 TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[pool][budget][policy]")
 {
     using namespace graphFlow;

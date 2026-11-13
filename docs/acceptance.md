@@ -116,8 +116,12 @@ the pool.
 The former `C=8192`, `P=65536` pair is no longer a default and is rejected by
 the payload budget. Its chunk and payload figures appear only in the historical
 table above and are not current defaults. The policy-derived accelerator
-defaults are pinned by the unit tests at `C=8192`, `P=16384`, `T=128`; the CLI
-adds the exact `K*R(C)` reserve to the policy budget.
+defaults are pinned by the unit tests at `C=8192`, `P=16384`, `T=128` on a
+nominal 24 GiB device; the CLI adds the exact `K*R(C)` reserve to the policy
+budget. The real A30 reports `24,192 MiB` usable after ECC, so its 1/8 budget is
+`3,171,090,432 B`. A separate test pins that budget: the policy selects
+`P=16128` (an explicit `C=8192` clamps `P` below `2*C`) and `applyDevicePolicy`
++ `derivePoolSize` + `Config::validate` accepts the resulting pool.
 
 A slot-based pool remains future work. The budget caps the fixed-capacity
 design without changing the `S = P + K*R(C)` progress bound.

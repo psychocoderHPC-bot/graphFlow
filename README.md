@@ -157,10 +157,12 @@ configuration error naming the matching `GRAPHFLOW_ENABLE_*` option),
 `--device D` (default 0), `--particles N`, `--chunk-size C`, `--live-particles P`,
 `--tile-size T`, `--batch-chunks Q` (default 1), `--seed S` (default 0), and
 `--max-visits M` (default 64). When `C`, `P` or `T` is absent, `DevicePolicy`
-derives it from the selected device. The policy uses `P = min(N, 2*C)` before
-budget clamping and chooses `C` from the wave estimate, launch limits, run size,
-and payload budget. Explicit overrides are preserved when they fit the device
-limits and the budget. `N = 0` prints the header only. Rows are
+derives it from the selected device. The policy chooses `C` from the wave
+estimate, launch limits, and run size, then uses `P = min(N, 2*C)` before budget
+clamping. The budget caps `P`; the default path also caps `C` to keep the fixed
+host budget small. The clamp rounds down to a whole tile when possible. Explicit overrides are preserved when they fit the device
+limits and the budget; an over-budget `P` is reduced to the largest feasible
+value. `N = 0` prints the header only. Rows are
 `weight,count`, strictly increasing in weight, and the counts sum to `N`.
 
 `--batch-chunks Q` is the maximum number of ready input chunks one transform

@@ -3,6 +3,7 @@
  */
 
 #include "Cli.hpp"
+#include "ParticleFeedback.hpp"
 #include "TestDevice.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -120,7 +121,7 @@ TEST_CASE("CLI rejects zero chunk, live-particle, tile and batch values", "[cli]
         Catch::Matchers::ContainsSubstring("must be non-zero"));
 }
 
-TEST_CASE("CLI rejects an oversized tile and capacity", "[cli]")
+TEST_CASE("CLI rejects an oversized tile and clamps an oversized P", "[cli]")
 {
     alpaka::onHost::DeviceProperties const properties = cpuProperties();
     graphFlow::DevicePolicyConfig const policyConfig = graphFlow::policyConfigOf(graphFlow::Config{});
@@ -137,11 +138,23 @@ TEST_CASE("CLI rejects an oversized tile and capacity", "[cli]")
         graphFlow::cli::resolveOptions(oversizedChunk, properties, policyConfig),
         std::invalid_argument);
 
-    // Explicit P and C that exceed the payload budget together.
-    graphFlow::cli::Options const infeasible = parseArgs(
+    // An explicit P that is too large for the payload budget is clamped, not rejected.
+    graphFlow::cli::Options const oversizedP = parseArgs(
         {"--particles", "1000000", "--chunk-size", "8192", "--live-particles", "8192"});
+    graphFlow::cli::ResolvedOptions const clamped
+        = graphFlow::cli::resolveOptions(oversizedP, properties);
+    CHECK(clamped.policy.chunkCapacity == 8192u);
+    CHECK(clamped.policy.liveParticles < 8192u);
+    CHECK(
+        std::uint64_t{clamped.policy.liveParticles} * clamped.policy.chunkCapacity
+            * graphFlow::payloadBytesPerSlot
+        <= clamped.policy.memoryBudgetBytes);
+
+    // A budget that cannot hold even one live particle is still a hard error.
+    graphFlow::DevicePolicyConfig tiny = policyConfig;
+    tiny.memoryBudgetBytes = 1024u;
     CHECK_THROWS_AS(
-        graphFlow::cli::resolveOptions(infeasible, properties),
+        graphFlow::cli::resolveOptions(oversizedP, properties, tiny),
         std::invalid_argument);
 }
 
@@ -194,4 +207,44 @@ TEST_CASE("CLI selects policy defaults when overrides are absent", "[cli]")
     CHECK(resolved.policy.tileSize > 0u);
     CHECK_FALSE(resolved.policy.description.empty());
     CHECK(resolved.policy.description.find("C=") != std::string::npos);
+}
+
+TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]")
+{
+    // The A30 reports a 1/8 policy budget of 3,171,090,432 B after ECC instead of exactly
+    // 3 GiB. The documented default keeps P=2*C=16384 just out of reach; the default must clamp
+    // P and still build a valid pool.
+    alpaka::onHost::DeviceProperties properties = cpuProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.multiProcessorCount = 56u;
+    properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
+
+    graphFlow::cli::Options const options = parseArgs({"--particles", "100000000"});
+    graphFlow::cli::ResolvedOptions const resolved
+        = graphFlow::cli::resolveOptions(options, properties);
+
+    CHECK(resolved.policy.memoryBudgetBytes == 3'171'090'432ull);
+    CHECK(resolved.policy.chunkCapacity > 0u);
+    CHECK(resolved.policy.chunkCapacity % resolved.policy.tileSize == 0u);
+    CHECK(resolved.policy.liveParticles < 16384u);
+    CHECK(resolved.policy.liveParticles == 16128u);
+    CHECK(
+        std::uint64_t{resolved.policy.liveParticles} * resolved.policy.chunkCapacity
+            * graphFlow::payloadBytesPerSlot
+        <= resolved.policy.memoryBudgetBytes);
+
+    graphFlow::Config config;
+    config.chunkCapacity = resolved.parameters.chunkSize;
+    config.liveParticles = resolved.parameters.liveParticles;
+    config.tileSize = resolved.parameters.tileSize;
+    config.numParticles = resolved.parameters.numParticles;
+    config.numChunks = graphFlow::particle::derivePoolSize(
+        config.numParticles,
+        config.chunkCapacity,
+        config.liveParticles,
+        graphFlow::particle::FlowBins);
+    config.poolPayloadBudgetBytes = resolved.parameters.poolPayloadBudgetBytes;
+    CHECK_NOTHROW(config.validate());
 }

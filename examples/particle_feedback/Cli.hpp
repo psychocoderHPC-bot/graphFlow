@@ -159,9 +159,11 @@ namespace graphFlow::cli
 
     /** Validate the backend and resolve the device-aware `C`, `P` and `T`.
      *
-     * An explicit override is passed through unchanged; `makeDevicePolicy` rejects zero,
-     * over-limit and budget-infeasible combinations. With no override the returned values are the
-     * policy defaults, so `Parameters` always carries a complete configuration.
+     * An explicit `C` or `T` override is passed through unchanged. An explicit `P` is kept when
+     * it fits the payload budget and clamped to the largest feasible value otherwise;
+     * `makeDevicePolicy` rejects zero, over-limit and unsatisfiable combinations. With no
+     * override the returned values are the policy defaults, so `Parameters` always carries a
+     * complete configuration.
      */
     inline ResolvedOptions resolveOptions(
         Options const& options,
