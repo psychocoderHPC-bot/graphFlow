@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+#include "ScalarModel.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -93,4 +94,40 @@ TEST_CASE("draw positions are independent of the caller", "[rng]")
 
     std::reverse(backward.begin(), backward.end());
     CHECK(forward == backward);
+}
+
+TEST_CASE("production draw mapping matches pinned literal outputs", "[rng]")
+{
+    // Independent pin of the (seed, id, visit, purpose) -> 32 bit draw mapping. The values were
+    // produced by constructing a fresh Philox4x32x10 at offset zero and advancing locally; they do
+    // not depend on graphFlow's wrapper. A shared offset-mapping defect cannot hide here.
+    CHECK(graphFlow::rng::propertyDraw(42u, 7u) == 0xe9f1f921u);
+    CHECK(graphFlow::rng::draw(42u, 7u, 0u, graphFlow::rng::purposeFilter) == 0x2f001ca4u);
+    CHECK(graphFlow::rng::draw(42u, 7u, 0u, graphFlow::rng::purposeProcessA) == 0x8153eeefu);
+    CHECK(graphFlow::rng::draw(42u, 7u, 1u, graphFlow::rng::purposeProcessA) == 0xb7bfefb0u);
+    CHECK(graphFlow::rng::draw(42u, 7u, 0u, graphFlow::rng::purposeProcessB) == 0x105f9ddau);
+    CHECK(graphFlow::rng::draw(42u, 7u, 2u, graphFlow::rng::purposeProcessB) == 0x1e7bf881u);
+}
+
+TEST_CASE("scalar oracle uses an independent Philox mapping", "[rng]")
+{
+    // ScalarModel includes no production RNG header; compare its locally implemented mapping with
+    // the production wrapper over a key matrix. This catches a mapping change on either side.
+    for(std::uint64_t const seed : {0ull, 7ull, 42ull})
+    {
+        for(std::uint64_t const id : {0ull, 1ull, 2ull, 7ull, 1000ull})
+        {
+            CHECK(graphFlow::test::scalarRng::propertyDraw(seed, id) == graphFlow::rng::propertyDraw(seed, id));
+            for(std::uint32_t visit = 0u; visit < 4u; ++visit)
+            {
+                for(std::uint32_t purpose = 0u; purpose < 3u; ++purpose)
+                {
+                    CAPTURE(seed, id, visit, purpose);
+                    CHECK(
+                        graphFlow::test::scalarRng::draw(seed, id, visit, purpose)
+                        == graphFlow::rng::draw(seed, id, visit, purpose));
+                }
+            }
+        }
+    }
 }

@@ -48,9 +48,28 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
    and the observed pinned behaviour.
 2. **Host block extent.** `cpu::Serial`, `cpu::OmpBlocks` and `cpu::TbbBlocks` require a
    thread block extent of one. `ThreadSpec{1, T}` is only valid on accelerators, so the
-   launch helper maps `T` to 1 for `api::Host`.
+   launch helper maps `T` to 1 for `api::Host`. The non-host branch is clamped to
+   `DeviceProperties::maxThreadsPerBlock`; CUDA/HIP execution is not enabled yet, so that
+   branch is documented but not exercised.
 3. **No in-kernel scan or sort.** The dense histogram uses shared atomics per tile and a
    device-scope range reservation per nonempty bin. Any scan or sort variant must be
    implemented as project code and measured.
 4. **Queue independence is not guaranteed.** Correctness does not depend on it. A startup
    probe and the fair sequential fallback are out of scope for this slice.
+5. **Philox workaround is verified in both directions.** The production wrapper
+   (`rng::drawAt`) and the scalar oracle (`tests/reference/ScalarModel.hpp`, which does not
+   include the production RNG header) each construct `Philox4x32x10(seed, id, 0)` and advance
+   locally. `tests/unit/test_philox.cpp` pins literal draws for
+   `(seed=42, id=7, visit, purpose)` and compares both implementations, so an offset-mapping
+   defect cannot be shared.
+6. **Bounded pool.** The pool is `S = P + K*R`, not the plan's `ceil(P/C) + K*R`. Source
+   admission is gated by the `P`-particle budget and caps each source fill at `P - live`, so
+   the number of data-carrying chunks never exceeds `P`. Split routing fragments chunks, so
+   the `ceil(P/C)` input term is only a lower bound. Measured at `N=4097, C=128, P=256`:
+   `S=262`, peak live 259, peak reserved 6.
+7. **Reader leases.** `ChunkPool` counts reader leases. The runner leases a non-source input
+   from launch until the last stage's completion event and `release` rejects a release while a
+   lease is outstanding. This makes release-after-last-use an enforced invariant.
+8. **Exception teardown.** A throwing hook drains in-flight batches, releases each owned
+   input and queued chunk once, and rethrows. `TransformStage` releases output chunks it
+   acquired before a plan or finalise error.

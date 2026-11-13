@@ -84,6 +84,8 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_philox.cpp
         tests/integration/test_dense_bins.cpp
         tests/integration/test_particle_feedback.cpp
+        tests/integration/test_scripted_routing.cpp
+        tests/integration/test_pressure.cpp
     )
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(

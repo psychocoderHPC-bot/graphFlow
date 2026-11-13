@@ -11,6 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -118,11 +119,15 @@ TEST_CASE("dense pipeline handles 64 bins with partial chunks", "[integration][d
         auto queue = device.makeQueue(alpaka::queueKind::blocking);
         alpaka::onHost::memcpy(queue, host, result);
     }
+    // The contract is multiset equality: a different valid scatter order must not fail the test.
+    // The result buffer is id-indexed, so the per-id set is still checked through the sorted
+    // comparison below without assuming a particular tile or chunk order.
+    std::vector<std::uint32_t> expected(static_cast<std::size_t>(particles));
     for(std::uint64_t id = 0u; id < particles; ++id)
-    {
-        CAPTURE(id);
-        CHECK(host[id] == id % Bin64Policy::maxBins);
-    }
+        expected[static_cast<std::size_t>(id)] = static_cast<std::uint32_t>(id % Bin64Policy::maxBins);
+    std::sort(host.begin(), host.end());
+    std::sort(expected.begin(), expected.end());
+    CHECK(host == expected);
 }
 
 TEST_CASE("invalid classifier results abort the batch", "[integration][dense]")
@@ -160,4 +165,8 @@ TEST_CASE("invalid classifier results abort the batch", "[integration][dense]")
     runner.setSource(source, 16u);
 
     CHECK_THROWS_AS(runner.run(), graphFlow::BatchError);
+
+    // The exception path must release the in-flight input and every queued chunk exactly once.
+    CHECK(pool.freeCount() == pool.numChunks());
+    CHECK(pool.peakLive() <= pool.numChunks());
 }

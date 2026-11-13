@@ -24,7 +24,8 @@ namespace
     void usage(std::ostream& out)
     {
         out << "usage: graphFlow_particle_feedback --backend cpu [--particles N] [--chunk-size C]\n"
-               "                                    [--seed S] [--max-visits M] [--device D]\n";
+               "                                    [--live-particles P] [--seed S] [--max-visits M]\n"
+               "                                    [--device D]\n";
     }
 
     std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -73,6 +74,10 @@ namespace
             {
                 options.parameters.chunkSize = static_cast<std::uint32_t>(parseU64(flag, nextValue(flag)));
             }
+            else if(flag == "--live-particles")
+            {
+                options.parameters.liveParticles = static_cast<std::uint32_t>(parseU64(flag, nextValue(flag)));
+            }
             else if(flag == "--seed")
             {
                 options.parameters.seed = parseU64(flag, nextValue(flag));
@@ -113,8 +118,12 @@ namespace
                   << " device=" << options.parameters.deviceIndex
                   << " particles=" << options.parameters.numParticles
                   << " chunk-size=" << options.parameters.chunkSize
+                  << " live-particles=" << result.liveParticles
                   << " seed=" << options.parameters.seed
                   << " max-visits=" << options.parameters.maxVisits << '\n';
+        std::cout << "# pool-chunks=" << result.stats.poolChunks
+                  << " peak-live-chunks=" << result.stats.peakLiveChunks
+                  << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
         std::cout << "# weight,count\n";
         printHistogram(result, options.parameters.numParticles);
         return EXIT_SUCCESS;

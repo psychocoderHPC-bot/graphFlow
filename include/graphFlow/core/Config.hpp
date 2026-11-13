@@ -13,13 +13,15 @@ namespace graphFlow
     /** Static configuration of one graph run.
      *
      * `chunkCapacity` (C) is the number of particle slots per chunk, `numChunks` the pool size,
-     * `tileSize` (T) the requested threads per block and the per-tile histogram width, and
-     * `maxBins` the runtime upper bound for the compile-time bin count of a node.
+     * `liveParticles` (P) the configured source-admission capacity in particles, `tileSize` (T) the
+     * requested threads per block and the per-tile histogram width, and `maxBins` the runtime upper
+     * bound for the compile-time bin count of a node.
      */
     struct Config
     {
         std::uint32_t chunkCapacity = 128u; // C
         std::uint32_t numChunks = 0u;       // S, zero means "derive from N"
+        std::uint32_t liveParticles = 0u;   // P, zero means "derive from N and C"
         std::uint32_t tileSize = 128u;      // T
         std::uint32_t maxBins = 64u;        // B upper bound
         std::uint64_t seed = 0u;

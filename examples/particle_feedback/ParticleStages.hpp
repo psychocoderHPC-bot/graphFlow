@@ -32,6 +32,9 @@ namespace graphFlow::particle
     {
         std::uint64_t numParticles = 0u;
         std::uint32_t chunkSize = 128u;
+        std::uint32_t liveParticles = 0u; // P, zero means the documented default
+        std::uint32_t stallTimeoutMs = 120'000u; // test hook: fail instead of spinning forever
+
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t tileSize = 128u;
@@ -52,6 +55,7 @@ namespace graphFlow::particle
         std::vector<HistogramRow> histogram;  // sorted by weight, run-length encoded
         std::uint64_t cappedParticles = 0u;   // stopped by the --max-visits guard
         std::uint64_t sunkParticles = 0u;     // host-side sink conservation diagnostic
+        std::uint32_t liveParticles = 0u;     // configured source-admission capacity P
         SchedulerStats stats;
     };
 
@@ -272,7 +276,18 @@ namespace graphFlow::particle
                 m_stage = 1u;
                 return true;
             }
-            finalise();
+            try
+            {
+                finalise();
+            }
+            catch(...)
+            {
+                // The scatter completed but its result is unusable; hand the acquired output chunks
+                // back before the runner tears the batch down.
+                releasePending();
+                m_stage = 0u;
+                throw;
+            }
             m_stage = 0u;
             return false;
         }
@@ -305,52 +320,68 @@ namespace graphFlow::particle
             std::vector<std::uint32_t> chunkIndices;
             chunkIndices.reserve(plan.numOutputChunks);
             m_pending.clear();
-            for(std::size_t bin = 0u; bin < m_totals.size(); ++bin)
+            try
             {
-                std::uint32_t const chunks
-                    = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
-                for(std::uint32_t k = 0u; k < chunks; ++k)
+                for(std::size_t bin = 0u; bin < m_totals.size(); ++bin)
                 {
-                    ChunkHandle const handle = m_pool.acquire();
-                    chunkIndices.push_back(handle.index);
-                    std::uint32_t const fillIndex = plan.binBase[bin] + k;
-                    m_pending.push_back(
-                        ChunkDescriptor{handle, plan.fills[fillIndex], static_cast<std::uint32_t>(bin)});
+                    std::uint32_t const chunks
+                        = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
+                    for(std::uint32_t k = 0u; k < chunks; ++k)
+                    {
+                        ChunkHandle const handle = m_pool.acquire();
+                        chunkIndices.push_back(handle.index);
+                        std::uint32_t const fillIndex = plan.binBase[bin] + k;
+                        m_pending.push_back(
+                            ChunkDescriptor{handle, plan.fills[fillIndex], static_cast<std::uint32_t>(bin)});
+                    }
                 }
+
+                std::vector<std::uint32_t> const table = buildDenseTable(plan, chunkIndices);
+                if(static_cast<std::uint64_t>(table.size()) > m_table.getExtents().x())
+                    throw BatchError{"plan: device table buffer too small"};
+                std::copy(table.begin(), table.end(), m_tableHost.data());
+                alpaka::onHost::memcpy(queue, m_table, m_tableHost);
+                alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
+
+                queue.enqueue(
+                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
+                    alpaka::KernelBundle{
+                        ScatterKernel<TPolicy>{m_policy},
+                        m_pool.ids(),
+                        m_pool.properties(),
+                        m_pool.weights(),
+                        m_pool.visits(),
+                        m_pool.binIds(),
+                        m_pool.ids(),
+                        m_pool.properties(),
+                        m_pool.weights(),
+                        m_pool.visits(),
+                        m_table,
+                        m_next,
+                        m_counts,
+                        m_capped,
+                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
+                        m_capacity,
+                        chunk.fill});
+
+                // The completion event must cover the status word and the range counters.
+                alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
+                alpaka::onHost::memcpy(queue, m_nextHost, m_next);
+            }
+            catch(...)
+            {
+                // Release once here; the runner separately releases the input chunk.
+                releasePending();
+                throw;
             }
             allocated = static_cast<std::uint32_t>(chunkIndices.size());
+        }
 
-            std::vector<std::uint32_t> const table = buildDenseTable(plan, chunkIndices);
-            if(static_cast<std::uint64_t>(table.size()) > m_table.getExtents().x())
-                throw BatchError{"plan: device table buffer too small"};
-            std::copy(table.begin(), table.end(), m_tableHost.data());
-            alpaka::onHost::memcpy(queue, m_table, m_tableHost);
-            alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
-
-            queue.enqueue(
-                alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                alpaka::KernelBundle{
-                    ScatterKernel<TPolicy>{m_policy},
-                    m_pool.ids(),
-                    m_pool.properties(),
-                    m_pool.weights(),
-                    m_pool.visits(),
-                    m_pool.binIds(),
-                    m_pool.ids(),
-                    m_pool.properties(),
-                    m_pool.weights(),
-                    m_pool.visits(),
-                    m_table,
-                    m_next,
-                    m_counts,
-                    m_capped,
-                    static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                    m_capacity,
-                    chunk.fill});
-
-            // The completion event must cover the status word and the range counters.
-            alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
-            alpaka::onHost::memcpy(queue, m_nextHost, m_next);
+        void releasePending()
+        {
+            for(ChunkDescriptor const& descriptor : m_pending)
+                m_pool.release(descriptor.handle);
+            m_pending.clear();
         }
 
         void finalise()

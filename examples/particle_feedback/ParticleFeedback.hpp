@@ -8,6 +8,7 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -22,20 +23,51 @@ namespace graphFlow::particle
     /** Number of transform nodes in the particle-feedback graph. */
     inline constexpr std::uint32_t TransformNodes = 3u;
 
-    /** Derive a deadlock-free chunk-pool size from the particle count.
+    /** Default source-admission capacity P when the caller does not configure one.
      *
-     * With feedback, a bin split turns one input chunk into up to two output chunks, so the number
-     * of live chunks grows during the run. Live chunks are disjoint in particles, hence the tight
-     * worst case is one chunk per particle. With `S >= N + (K + 1) * R + 8` the pool always offers
-     * at least `R` unreserved chunks, so a ready transform can always reserve its outputs and the
-     * scheduler cannot deadlock on chunk credits. The conservative provisioning from the design
-     * document (`ceil(P/C) + K*R`) is not sufficient for split-heavy feedback and is recorded as a
-     * follow-up in README.md.
+     * P is a working-set knob, not a function of N: capping it at `8*C` means the pool is sized by
+     * P and the transform output reserve, independent of arbitrarily large N. The value is
+     * documented in README.md and can be overridden with `--live-particles`.
      */
-    inline std::uint32_t derivePoolSize(std::uint64_t numParticles, std::uint32_t chunkSize)
+    inline std::uint32_t defaultLiveParticles(std::uint64_t numParticles, std::uint32_t chunkSize)
     {
-        std::uint64_t const reserve = outputChunkBound(chunkSize, chunkSize, FlowBins);
-        std::uint64_t const chunks = numParticles + (TransformNodes + 1u) * reserve + 8u;
+        std::uint64_t const cap = 8ull * chunkSize;
+        std::uint64_t const live = numParticles < cap ? numParticles : cap;
+        return static_cast<std::uint32_t>(live == 0u ? 1u : live);
+    }
+
+    /** Derive the chunk-pool size from the source-admission capacity P, never from N.
+     *
+     * The plan's model is `S = ceil(P/C) + K*R`. That is a lower bound, not a safe bound for a
+     * split-routing feedback graph: every transform may split one input chunk into one chunk per
+     * bin, and repeated feedback can fragment the P live particles into as many as P chunks
+     * (one particle per chunk). The pool must therefore hold one chunk per live particle plus the
+     * `K*R` output credits of the live transform batches:
+     *
+     *     S = P + K*R,   R = outputChunkBound(C, C, B),   K = TransformNodes
+     *
+     * Source admission caps the fill of every admitted chunk at `P - liveParticles`, so the number
+     * of live particles (and therefore the number of data-carrying chunks) never exceeds P. The
+     * result is independent of N; `P == 0` selects `defaultLiveParticles`. `tests/integration/
+     * test_pressure.cpp` pins the N=4097, C=128, P=256 case and records why the smaller formula
+     * deadlocks.
+     */
+    inline std::uint32_t derivePoolSize(
+        std::uint64_t numParticles,
+        std::uint32_t chunkSize,
+        std::uint32_t liveParticles,
+        std::uint32_t maxBins)
+    {
+        if(numParticles == 0u)
+            return 1u;
+        std::uint64_t live = liveParticles == 0u ? defaultLiveParticles(numParticles, chunkSize) : liveParticles;
+        if(live > numParticles)
+            live = numParticles;
+        if(live == 0u)
+            live = 1u;
+
+        std::uint64_t const perTransform = outputChunkBound(chunkSize, chunkSize, maxBins);
+        std::uint64_t const chunks = live + static_cast<std::uint64_t>(TransformNodes) * perTransform;
         if(chunks > std::numeric_limits<std::uint32_t>::max())
             throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
         return static_cast<std::uint32_t>(chunks == 0u ? 1u : chunks);
@@ -60,7 +92,16 @@ namespace graphFlow::particle
     {
         Config config;
         config.chunkCapacity = parameters.chunkSize;
-        config.numChunks = derivePoolSize(parameters.numParticles, parameters.chunkSize);
+        config.liveParticles = parameters.liveParticles == 0u
+                                   ? defaultLiveParticles(parameters.numParticles, parameters.chunkSize)
+                                   : parameters.liveParticles;
+        if(config.liveParticles > parameters.numParticles && parameters.numParticles != 0u)
+            config.liveParticles = static_cast<std::uint32_t>(parameters.numParticles);
+        config.numChunks = derivePoolSize(
+            parameters.numParticles,
+            parameters.chunkSize,
+            config.liveParticles,
+            FlowBins);
         config.tileSize = parameters.tileSize;
         config.maxBins = FlowBins;
         config.seed = parameters.seed;
@@ -106,7 +147,8 @@ namespace graphFlow::particle
             = runner.addNode("sink", NodeRole::sink, 1u, {}, hooksOf<TDevice>(sink));
         alpaka::unused(nFilter, nProcessA, nProcessB, nSink);
 
-        runner.setSource(nGenerate, parameters.numParticles);
+        runner.setSource(nGenerate, parameters.numParticles, config.liveParticles);
+        runner.setStallTimeout(std::chrono::milliseconds{parameters.stallTimeoutMs});
         SchedulerStats const stats = runner.run();
 
         std::vector<std::uint32_t> weights(static_cast<std::size_t>(resultSize), 0u);
@@ -124,6 +166,7 @@ namespace graphFlow::particle
         output.weights = std::move(weights);
         output.cappedParticles = cappedValue;
         output.sunkParticles = sink.sunkParticles();
+        output.liveParticles = config.liveParticles;
         output.stats = stats;
         return output;
     }

@@ -41,6 +41,7 @@ namespace graphFlow
             , m_binIds{
                   alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{static_cast<std::uint64_t>(numChunks) * chunkCapacity})}
             , m_generations(numChunks, 0u)
+            , m_leases(numChunks, 0u)
         {
             if(numChunks == 0u)
                 throw std::invalid_argument{"graphFlow::ChunkPool: numChunks must be non-zero"};
@@ -79,18 +80,65 @@ namespace graphFlow
                 throw std::runtime_error{"graphFlow::ChunkPool: pool exhausted"};
             std::uint32_t const index = m_free.back();
             m_free.pop_back();
+            m_peakLive = liveCount() > m_peakLive ? liveCount() : m_peakLive;
             return ChunkHandle{index, m_generations[index]};
         }
 
-        /** Return a chunk to the free list and invalidate all outstanding handles. */
+        /** Return a chunk to the free list and invalidate all outstanding handles.
+         *
+         * Releasing a chunk while a reader lease is outstanding is a use-after-free bug, so the
+         * debug lease check rejects it instead of silently handing the memory to a new producer.
+         */
         void release(ChunkHandle handle)
         {
             if(handle.index >= m_numChunks)
                 throw std::invalid_argument{"graphFlow::ChunkPool: chunk index out of range"};
             if(handle.generation != m_generations[handle.index])
                 throw std::invalid_argument{"graphFlow::ChunkPool: stale chunk handle"};
+            if(m_leases[handle.index] != 0u)
+                throw std::logic_error{"graphFlow::ChunkPool: release while a reader lease is outstanding"};
             ++m_generations[handle.index];
             m_free.push_back(handle.index);
+        }
+
+        /** Register an asynchronous reader of a chunk.
+         *
+         * The runner holds a lease from the launch of a non-source batch until the completion event
+         * of the batch's last device stage has been observed. Together with the check in `release`
+         * this enforces release-after-last-use without a device-side reference count.
+         */
+        void acquireLease(ChunkHandle handle)
+        {
+            validateLive(handle);
+            ++m_leases[handle.index];
+            m_peakLeases = m_leases[handle.index] > m_peakLeases ? m_leases[handle.index] : m_peakLeases;
+        }
+
+        void releaseLease(ChunkHandle handle)
+        {
+            validateLive(handle);
+            if(m_leases[handle.index] == 0u)
+                throw std::logic_error{"graphFlow::ChunkPool: lease release without a matching acquire"};
+            --m_leases[handle.index];
+        }
+
+        [[nodiscard]] std::uint32_t leaseCount(ChunkHandle handle) const
+        {
+            if(handle.index >= m_numChunks)
+                throw std::invalid_argument{"graphFlow::ChunkPool: chunk index out of range"};
+            return m_leases[handle.index];
+        }
+
+        /** Highest number of live (acquired, not released) chunks observed so far. */
+        [[nodiscard]] std::uint32_t peakLive() const
+        {
+            return m_peakLive;
+        }
+
+        /** Highest per-chunk reader-lease count observed so far. */
+        [[nodiscard]] std::uint32_t peakLeases() const
+        {
+            return m_peakLeases;
         }
 
         /** Check that a handle still refers to a live chunk. */
@@ -108,6 +156,14 @@ namespace graphFlow
         [[nodiscard]] std::uint32_t generation(std::uint32_t index) const
         {
             return m_generations.at(index);
+        }
+
+        void validateLive(ChunkHandle handle) const
+        {
+            if(handle.index >= m_numChunks)
+                throw std::invalid_argument{"graphFlow::ChunkPool: chunk index out of range"};
+            if(handle.generation != m_generations[handle.index])
+                throw std::invalid_argument{"graphFlow::ChunkPool: stale chunk handle"};
         }
 
         [[nodiscard]] IdView const& ids() const
@@ -169,6 +225,9 @@ namespace graphFlow
         U32View m_visits;
         U32View m_binIds;
         std::vector<std::uint32_t> m_generations;
+        std::vector<std::uint32_t> m_leases;
         std::vector<std::uint32_t> m_free;
+        std::uint32_t m_peakLive = 0u;
+        std::uint32_t m_peakLeases = 0u;
     };
 } // namespace graphFlow

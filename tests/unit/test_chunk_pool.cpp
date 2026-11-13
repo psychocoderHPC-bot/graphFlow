@@ -70,3 +70,22 @@ TEST_CASE("chunk pool rejects degenerate configurations", "[pool]")
     CHECK_THROWS_AS((graphFlow::ChunkPool{device, 0u, 4u}), std::invalid_argument);
     CHECK_THROWS_AS((graphFlow::ChunkPool{device, 4u, 0u}), std::invalid_argument);
 }
+
+TEST_CASE("a reader lease blocks premature release", "[pool][lease]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    graphFlow::ChunkPool pool{device, 2u, 1u};
+
+    graphFlow::ChunkHandle const handle = pool.acquire();
+    pool.acquireLease(handle);
+    CHECK(pool.leaseCount(handle) == 1u);
+    CHECK_THROWS_AS(pool.release(handle), std::logic_error);
+    CHECK(pool.isLive(handle));
+
+    pool.releaseLease(handle);
+    CHECK(pool.leaseCount(handle) == 0u);
+    CHECK_NOTHROW(pool.release(handle));
+    CHECK_FALSE(pool.isLive(handle));
+
+    CHECK_THROWS_AS(pool.releaseLease(handle), std::invalid_argument);
+}
