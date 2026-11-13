@@ -150,7 +150,16 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_generic_flow.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
-        target_sources(graphFlow_tests PRIVATE tests/unit/test_cuda_kernel.cpp)
+        target_sources(
+            graphFlow_tests
+            PRIVATE
+                tests/unit/test_cuda_kernel.cpp
+                tests/integration/test_flow_execution_cuda.cpp
+        )
+    endif()
+    if(GRAPHFLOW_ENABLE_HIP)
+        # Compile-only: no AMD device is available, so this adds no CTest case.
+        target_sources(graphFlow_tests PRIVATE tests/integration/test_flow_execution_hip.cpp)
     endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(
