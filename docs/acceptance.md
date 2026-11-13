@@ -3,7 +3,10 @@
 Environment: hal container, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3,
 CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44`
 (alpaka 3.0.0), C++20, Release. `hal` reports `sharing=unknown`; the throughput
-numbers are a recorded baseline, not an exclusive-hardware acceptance claim.
+numbers are a recorded baseline, not an exclusive-hardware acceptance claim. Raw
+CTest and example logs remain on `hal` under `/tmp/fill-*.log`,
+`/tmp/fill-cuda-*.out`, and `/tmp/fill-1e8.*`; they are not committed to the
+repository.
 
 ## Builds
 
@@ -28,12 +31,12 @@ numbers are a recorded baseline, not an exclusive-hardware acceptance claim.
 
 Common settings: `--seed 42 --chunk-size 8192 --live-particles 65536 --max-visits 64`.
 
-| Backend | N | Wall time | Histogram sum | Peak live chunks | Notes |
+| Backend | N | Wall time | Histogram sum | Peak live chunks (pool size) | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
 | CPU | 1,000,000 | 19.45 s | 1,000,000 | not recorded | maxrss 76.8 MB |
-| CUDA | 100,000 | 0.58 s | 100,000 | 514 / 65542 | |
-| CUDA | 1,000,000 | 2.24 s | 1,000,000 | 857 / 65542 | |
-| CUDA | 100,000,000 | 187.5 s | 100,000,000 | 877 / 65542 | 264 histogram rows; about 5.33e5 particles/s |
+| CUDA | 100,000 | 0.58 s | 100,000 | 514 (65542) | |
+| CUDA | 1,000,000 | 2.24 s | 1,000,000 | 857 (65542) | |
+| CUDA | 100,000,000 | 187.5 s | 100,000,000 | 877 (65542) | 264 histogram rows; about 5.33e5 particles/s |
 
 The queue probe on CUDA reports `overlap=no queues-alias=no
 second-before-first=no`; the queues are distinct, but no overlap was observed.

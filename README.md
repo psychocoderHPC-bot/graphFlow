@@ -15,7 +15,9 @@ amortised; consumer ready lists still dispatch partial chunks immediately.
 ## Measured on hal
 
 A30, seed 42, `C=8192`, `P=65536`: `N=1e6` in 2.24 s and `N=1e8` in 187.5 s
-(about `5.33e5` particles/s), with exact histogram sums and a peak of 877 of 65542 live chunks.
+(about `5.33e5` particles/s), with exact histogram sums and a peak of 877 live chunks in a
+65542-chunk pool. `hal` reports `sharing=unknown`, so the throughput is a recorded baseline, not
+an exclusive-hardware acceptance claim.
 CPU `N=1e6` takes 19.45 s. CPU and CUDA CTest pass 42/42; ASAN/UBSAN pass 42/42. HIP compiles the
 full tree for `gfx90a`, but no AMD device is visible, so HIP execution is not claimed. The CUDA
 queue probe reports distinct queues with no observed overlap; the measured speedup comes from
@@ -205,10 +207,10 @@ Working-set control:
   (`HashBinTable`, `2*T` entries by default) covers large bin counts; a chunk whose distinct
   bins exceed the table entries is a hard error, not a dense fallback.
 - One input chunk per classify batch; one in-flight batch per node.
-- The CPU build is the locally validated path. CUDA/HIP build paths compile the same
-  sources, but this environment has no CUDA or HIP toolkit, so neither accelerator was
-  built or executed here.
-- No `N = 1e8` run and no performance gate. Only functional correctness is measured.
+- CPU and CUDA are validated on `hal` (A30). HIP compiles the full tree for `gfx90a`, but
+  no AMD device is visible, so HIP execution is not claimed.
+- `N = 1e8` and the measured throughput are recorded in `docs/acceptance.md`; the number is a
+  shared-`hal` baseline, not an exclusive-hardware acceptance claim.
 - No join/broadcast, no multi-GPU, no device-side scheduling. There is a test-only
   Philox-free scripted routing fixture for the plan section 9.3 rows.
 - The host backend executes one real thread per block, so the CPU kernels run with a block
