@@ -1,0 +1,403 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ALPAKA_REPOSITORY: https://github.com/alpaka-group/alpaka.git
+  # Newer validated pin recorded in docs/acceptance.md and docs/alpaka-api-map.md
+  # (alpaka 3.0.0, 2026-10-26). It supersedes the older 4780dc... reference pin.
+  ALPAKA_REF: eb677e8d7f70d79b35df25d9002f94ba669b6f44
+  # Ubuntu 24.04 noble/universe ships Catch2 3.4.0 as the `catch2` package.
+  CATCH2_APT_VERSION: "3.4.0"
+
+jobs:
+  cpu:
+    name: CPU ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type:
+          - Release
+          - Debug
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends cmake ninja-build catch2
+          cmake --version
+          ninja --version
+          dpkg-query -W -f='${Version}\n' catch2
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/alpaka"
+          git init "${RUNNER_TEMP}/alpaka"
+          git -C "${RUNNER_TEMP}/alpaka" remote add origin "${ALPAKA_REPOSITORY}"
+          git -C "${RUNNER_TEMP}/alpaka" fetch --depth 1 origin "${ALPAKA_REF}"
+          git -C "${RUNNER_TEMP}/alpaka" checkout --detach FETCH_HEAD
+          test "$(git -C "${RUNNER_TEMP}/alpaka" rev-parse HEAD)" = "${ALPAKA_REF}"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="${RUNNER_TEMP}/alpaka" \
+            -DGRAPHFLOW_BUILD_TESTS=ON \
+            -DGRAPHFLOW_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/artifacts"
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --output-junit "${RUNNER_TEMP}/artifacts/cpu-${{ matrix.build_type }}-junit.xml"
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-cpu-${{ matrix.build_type }}
+          path: ${{ runner.temp }}/artifacts/cpu-${{ matrix.build_type }}-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  sanitizers:
+    name: ASAN+UBSAN (Debug)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends cmake ninja-build catch2
+          cmake --version
+          ninja --version
+          dpkg-query -W -f='${Version}\n' catch2
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/alpaka"
+          git init "${RUNNER_TEMP}/alpaka"
+          git -C "${RUNNER_TEMP}/alpaka" remote add origin "${ALPAKA_REPOSITORY}"
+          git -C "${RUNNER_TEMP}/alpaka" fetch --depth 1 origin "${ALPAKA_REF}"
+          git -C "${RUNNER_TEMP}/alpaka" checkout --detach FETCH_HEAD
+          test "$(git -C "${RUNNER_TEMP}/alpaka" rev-parse HEAD)" = "${ALPAKA_REF}"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="${RUNNER_TEMP}/alpaka" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DGRAPHFLOW_BUILD_TESTS=ON \
+            -DGRAPHFLOW_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/artifacts"
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --output-junit "${RUNNER_TEMP}/artifacts/sanitizers-junit.xml"
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-sanitizers
+          path: ${{ runner.temp }}/artifacts/sanitizers-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  cuda:
+    name: CUDA A30 (self-hosted)
+    # Requires a runner registered with all of these labels. The workflow never
+    # falls back to another host and never substitutes the CPU backend.
+    runs-on: [self-hosted, linux, cuda, a30]
+    timeout-minutes: 90
+    env:
+      CUDA_VISIBLE_DEVICES: "0"
+      CMAKE_CUDA_ARCHITECTURES: "80"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify GPU and toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/artifacts"
+          nvidia-smi -L | tee "${RUNNER_TEMP}/artifacts/nvidia-smi.txt"
+          grep -qi 'A30' "${RUNNER_TEMP}/artifacts/nvidia-smi.txt"
+          nvcc --version | tee "${RUNNER_TEMP}/artifacts/nvcc-version.txt"
+          cmake --version
+          ninja --version
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/alpaka"
+          git init "${RUNNER_TEMP}/alpaka"
+          git -C "${RUNNER_TEMP}/alpaka" remote add origin "${ALPAKA_REPOSITORY}"
+          git -C "${RUNNER_TEMP}/alpaka" fetch --depth 1 origin "${ALPAKA_REF}"
+          git -C "${RUNNER_TEMP}/alpaka" checkout --detach FETCH_HEAD
+          test "$(git -C "${RUNNER_TEMP}/alpaka" rev-parse HEAD)" = "${ALPAKA_REF}"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CMAKE_PREFIX_PATH \
+            -u CPATH -u CPLUS_INCLUDE_PATH \
+            cmake -S . -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGRAPHFLOW_ALPAKA_SOURCE_DIR="${RUNNER_TEMP}/alpaka" \
+              -DGRAPHFLOW_ENABLE_CUDA=ON \
+              -DCMAKE_CUDA_ARCHITECTURES=80 \
+              -DGRAPHFLOW_BUILD_TESTS=ON \
+              -DGRAPHFLOW_BUILD_EXAMPLES=ON \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/cuda-configure.log"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CMAKE_PREFIX_PATH \
+            -u CPATH -u CPLUS_INCLUDE_PATH \
+            cmake --build build --parallel \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/cuda-build.log"
+
+      - name: Test (CTest, no skipped tests)
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CMAKE_PREFIX_PATH \
+            -u CPATH -u CPLUS_INCLUDE_PATH \
+            ctest --test-dir build --output-on-failure --no-tests=error \
+              --output-junit "${RUNNER_TEMP}/artifacts/cuda-junit.xml" \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/cuda-ctest.log"
+          if grep -q '<skipped' "${RUNNER_TEMP}/artifacts/cuda-junit.xml"; then
+            echo "::error::CTest reported a skipped test on the A30 runner; a missing or skipped required GPU test is a failure"
+            exit 1
+          fi
+          if ! grep -q '<testcase' "${RUNNER_TEMP}/artifacts/cuda-junit.xml"; then
+            echo "::error::CTest JUnit report contains no test cases"
+            exit 1
+          fi
+
+      - name: Run CUDA example smoke (N=1e6)
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH -u LIBRARY_PATH -u CMAKE_PREFIX_PATH \
+            -u CPATH -u CPLUS_INCLUDE_PATH \
+            ./build/graphFlow_particle_feedback \
+              --backend cuda --particles 1000000 --chunk-size 1024 \
+              --live-particles 8192 --seed 42 \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/cuda-example-n1e6.log"
+          grep -q '# selected-backend=cuda ' "${RUNNER_TEMP}/artifacts/cuda-example-n1e6.log"
+          awk -F, '/^[0-9]+,[0-9]+$/ { sum += $2 } END { if (sum != 1000000) { printf "histogram sum=%d, expected 1000000\n", sum; exit 1 } }' \
+            "${RUNNER_TEMP}/artifacts/cuda-example-n1e6.log"
+
+      - name: Upload CUDA logs and JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-a30-artifacts
+          path: ${{ runner.temp }}/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  hip-compile:
+    name: HIP compile-only (self-hosted ROCm)
+    # Compile-only by design: no AMD GPU is available on hal or fwk394, so this
+    # job makes no runtime claim and does not run CTest or the example.
+    runs-on: [self-hosted, linux, rocm]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ROCm toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/artifacts"
+          test -x /opt/rocm/llvm/bin/amdclang++
+          /opt/rocm/llvm/bin/amdclang++ --version | tee "${RUNNER_TEMP}/artifacts/amdclang-version.txt"
+          cmake --version
+          ninja --version
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/alpaka"
+          git init "${RUNNER_TEMP}/alpaka"
+          git -C "${RUNNER_TEMP}/alpaka" remote add origin "${ALPAKA_REPOSITORY}"
+          git -C "${RUNNER_TEMP}/alpaka" fetch --depth 1 origin "${ALPAKA_REF}"
+          git -C "${RUNNER_TEMP}/alpaka" checkout --detach FETCH_HEAD
+          test "$(git -C "${RUNNER_TEMP}/alpaka" rev-parse HEAD)" = "${ALPAKA_REF}"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="${RUNNER_TEMP}/alpaka" \
+            -DGRAPHFLOW_ENABLE_HIP=ON \
+            -DCMAKE_HIP_ARCHITECTURES=gfx90a \
+            -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/amdclang++ \
+            -DCMAKE_PREFIX_PATH=/opt/rocm \
+            -Dalpaka_DEP_OMP=OFF \
+            -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+            -DGRAPHFLOW_BUILD_TESTS=ON \
+            -DGRAPHFLOW_BUILD_EXAMPLES=ON \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/hip-configure.log"
+
+      - name: Build (compile-only)
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel \
+            2>&1 | tee "${RUNNER_TEMP}/artifacts/hip-build.log"
+          echo "HIP build completed for gfx90a; this job does not run HIP code." \
+            | tee "${RUNNER_TEMP}/artifacts/hip-runtime-note.txt"
+
+      - name: Upload HIP build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hip-compile-logs
+          path: ${{ runner.temp }}/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  format:
+    name: clang-format 20.1.8
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for .clang-format
+        id: preflight
+        run: |
+          if [ -f .clang-format ]; then
+            echo "ready=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::.clang-format is not present yet; the format gate becomes active when it lands"
+            {
+              echo "### Format gate inactive"
+              echo ""
+              echo ".clang-format has not landed yet. The job installs nothing and skips the check."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Install clang-format 20.1.8
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-venv
+          python3 -m venv "${RUNNER_TEMP}/clang-format-venv"
+          "${RUNNER_TEMP}/clang-format-venv/bin/pip" install --upgrade pip
+          "${RUNNER_TEMP}/clang-format-venv/bin/pip" install "clang-format==20.1.8"
+          echo "${RUNNER_TEMP}/clang-format-venv/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/clang-format-venv/bin/clang-format" --version
+
+      - name: Verify clang-format version
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          version="$(clang-format --version)"
+          echo "${version}"
+          case "${version}" in
+            *20.1.8*) ;;
+            *)
+              echo "::error::expected clang-format 20.1.8, got: ${version}"
+              exit 1
+              ;;
+          esac
+
+      - name: Check formatting
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files 'include' 'examples' 'tests' | grep -E '\.(cpp|hpp)$')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no C++ sources found under include/, examples/, tests/"
+            exit 1
+          fi
+          clang-format --dry-run --Werror "${files[@]}"
+
+  reuse:
+    name: REUSE 6.3.0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for license metadata
+        id: preflight
+        run: |
+          if [ -f LICENSES/MPL-2.0.txt ]; then
+            echo "ready=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::LICENSES/MPL-2.0.txt is not present yet; the REUSE gate becomes active when it lands"
+            {
+              echo "### REUSE gate inactive"
+              echo ""
+              echo "The license file and SPDX headers have not landed yet. The job installs nothing and skips the check."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Install reuse 6.3.0
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-venv
+          python3 -m venv "${RUNNER_TEMP}/reuse-venv"
+          "${RUNNER_TEMP}/reuse-venv/bin/pip" install --upgrade pip
+          "${RUNNER_TEMP}/reuse-venv/bin/pip" install "reuse==6.3.0"
+          version="$("${RUNNER_TEMP}/reuse-venv/bin/reuse" --version)"
+          echo "${version}"
+          case "${version}" in
+            *6.3.0*) ;;
+            *)
+              echo "::error::expected reuse 6.3.0, got: ${version}"
+              exit 1
+              ;;
+          esac
+
+      - name: Lint
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/reuse-venv/bin/reuse" lint
