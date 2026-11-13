@@ -3,9 +3,9 @@
 
 # graphFlow acceptance record
 
-Integrated revision: `68124ad3875e42cbe09247f64bd218a7ac8d58fc` (T1, T2, T3,
-T5, T7, T14a). This record uses the supplied integrated acceptance evidence. It
-does not claim a local rerun in this worktree.
+Integrated revision: `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b` (T1, T2, T3,
+T5, T7, T13, T14a). This record uses the supplied integrated acceptance
+evidence. It does not claim a local rerun in this worktree.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -18,9 +18,9 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 | --- | --- |
 | CPU Release on fwk394 | configure and build pass |
 | CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
-| HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passes |
+| HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passes; no AMD runtime device on hal, execution blocked |
 | ASAN+UBSAN Debug | not recorded for the integrated revision |
-| TSAN Debug | fwk394 scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping` |
+| TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
 
 ## Tests
 
@@ -29,7 +29,7 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 | CPU CTest on fwk394 | 74/74 passed |
 | CUDA CTest on hal | 75/75 passed |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
-| HIP | compiled; no AMD device was visible, so no execution is claimed |
+| HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
 The CUDA build adds `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on
 the selected NVIDIA GPU and fails when no GPU is visible.
@@ -125,5 +125,7 @@ design without changing the `S = P + K*R(C)` progress bound.
 ## Repository gates
 
 `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
-`LICENSES/MPL-2.0.txt` are present. There is no CI workflow yet. Format and
-REUSE commands are documented in `docs/build.md`; no CI run is claimed.
+`LICENSES/MPL-2.0.txt` are present, so the format/REUSE foundation is in main.
+The tree-wide format and SPDX sweep (T14b) remains open. There is no CI
+workflow yet. Format and REUSE commands are documented in `docs/build.md`; no
+CI run is claimed.

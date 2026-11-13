@@ -10,12 +10,13 @@ repository state, not on the intended final state.
 Current validated state:
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public),
-  branch `main`, HEAD `2877c8578047702506eb71fc024570e5ba052790`.
+  branch `main`, HEAD `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b`.
 - Last recorded validation on the integrated revision: 74/74 CTest cases on
-  fwk394 CPU, 75/75 on hal CUDA, per `docs/acceptance.md`; no new test run is
-  claimed here.
-- HIP compiles the full tree for `gfx90a`; no AMD device is visible, so no HIP
-  execution is claimed.
+  fwk394 CPU, 75/75 on hal CUDA, per `docs/acceptance.md`; the code is
+  unchanged by this docs-only reconciliation, so no new test run is claimed
+  here.
+- HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
+  HIP execution is blocked and no HIP execution is claimed.
 - CUDA example: `N=1e5` 0.58 s, `N=1e6` 2.24 s, `N=1e8` 187.5 s with an exact
   histogram sum of 100,000,000.
 - CPU example: `N=1e6` 19.45 s.
@@ -28,14 +29,13 @@ resource or decision is missing.
 
 ## 1. Core architecture and scheduler
 
-- [ ] **P0: multi-chunk batching.** A consumer currently processes exactly one
-  input chunk per batch. Add a configurable batch of ready chunks per node,
-  build a compact tile descriptor list over all chunks, run one classify launch
-  and one scatter launch per batch, and plan output chunks across the whole
-  batch. Add `--batch-chunks Q` (default sane value, `Q=1` fallback). Acceptance:
-  Q=1,2,8 produce identical histograms for `C=1024` and `C=8192`; batch-level
-  output planning preserves exact fill levels and chunk-boundary crossings;
-  host round-trip count drops measurably.
+- [x] **P0: multi-chunk batching.** Done (PR #6 / T5): `--batch-chunks Q`
+  (default 1) dispatches up to `Q` ready input chunks per transform node, with
+  one classify launch and one scatter launch per batch and the adaptive
+  `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
+  Q=1/2/8 (74/74 CPU on fwk394, 75/75 CUDA on hal, identical sorted histograms
+  across Q). Open refinement: `--batch-chunks Q` has no upper cap beyond the
+  32-bit parse limit, tracked in Section 7.
 - [ ] **P0: generic graph API.** The current runner is a particle-feedback
   runner with reusable primitives. Add the planned host-side
   `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` model with typed payload
@@ -139,15 +139,14 @@ resource or decision is missing.
     available;
   - format and `reuse lint` jobs;
   - finite timeouts and artifact upload for logs/JUnit.
-- [ ] **P0: format configuration.** Add the upstream-derived `.clang-format`
-  (clang-format 20.1.8), run it over the tree, and make the CI job fail on a
-  diff.
-- [ ] **P0: REUSE compliance.** Add `LICENSES/MPL-2.0.txt`, `.reuse/dep5` if
-  needed, SPDX headers for every source and documentation file, and a
-  `reuse lint` gate.
-- [ ] **P1: add the plan to the repository.** Copy the approved plan to
-  `docs/plan.md` with an SPDX header, or link it explicitly. The repository
-  currently has README and `docs/acceptance.md`, but not the plan.
+- [x] **P0: format configuration.** The upstream-derived `.clang-format`
+  (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
+  (T14b) and the CI gate that fails on a diff remain open.
+- [x] **P0: REUSE compliance.** The REUSE foundation is in main (PR #5 / T14a):
+  `LICENSES/MPL-2.0.txt` and `.reuse/dep5` are present. The tree-wide SPDX sweep
+  (T14b) and the `reuse lint` CI gate remain open.
+- [x] **P1: add the plan to the repository.** Done: `docs/plan.md` is in main
+  with an SPDX header.
 - [ ] **P1: complete the documentation set.** Add `docs/build.md` (exact pins,
   configure/build/test commands, environment scrub), `docs/ci.md`,
   `docs/architecture.md`, `docs/numerics.md`, `docs/known-limitations.md`, and
@@ -164,17 +163,18 @@ resource or decision is missing.
 
 ## 5. Performance and acceptance
 
-- [ ] **P0: CUDA-specific kernel test.** The CUDA build's CTest cases do not
-  prove the kernels ran on the GPU; the example `--backend cuda` does. Add a
-  CUDA test that runs a real kernel on the device, asserts the selected backend
-  and device name, and fails when hardware is missing rather than skipping.
-- [ ] **P0: HIP execution gate.** Run the example and the relevant tests on an
-  AMD GPU. Record the GPU model, ROCm version, `gfx` target, and results. The
-  current `gfx90a` result is compile-only.
+- [x] **P0: CUDA-specific kernel test.** Done (T3):
+  `tests/unit/test_cuda_kernel.cpp` runs a real kernel on the selected NVIDIA
+  GPU and fails when no GPU is visible rather than skipping.
+- [ ] **P0: HIP execution gate. Blocked.** No AMD runtime device is visible on
+  hal; HIP is compile-only for `gfx90a`. Run the example and the relevant tests
+  on an AMD GPU. Record the GPU model, ROCm version, `gfx` target, and results.
 - [ ] **P0: exclusive or repeated acceptance run.** `hal` is shared
-  (`sharing=unknown`). Re-run `N=1e8` on an exclusive allocation or repeat the
-  baseline enough times to report variance; keep the shared-host numbers
-  labelled as a baseline.
+  (`sharing=unknown`). JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
+  available and exclusive per operator, but its gateway sharing flag is unknown
+  and no H100 baseline is recorded yet. Re-run `N=1e8` on an exclusive
+  allocation or repeat the baseline enough times to report variance; keep the
+  shared-host numbers labelled as a baseline.
 - [ ] **P1: freeze the throughput target.** The current baseline is about
   `5.33e5` particles/s at `N=1e8` on the A30 with `C=8192`, `P=65536`. After an
   exclusive measurement, freeze a regression target with a stated tolerance and
@@ -197,10 +197,10 @@ resource or decision is missing.
 
 ## 6. Robustness and hardening
 
-- [ ] **P0: TSAN validation.** The hal kernel aborts TSAN with `unexpected
-  memory mapping` even for a non-PIE binary. Run TSAN on a compatible host and
-  record the scheduler/pool subset; add a suppression only with evidence and do
-  not hide a race.
+- [ ] **P0: TSAN validation.** The non-PIE scheduler/pool subset is clean on
+  fwk394 (14/14); hal is blocked by `unexpected memory mapping` even for a
+  non-PIE binary, and no full integrated TSAN run is claimed. Run TSAN on a
+  compatible host; add a suppression only with evidence and do not hide a race.
 - [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
   and staging exhaustion, feedback cycles, max-visits, abort during in-flight
   work, and repeated runs with generation reuse.
@@ -221,8 +221,9 @@ resource or decision is missing.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required.
 - **CI runners:** the workflow needs self-hosted CUDA and AMD runners with known
-  labels, credentials, and artifact retention. The repository is currently
-  private and has no `.github/workflows`.
+  labels, credentials, and artifact retention. PR #4 is a draft and no runners
+  are provisioned; the repository is public and has no `.github/workflows` on
+  main.
 - **Exclusive throughput:** `hal` is shared; the current 187.5 s is a baseline,
   not an exclusive-hardware acceptance number.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,

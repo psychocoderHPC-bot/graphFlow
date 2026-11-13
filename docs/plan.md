@@ -17,7 +17,7 @@ This document replaces the earlier graphFlow draft. The implementation starts fr
 | Determinism | Histogram multiset equality across chunk size, backend, and scheduling order |
 | Scale gate | CI smoke `N=1e6`; manual acceptance `N=1e8` |
 | Hardware | hal A30 for CUDA; named AMD GPU for HIP |
-| T13 integrated benchmark | Done on integrated main `68124ad3875e42cbe09247f64bd218a7ac8d58fc`: `N=1e8`, `C=8192`, `P=16128`, Q=1/Q=2/Q=8 wall 218.87 s / 9.83 s / 8.50 s on hal A30, identical histograms across Q, CPU/CUDA rows equal at `N=1e5`/`N=1e6`. |
+| T13 integrated benchmark | Done. The A30 matrix was recorded on integrated main `68124ad3875e42cbe09247f64bd218a7ac8d58fc`: `N=1e8`, `C=8192`, `P=16128`, Q=1/Q=2/Q=8 wall 218.87 s / 9.83 s / 8.50 s on hal A30, identical histograms across Q, CPU/CUDA rows equal at `N=1e5`/`N=1e6`. T13 and T14a are in current main `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b`. |
 
 **Goals**
 
