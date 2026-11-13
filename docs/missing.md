@@ -120,9 +120,10 @@ resource or decision is missing.
   CPU/CUDA diff is empty. Make it a test that compares sorted histogram rows for
   the same `(N, seed, C)` on every compiled backend; add HIP when an AMD device
   is available.
-- [ ] **P1: device-dependent default `C`/`P`.** Replace the fixed default with
-  the device-aware policy from Section 1, print the policy and the chosen
-  values, and keep the CLI override.
+- [x] **P1: device-dependent default `C`/`P`.** Done (policy PR #11): the
+  device-aware policy derives `C`/`P`/`T`, auto-clamps `P` to the usable-memory
+  budget, and rejects an explicit over-budget `P`. The example prints the
+  resolved policy and the chosen values, and the CLI override stays.
 - [ ] **P1: full max-visits/non-termination coverage.** Keep the scripted
   fixture and add cases for particles that reach the visit cap, zero-weight
   particles, empty input, exact chunk fill, and multiple feedback rounds.
