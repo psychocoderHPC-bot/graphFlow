@@ -106,7 +106,7 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
         pool,
         policy,
         capped,
-        threads};
+        128u};
     graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
     graphFlow::ChunkHandle recorded{};

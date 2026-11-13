@@ -137,19 +137,19 @@ namespace
             pool,
             ScriptedFilterPolicy{},
             capped,
-            threads};
+            128u};
         graphFlow::particle::TransformStage<Device, ScriptedAPolicy> processA{
             device,
             pool,
             ScriptedAPolicy{},
             capped,
-            threads};
+            128u};
         graphFlow::particle::TransformStage<Device, ScriptedBPolicy> processB{
             device,
             pool,
             ScriptedBPolicy{},
             capped,
-            threads};
+            128u};
         graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
         graphFlow::GraphRunner<Device> runner{device, pool};

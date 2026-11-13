@@ -19,8 +19,8 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
 | Device memory | `alloc`, `allocLike` | `onHost/Device.hpp:215-260` | `onHost::alloc<T>(device, Vec{numChunks * C})` | CPU | Pool payload arrays are allocated once. |
 | Mapped staging | `allocMapped` | `onHost/Device.hpp:300-320`, `api/host/Device.hpp:277-284` | `onHost::allocMapped<T>(device, Vec{...})` | CPU | Host-visible staging for histogram totals, status words, range counters and the output table. Buffers live as long as their node. |
 | Copies and fills | `memcpy`, `memset`, `fill` | `onHost/Queue.hpp:309-455`, `api/host/Queue.hpp:517-682` | `onHost::memcpy(queue, dst, src)`, `onHost::memset(queue, view, 0)`, `onHost::fill(queue, view, value)` | CPU | All are queue tasks, so they order with kernels and are covered by the node event. `next[B]` is zeroed with `onHost::memset` on the same queue before scatter. Host sources for async copies are persistent mapped views, never temporaries. |
-| Kernel launch | `ThreadSpec`, `FrameSpec`, `KernelBundle`, `enqueue` | `onHost/ThreadSpec.hpp`, `onHost/FrameSpec.hpp`, `onHost/Queue.hpp:129-200`, `KernelBundle.hpp` | `queue.enqueue(ThreadSpec{1u, threads}, KernelBundle{kernel, args...})` | CPU | `ThreadSpec` gives exact block/thread control, which the one-block-per-chunk design needs. `FrameSpec` is intentionally not used because it does not guarantee block boundaries. |
-| Block extent on the host backend | `cpu::Serial`, `cpu::OmpBlocks`, `maxThreadsPerBlock` | `api/host/exec/Serial.hpp:36-44`, `api/host/exec/OmpBlocks.hpp:38-46`, `onHost/DeviceProperties.hpp:43-56` | `GraphRunner::threadsPerBlock(device, T)` returns 1 for `api::Host`; accelerators validate `T <= maxThreadsPerBlock` | CPU | The host executors throw unless `numThreads.product() == 1`. Kernels therefore derive the tile width from `acc.getExtentsOf(origin::block, unit::threads)`, so they are correct for 1 or T real threads and all threads reach every barrier. A zero extent, or an accelerator extent above `maxThreadsPerBlock`, throws instead of reaching `ThreadSpec`. |
+| Kernel launch | `ThreadSpec`, `FrameSpec`, `KernelBundle`, `enqueue` | `onHost/ThreadSpec.hpp`, `onHost/FrameSpec.hpp`, `onHost/Queue.hpp:129-200`, `KernelBundle.hpp` | `queue.enqueue(ThreadSpec{numTiles, blockThreads}, KernelBundle{kernel, args...})` | CPU | `ThreadSpec` gives exact block/thread control, which the one-block-per-tile design needs. `numTiles = ceil(fill/T)` (no block for `fill == 0`), so a chunk larger than `T` is spread over several blocks instead of occupying one SM. `FrameSpec` is intentionally not used because it does not guarantee block boundaries. |
+| Block extent on the host backend | `cpu::Serial`, `cpu::OmpBlocks`, `maxThreadsPerBlock` | `api/host/exec/Serial.hpp:36-44`, `api/host/exec/OmpBlocks.hpp:38-46`, `onHost/DeviceProperties.hpp:43-56` | `ThreadSpec{numTiles, GraphRunner::threadsPerBlock(device, T)}`; `threadsPerBlock` returns 1 for `api::Host`; accelerators validate `T <= maxThreadsPerBlock` | CPU | The host executors throw unless `numThreads.product() == 1`. The launch therefore distinguishes the logical tile width `T` (used by the kernels for `tileOffset` and `count`) from the real block extent (1 on the host, up to `T` on an accelerator). Kernels stride inside the tile with `makeIdxMap(..., worker::threadsInBlock, IdxRange{count})`, so they are correct for 1 or `T` real threads, and every thread reaches every barrier including inactive tail lanes. A zero extent, or an accelerator extent above `maxThreadsPerBlock`, throws instead of reaching `ThreadSpec`. |
 | Index mapping | `makeIdxMap`, `worker::threadsInBlock`, `IdxRange` | `onAcc/interface.hpp:40-170`, `onAcc/WorkerGroup.hpp:118-140`, `onAcc/range.hpp` | `onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{n})` | CPU | Used for every strided loop: shared table zeroing, flush, and particle loops. No hardcoded block size. |
 | Atomics | `atomicAdd`, `atomicExch`, `atomicCas`, `scope::Block`, `scope::Device` | `onAcc/atomic.hpp:25-190`, `onAcc/scope.hpp`, `api/host/atomic.hpp:211-235` | `onAcc::atomicAdd(acc, ptr, 1u, onAcc::scope::block)`, `onAcc::atomicCas(acc, ptr, compare, value, onAcc::scope::block)`, `scope::device` | CPU | Shared per-tile histogram and the hash table key/count use block scope; `counts[bin]`, `next[bin]` and the capped counter use device scope. `atomicCas` is the only writer of a hash key (`0xFFFFFFFF` to bin). `scope::system` is rejected by `static_assert` and is not used. |
 | Shared memory | `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads` | `onAcc/Acc.hpp:132-200`, `mem/MdSpanArray.hpp:45-218` | `onAcc::declareSharedMdArray<uint32_t, uniqueId()>(acc, CVec<uint32_t, B>{})`, `onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(acc, CVec<uint32_t, 2*T>{})`, `onAcc::declareSharedVar<uint32_t, uniqueId()>(acc)`, `onAcc::syncBlockThreads(acc)` | CPU | `declareSharedMdArray` is used with `uint32_t` and with the trivially copyable `HashBinEntry` struct. The hash table is a compile-time-sized array (`2*T`, optionally `4*T`) and is reinitialised by the block. Dynamic shared memory (`getDynSharedMem`) is available but not needed for this fixed size; the dense path keeps its three `B`-word tables. The return value is stored by value. |
@@ -49,11 +49,17 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
    `graphFlow::rng::drawAt` composes the public engine instead: construct at offset 0 and
    call it `offset + 1` times. `tests/unit/test_philox.cpp` pins both the wrapper contract
    and the observed pinned behaviour.
-2. **Host block extent.** `cpu::Serial`, `cpu::OmpBlocks` and `cpu::TbbBlocks` require a
-   thread block extent of one. `ThreadSpec{1, T}` is only valid on accelerators, so the
-   launch helper maps `T` to 1 for `api::Host`. The accelerator branch rejects `T == 0` and
-   `T > DeviceProperties::maxThreadsPerBlock`; the CUDA/HIP branch compiles when the backend
-   is enabled but was not executed in this environment.
+2. **Host block extent and tile-per-block launch.** `cpu::Serial`, `cpu::OmpBlocks` and
+   `cpu::TbbBlocks` require a thread block extent of one. The transform launch still uses one
+   block per tile, `ThreadSpec{ceil(fill/T), threadsPerBlock(device, T)}`, so the grid grows
+   with the chunk while the host block extent stays 1. The kernels receive the logical `T`
+   separately from the block extent and use it for `tileOffset = tile*T` and
+   `count = min(T, fill - tileOffset)`; the inner stride comes from
+   `makeIdxMap(..., worker::threadsInBlock, IdxRange{count})`, which uses the real block
+   extent internally. A zero `T`, or an accelerator `T` above
+   `DeviceProperties::maxThreadsPerBlock`, throws instead of reaching `ThreadSpec`. The
+   CUDA/HIP branch compiles when the backend is enabled but was not executed in this
+   environment.
 3. **No in-kernel scan or sort.** The dense histogram uses shared atomics per tile and a
    device-scope range reservation per nonempty bin. Any scan or sort variant must be
    implemented as project code and measured.
@@ -87,7 +93,10 @@ writing the kernels. Only public `alpaka::onHost` and `alpaka::onAcc` interfaces
    `total[bin]`, and uses `scope::block` for shared memory and `scope::device` for `total[bin]`.
    `HashScatterKernel` rebuilds the table from the stored `binIds`, reserves
    `next[bin] = atomicAdd(next[bin], count, device)` per entry, and hands out `localRank` with a
-   block-scope `atomicAdd`. Both kernels process one whole chunk per block, so the table must have
-   at least as many entries as the chunk's distinct bins. A full table is a hard `BatchError`;
-   there is no dense fallback. The dense path remains the correctness reference and is compared
-   against the hash path in `tests/integration/test_hash_bins.cpp`.
+   block-scope `atomicAdd`. Both kernels process one tile per block and keep a private shared
+   table for that tile, so the table must have at least as many entries as the tile's distinct
+   bins (at most `T`); `HashBinTable<T>` sizes it at `2*T` entries. Tiles of the same chunk
+   reserve disjoint global ranges from `next[bin]`, so `j = base + rank` spans chunks exactly as
+   before. A full table is a hard `BatchError`; there is no dense fallback. The dense path remains
+   the correctness reference and is compared against the hash path in
+   `tests/integration/test_hash_bins.cpp`.

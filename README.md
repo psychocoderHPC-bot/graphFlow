@@ -131,10 +131,11 @@ non-terminating.
 
 ## Pipeline
 
-1. `ClassifyKernel<Policy, B>` processes one chunk per block. Per tile it zeroes a shared
-   `counts[B]` table, classifies, writes `binIds[slot]`, accumulates with block-scope
-   atomics, and flushes nonempty bins into `counts[bin]` with device-scope atomics.
-   `counts[B]` is the status word.
+1. `ClassifyKernel<Policy, B>` launches one block per tile of a chunk
+   (`ceil(fill / T)` blocks). Each block zeroes its shared `counts[B]` table, classifies its
+   `[tile*T, min(fill, (tile+1)*T))` slice, writes `binIds[slot]`, accumulates with
+   block-scope atomics, and flushes nonempty bins into `counts[bin]` with device-scope
+   atomics. `counts[B]` is the status word.
 2. The host copies `counts[B + 1]` to an `allocMapped` staging buffer and the queue event
    covers that copy. After polling the event, it allocates exactly
    `sum_b ceil(total_b / C)` output chunks, builds `binBase[B]` plus the flat output chunk

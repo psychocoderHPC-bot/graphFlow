@@ -13,20 +13,22 @@
 
 namespace graphFlow
 {
-    /** Large-bin histogram kernel for one input chunk.
+    /** Large-bin histogram kernel for one tile of one input chunk.
      *
-     * One thread block processes the whole chunk. Per particle the classifier is applied once and
-     * its bin is inserted into a per-block open-addressing hash table (`atomicCas` on the key,
-     * `atomicAdd` on the count). After the insertion barrier every occupied entry is flushed into
-     * the device-scope `counts[bin]` total, so the shared table never has to be as wide as the bin
-     * count.
+     * The launch uses one thread block per tile, so the block index selects the tile
+     * `[tileOffset, tileOffset + count)` this block owns. Per particle the classifier is applied
+     * once and its bin is inserted into a per-block open-addressing hash table (`atomicCas` on the
+     * key, `atomicAdd` on the count). After the insertion barrier every occupied entry is flushed
+     * into the device-scope `counts[bin]` total, so the shared table never has to be as wide as the
+     * bin count.
      *
      * A full table is a hard batch error: the block records it in a shared flag, writes
      * `counts[maxBins]` and returns without flushing. The host then aborts the batch before any
      * output chunk is planned, so no partial output is published. There is no dense fallback.
      *
      * An out-of-range classifier result (`bin >= maxBins`) writes the same status word and is not
-     * inserted, so it can never index the shared table or the global totals.
+     * inserted, so it can never index the shared table or the global totals. Every thread reaches
+     * every block barrier, including inactive tail lanes.
      */
     template<typename TPolicy, typename TBinTable>
     struct HashClassifyKernel
@@ -43,8 +45,10 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto visits,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto counts,
-            std::uint32_t base,
+            std::uint32_t chunkIndex,
+            std::uint32_t chunkCapacity,
             std::uint32_t fill,
+            std::uint32_t tileSize,
             std::uint32_t maxBins) const
         {
             using namespace alpaka;
@@ -53,6 +57,12 @@ namespace graphFlow
                 acc,
                 CVec<std::uint32_t, TBinTable::entries>{});
             auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
+
+            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
+            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
+            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
+            std::uint32_t const base = chunkIndex * chunkCapacity;
 
             for(auto [entry] : onAcc::makeIdxMap(
                     acc,
@@ -67,9 +77,9 @@ namespace graphFlow
             }
             onAcc::syncBlockThreads(acc);
 
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{fill}))
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const slot = base + i;
+                std::uint32_t const slot = base + tileOffset + i;
                 Particle particle{ids[slot], properties[slot], weights[slot], visits[slot]};
                 std::uint32_t const bin
                     = policy.classify(particle.id, particle.property, particle.weight, particle.visit);
@@ -103,7 +113,6 @@ namespace graphFlow
                 if(bin != hashEmptyKey)
                     onAcc::atomicAdd(acc, &counts[bin], table[entry].count, onAcc::scope::device);
             }
-            onAcc::syncBlockThreads(acc);
         }
     };
 } // namespace graphFlow

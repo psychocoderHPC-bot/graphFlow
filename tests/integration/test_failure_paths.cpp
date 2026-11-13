@@ -92,7 +92,7 @@ TEST_CASE("a throwing source launch fails the run without stalling", "[integrati
         pool,
         AllToBinZeroPolicy{},
         alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
-        threads};
+        128u};
     graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
     std::uint32_t launches = 0u;
@@ -161,7 +161,7 @@ TEST_CASE("a failed transform batch poisons the stage and restores the pool", "[
         pool,
         SplitEvenPolicy{},
         capped,
-        threads};
+        128u};
 
     graphFlow::ChunkDescriptor const chunk{pool.acquire(), 4u, 0u};
     Runner::Batch const batch{chunk, 0u};

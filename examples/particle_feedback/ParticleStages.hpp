@@ -44,6 +44,26 @@ namespace graphFlow::particle
         std::uint32_t deviceIndex = 0u;
     };
 
+    /** Checked number of tiles needed by a chunk.
+     *
+     * One thread block is launched per tile, so a zero fill launches no block and an empty chunk
+     * never reaches a kernel. The division is performed in 64 bit because `fill + T - 1` can
+     * overflow 32 bit when `fill` is close to `UINT32_MAX`; for `T >= 1` the result fits in
+     * 32 bit because it never exceeds `fill`.
+     */
+    inline std::uint32_t tileCount(std::uint32_t fill, std::uint32_t tileSize)
+    {
+        if(tileSize == 0u)
+            throw std::invalid_argument{"graphFlow: tile size must be non-zero"};
+        if(fill == 0u)
+            return 0u;
+        std::uint64_t const tiles
+            = (static_cast<std::uint64_t>(fill) + static_cast<std::uint64_t>(tileSize) - 1u) / tileSize;
+        if(tiles > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{"graphFlow: tile count exceeds the launchable block count"};
+        return static_cast<std::uint32_t>(tiles);
+    }
+
     struct HistogramRow
     {
         std::uint32_t weight = 0u;
@@ -209,19 +229,27 @@ namespace graphFlow::particle
         using MappedU32View
             = ALPAKA_TYPEOF(alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
+        /** `tileSize` is the logical tile width T, not the resolved block extent.
+         *
+         * The stage launches one block per tile with
+         * `ThreadSpec{tileCount(fill, T), GraphRunner::threadsPerBlock(device, T)}`. On the host
+         * backend the block extent collapses to one real thread while T keeps the tile slice
+         * width used by the kernels, so a chunk larger than T still splits into several blocks.
+         */
         TransformStage(
             TDevice const& device,
             ChunkPool<TDevice>& pool,
             TPolicy policy,
             U32View capped,
-            std::uint32_t threadsPerBlock)
+            std::uint32_t tileSize)
             : m_pool{pool}
             , m_policy{policy}
             , m_capacity{pool.chunkCapacity()}
             , m_bins{TPolicy::maxBins}
             , m_reserveBound{static_cast<std::uint32_t>(
                   outputChunkBound(pool.chunkCapacity(), pool.chunkCapacity(), TPolicy::maxBins))}
-            , m_threads{threadsPerBlock}
+            , m_tileSize{tileSize}
+            , m_threads{GraphRunner<TDevice>::threadsPerBlock(device, tileSize)}
             , m_counts{alpaka::onHost::alloc<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(TPolicy::maxBins) + 1u})}
@@ -255,36 +283,44 @@ namespace graphFlow::particle
 
             // total[B] + status word; both start at zero for this batch.
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
-            if constexpr(TBinTable::isHash)
+            std::uint32_t const tiles = tileCount(chunk.fill, m_tileSize);
+            if(tiles != 0u)
             {
-                queue.enqueue(
-                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                    alpaka::KernelBundle{
-                        HashClassifyKernel<TPolicy, TBinTable>{m_policy},
-                        m_pool.ids(),
-                        m_pool.properties(),
-                        m_pool.weights(),
-                        m_pool.visits(),
-                        m_pool.binIds(),
-                        m_counts,
-                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                        chunk.fill,
-                        m_bins});
-            }
-            else
-            {
-                queue.enqueue(
-                    alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                    alpaka::KernelBundle{
-                        ClassifyKernel<TPolicy>{m_policy},
-                        m_pool.ids(),
-                        m_pool.properties(),
-                        m_pool.weights(),
-                        m_pool.visits(),
-                        m_pool.binIds(),
-                        m_counts,
-                        static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                        chunk.fill});
+                if constexpr(TBinTable::isHash)
+                {
+                    queue.enqueue(
+                        alpaka::onHost::ThreadSpec{tiles, m_threads},
+                        alpaka::KernelBundle{
+                            HashClassifyKernel<TPolicy, TBinTable>{m_policy},
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_pool.binIds(),
+                            m_counts,
+                            chunk.handle.index,
+                            m_capacity,
+                            chunk.fill,
+                            m_tileSize,
+                            m_bins});
+                }
+                else
+                {
+                    queue.enqueue(
+                        alpaka::onHost::ThreadSpec{tiles, m_threads},
+                        alpaka::KernelBundle{
+                            ClassifyKernel<TPolicy>{m_policy},
+                            m_pool.ids(),
+                            m_pool.properties(),
+                            m_pool.weights(),
+                            m_pool.visits(),
+                            m_pool.binIds(),
+                            m_counts,
+                            chunk.handle.index,
+                            m_capacity,
+                            chunk.fill,
+                            m_tileSize});
+                }
             }
             // The event the scheduler arms after this call covers the metadata copy.
             alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
@@ -331,6 +367,7 @@ namespace graphFlow::particle
     private:
         void planAndScatter(Queue const& queue, ChunkDescriptor const& chunk, std::uint32_t& allocated)
         {
+            std::uint32_t const tiles = tileCount(chunk.fill, m_tileSize);
             std::uint32_t const* host = m_countsHost.data();
             if(host[m_bins] != 0u)
                 throw BatchError{"classify: device status reports an invalid classifier result"};
@@ -370,50 +407,58 @@ namespace graphFlow::particle
 
                 if constexpr(TBinTable::isHash)
                 {
-                    queue.enqueue(
-                        alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                        alpaka::KernelBundle{
-                            HashScatterKernel<TPolicy, TBinTable>{m_policy},
-                            m_pool.ids(),
-                            m_pool.properties(),
-                            m_pool.weights(),
-                            m_pool.visits(),
-                            m_pool.binIds(),
-                            m_pool.ids(),
-                            m_pool.properties(),
-                            m_pool.weights(),
-                            m_pool.visits(),
-                            m_table,
-                            m_next,
-                            m_counts,
-                            m_capped,
-                            static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                            m_capacity,
-                            chunk.fill,
-                            m_bins});
+                    if(tiles != 0u)
+                    {
+                        queue.enqueue(
+                            alpaka::onHost::ThreadSpec{tiles, m_threads},
+                            alpaka::KernelBundle{
+                                HashScatterKernel<TPolicy, TBinTable>{m_policy},
+                                m_pool.ids(),
+                                m_pool.properties(),
+                                m_pool.weights(),
+                                m_pool.visits(),
+                                m_pool.binIds(),
+                                m_pool.ids(),
+                                m_pool.properties(),
+                                m_pool.weights(),
+                                m_pool.visits(),
+                                m_table,
+                                m_next,
+                                m_counts,
+                                m_capped,
+                                chunk.handle.index,
+                                m_capacity,
+                                chunk.fill,
+                                m_tileSize,
+                                m_bins});
+                    }
                 }
                 else
                 {
-                    queue.enqueue(
-                        alpaka::onHost::ThreadSpec{std::uint32_t{1u}, m_threads},
-                        alpaka::KernelBundle{
-                            ScatterKernel<TPolicy>{m_policy},
-                            m_pool.ids(),
-                            m_pool.properties(),
-                            m_pool.weights(),
-                            m_pool.visits(),
-                            m_pool.binIds(),
-                            m_pool.ids(),
-                            m_pool.properties(),
-                            m_pool.weights(),
-                            m_pool.visits(),
-                            m_table,
-                            m_next,
-                            m_counts,
-                            m_capped,
-                            static_cast<std::uint32_t>(m_pool.base(chunk.handle)),
-                            m_capacity,
-                            chunk.fill});
+                    if(tiles != 0u)
+                    {
+                        queue.enqueue(
+                            alpaka::onHost::ThreadSpec{tiles, m_threads},
+                            alpaka::KernelBundle{
+                                ScatterKernel<TPolicy>{m_policy},
+                                m_pool.ids(),
+                                m_pool.properties(),
+                                m_pool.weights(),
+                                m_pool.visits(),
+                                m_pool.binIds(),
+                                m_pool.ids(),
+                                m_pool.properties(),
+                                m_pool.weights(),
+                                m_pool.visits(),
+                                m_table,
+                                m_next,
+                                m_counts,
+                                m_capped,
+                                chunk.handle.index,
+                                m_capacity,
+                                chunk.fill,
+                                m_tileSize});
+                    }
                 }
 
                 // The completion event must cover the status word and the range counters.
@@ -474,6 +519,7 @@ namespace graphFlow::particle
         std::uint32_t m_capacity;
         std::uint32_t m_bins;
         std::uint32_t m_reserveBound;
+        std::uint32_t m_tileSize;
         std::uint32_t m_threads;
         U32View m_counts;
         MappedU32View m_countsHost;

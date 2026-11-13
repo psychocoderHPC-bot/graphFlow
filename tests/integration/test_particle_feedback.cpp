@@ -89,6 +89,27 @@ TEST_CASE("particle feedback matches the scalar oracle for the capacity matrix",
     }
 }
 
+TEST_CASE("particle feedback matches the scalar oracle with chunks larger than T", "[integration]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+
+    // C=1024 with T=128 gives eight blocks per full chunk; N=1000 ends in a partial tail tile
+    // inside the only chunk, N=4097 exercises full chunks plus a one-particle tail chunk.
+    for(std::uint64_t const particles : {1000ull, 4097ull})
+    {
+        graphFlow::particle::Parameters parameters{};
+        parameters.numParticles = particles;
+        parameters.chunkSize = 1024u;
+        parameters.tileSize = 128u;
+        parameters.seed = 42u;
+        parameters.maxVisits = 64u;
+
+        CAPTURE(particles, parameters.chunkSize, parameters.tileSize);
+        auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+        checkAgainstReference(parameters, result);
+    }
+}
+
 TEST_CASE("max-visits guard terminates pathological feedback", "[integration]")
 {
     auto const device = graphFlow::test::makeCpuDevice();

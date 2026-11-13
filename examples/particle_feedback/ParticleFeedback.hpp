@@ -110,6 +110,8 @@ namespace graphFlow::particle
         config.validate();
 
         std::uint32_t const threads = GraphRunner<TDevice>::threadsPerBlock(device, config.tileSize);
+        // The transform stages take the logical tile width and resolve the real block extent
+        // themselves; generate and sink stay one block per chunk with the resolved extent.
         ChunkPool<TDevice> pool{device, config.numChunks, config.chunkCapacity};
 
         // The result buffer is indexed by particle id; the sentinel detects missing deliveries.
@@ -128,9 +130,9 @@ namespace graphFlow::particle
         ProcessBPolicy processBPolicy{parameters.seed, parameters.maxVisits};
 
         GenerateStage<TDevice> generate{pool, parameters.seed, threads};
-        TransformStage<TDevice, FilterPolicy> filter{device, pool, filterPolicy, capped, threads};
-        TransformStage<TDevice, ProcessAPolicy> processA{device, pool, processAPolicy, capped, threads};
-        TransformStage<TDevice, ProcessBPolicy> processB{device, pool, processBPolicy, capped, threads};
+        TransformStage<TDevice, FilterPolicy> filter{device, pool, filterPolicy, capped, config.tileSize};
+        TransformStage<TDevice, ProcessAPolicy> processA{device, pool, processAPolicy, capped, config.tileSize};
+        TransformStage<TDevice, ProcessBPolicy> processB{device, pool, processBPolicy, capped, config.tileSize};
         SinkStage<TDevice> sink{pool, result, threads};
 
         GraphRunner<TDevice> runner{device, pool};

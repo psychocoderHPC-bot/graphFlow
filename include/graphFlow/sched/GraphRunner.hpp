@@ -160,8 +160,10 @@ namespace graphFlow
         /** Threads per block for a node launch.
          *
          * The host backend executes exactly one real thread per block (`api/host/exec/Serial.hpp`
-         * rejects any other block extent), so `ThreadSpec{1, T}` maps to `{1, 1}` on `api::Host`
-         * while the kernel keeps the tile and barrier structure required by accelerators.
+         * rejects any other block extent), so `ThreadSpec{numBlocks, T}` maps its thread extent to
+         * `1` on `api::Host` while the kernel keeps the tile and barrier structure required by
+         * accelerators. The transform stages launch one block per tile and pass the logical tile
+         * width `T` separately from this resolved block extent.
          *
          * Accelerator launches use the requested extent but never exceed
          * `DeviceProperties::maxThreadsPerBlock`. An invalid extent (zero, or larger than the

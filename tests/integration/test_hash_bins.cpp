@@ -11,6 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -92,12 +93,13 @@ namespace
         }
 
         graphFlow::particle::GenerateStage<TDevice> generate{pool, 0u, threads};
+        // The transform takes the logical tile width T and resolves the block extent itself.
         graphFlow::particle::TransformStage<TDevice, TPolicy, TBinTable> transform{
             device,
             pool,
             policy,
             capped,
-            threads};
+            128u};
         graphFlow::particle::SinkStage<TDevice> sink{pool, result, threads};
 
         std::vector<int> route(TPolicy::maxBins, 2);
@@ -193,6 +195,46 @@ TEST_CASE("hash and dense pipelines agree at overlapping bin counts", "[integrat
     }
 }
 
+TEST_CASE("dense and hash pipelines tile a chunk larger than T", "[integration][hash]")
+{
+    // Eight blocks per chunk: seven full 128-particle tiles plus one full or partial tail tile.
+    struct Case
+    {
+        std::uint64_t particles;
+        std::uint32_t capacity;
+    };
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+    for(Case const& testCase : {Case{1024u, 1024u}, Case{1000u, 1000u}})
+    {
+        CAPTURE(testCase.particles, testCase.capacity);
+        std::vector<std::uint32_t> const dense
+            = runPipeline<Device, ModPolicy<64u>, graphFlow::DenseBinTable>(
+                device,
+                testCase.particles,
+                testCase.capacity,
+                ModPolicy<64u>{});
+        std::vector<std::uint32_t> const hash
+            = runPipeline<Device, ModPolicy<64u>, graphFlow::HashBinTable<128u>>(
+                device,
+                testCase.particles,
+                testCase.capacity,
+                ModPolicy<64u>{});
+        std::vector<std::uint32_t> const expected = expectedBins<64u>(testCase.particles);
+        CHECK(hash == dense);
+        CHECK(hash == expected);
+
+        std::vector<std::uint32_t> sortedHash = hash;
+        std::vector<std::uint32_t> sortedExpected = expected;
+        std::sort(sortedHash.begin(), sortedHash.end());
+        std::sort(sortedExpected.begin(), sortedExpected.end());
+        CHECK(sortedHash == sortedExpected);
+        CHECK(
+            graphFlow::particle::histogramOf(hash)
+            == graphFlow::particle::histogramOf(expected));
+    }
+}
+
 TEST_CASE("hash pipeline handles sparse 4096 and 65536 bin distributions", "[integration][hash]")
 {
     auto device = graphFlow::test::makeCpuDevice();
@@ -265,7 +307,7 @@ TEST_CASE("hash table exhaustion aborts the batch", "[integration][hash]")
         pool,
         ModPolicy<16u>{},
         capped,
-        threads};
+        128u};
     graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
     std::vector<int> route(ModPolicy<16u>::maxBins, 2);
@@ -331,7 +373,7 @@ TEST_CASE("invalid classifier results abort the hash batch", "[integration][hash
         pool,
         InvalidHashPolicy{},
         capped,
-        threads};
+        128u};
     graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
     graphFlow::GraphRunner<Device> runner{device, pool};

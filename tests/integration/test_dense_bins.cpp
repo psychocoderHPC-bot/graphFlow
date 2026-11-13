@@ -82,7 +82,8 @@ namespace
     Dense64Outcome runDense64(
         std::uint64_t particles,
         std::uint32_t capacity,
-        std::uint32_t liveParticles)
+        std::uint32_t liveParticles,
+        std::uint32_t tileSize = 128u)
     {
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
@@ -106,7 +107,7 @@ namespace
             Bin64Policy{},
             // The 64-bin test does not exercise the capped counter; a one-word buffer is enough.
             alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
-            threads};
+            tileSize};
         graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
         std::vector<int> route(Bin64Policy::maxBins, 2);
@@ -192,6 +193,32 @@ TEST_CASE("dense pipeline handles 64 bins with a bounded particle budget", "[int
     CHECK(outcome.stats.peakLiveChunks <= outcome.stats.poolChunks);
 }
 
+TEST_CASE("dense pipeline tiles a chunk larger than T", "[integration][dense]")
+{
+    // Both cases launch eight blocks for their single chunk. With C=1024 and 1024 particles
+    // the chunk is exactly eight full tiles; with C=1000 the last tile holds only 104
+    // particles.
+    struct Case
+    {
+        std::uint64_t particles;
+        std::uint32_t capacity;
+    };
+    for(Case const& testCase : {Case{1024u, 1024u}, Case{1000u, 1000u}})
+    {
+        CAPTURE(testCase.particles, testCase.capacity);
+        Dense64Outcome const outcome = runDense64(testCase.particles, testCase.capacity, 0u, 128u);
+        REQUIRE(outcome.sunkParticles == testCase.particles);
+
+        std::vector<std::uint32_t> const expected = expectedDense64(testCase.particles);
+        std::vector<std::uint32_t> host = outcome.weights;
+        std::sort(host.begin(), host.end());
+        CHECK(host == expected); // multiset equality, independent of tile order
+        CHECK(
+            graphFlow::particle::histogramOf(outcome.weights)
+            == graphFlow::particle::histogramOf(expected));
+    }
+}
+
 TEST_CASE("invalid classifier results abort the batch", "[integration][dense]")
 {
     auto device = graphFlow::test::makeCpuDevice();
@@ -207,7 +234,7 @@ TEST_CASE("invalid classifier results abort the batch", "[integration][dense]")
         pool,
         InvalidPolicy{},
         alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}}),
-        threads};
+        128u};
     graphFlow::particle::SinkStage<Device> sink{pool, result, threads};
 
     graphFlow::GraphRunner<Device> runner{device, pool};

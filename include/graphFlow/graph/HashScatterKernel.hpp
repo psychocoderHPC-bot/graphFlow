@@ -13,10 +13,11 @@
 
 namespace graphFlow
 {
-    /** Large-bin scatter kernel for one input chunk.
+    /** Large-bin scatter kernel for one tile of one input chunk.
      *
-     * One thread block processes the whole chunk. It rebuilds the per-bin counts from the stored
-     * `binIds` into a per-block hash table, reserves one device-scope range
+     * The launch uses one thread block per tile, so the block index selects the slice
+     * `[tileOffset, tileOffset + count)` this block owns. It rebuilds the per-bin counts from the
+     * stored `binIds` into a per-block hash table, reserves one device-scope range
      * `base[bin] = atomicAdd(&next[bin], count, device)` per occupied entry, resets the per-entry
      * `localRank`, and then lets every particle claim `rank = atomicAdd(&localRank, 1, block)`.
      * The resulting `j = base[bin] + rank` may span chunk boundaries; the output chunk is resolved
@@ -24,7 +25,8 @@ namespace graphFlow
      *
      * A full table during the rebuild is a hard batch error: the block writes `counts[maxBins]`
      * and returns before reserving or writing any output. The host sees the status word and does
-     * not publish the partial batch.
+     * not publish the partial batch. Every thread reaches every block barrier, including inactive
+     * tail lanes.
      */
     template<typename TPolicy, typename TBinTable>
     struct HashScatterKernel
@@ -48,9 +50,10 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto next,
             alpaka::concepts::IMdSpan auto counts,
             alpaka::concepts::IMdSpan auto capped,
-            std::uint32_t inBase,
-            std::uint32_t outCapacity,
+            std::uint32_t chunkIndex,
+            std::uint32_t chunkCapacity,
             std::uint32_t fill,
+            std::uint32_t tileSize,
             std::uint32_t maxBins) const
         {
             using namespace alpaka;
@@ -59,6 +62,12 @@ namespace graphFlow
                 acc,
                 CVec<std::uint32_t, TBinTable::entries>{});
             auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
+
+            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
+            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
+            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
+            std::uint32_t const inBase = chunkIndex * chunkCapacity;
 
             for(auto [entry] : onAcc::makeIdxMap(
                     acc,
@@ -73,9 +82,9 @@ namespace graphFlow
             onAcc::syncBlockThreads(acc);
 
             // Rebuild the per-bin counts from the stored bin ids; never recompute the classifier.
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{fill}))
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const bin = binIds[inBase + i];
+                std::uint32_t const bin = binIds[inBase + tileOffset + i];
                 if(bin >= maxBins)
                 {
                     onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
@@ -114,9 +123,9 @@ namespace graphFlow
             }
             onAcc::syncBlockThreads(acc);
 
-            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{fill}))
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const slotIn = inBase + i;
+                std::uint32_t const slotIn = inBase + tileOffset + i;
                 std::uint32_t const bin = binIds[slotIn];
                 if(bin >= maxBins)
                     continue;
@@ -130,19 +139,18 @@ namespace graphFlow
                 std::uint32_t const rank
                     = onAcc::atomicAdd(acc, &entry->localRank, std::uint32_t{1u}, onAcc::scope::block);
                 std::uint32_t const j = entry->base + rank;
-                std::uint32_t const chunk = table[maxBins + table[bin] + j / outCapacity];
-                std::uint32_t const offset = j % outCapacity;
+                std::uint32_t const chunk = table[maxBins + table[bin] + j / chunkCapacity];
+                std::uint32_t const offset = j % chunkCapacity;
 
                 Particle particle{idsIn[slotIn], propertiesIn[slotIn], weightsIn[slotIn], visitsIn[slotIn]};
                 policy.apply(acc, bin, particle, &counts[maxBins], &capped[0u]);
 
-                std::uint32_t const slotOut = chunk * outCapacity + offset;
+                std::uint32_t const slotOut = chunk * chunkCapacity + offset;
                 idsOut[slotOut] = particle.id;
                 propertiesOut[slotOut] = particle.property;
                 weightsOut[slotOut] = particle.weight;
                 visitsOut[slotOut] = particle.visit;
             }
-            onAcc::syncBlockThreads(acc);
         }
     };
 } // namespace graphFlow

@@ -12,9 +12,10 @@
 
 namespace graphFlow
 {
-    /** Dense scatter kernel for one input chunk.
+    /** Dense scatter kernel for one tile of one input chunk.
      *
-     * One thread block processes one input chunk tile by tile. Per tile the block:
+     * The launch uses one thread block per tile, so the block index selects the tile; the block
+     * then:
      *  1. rebuilds the per-bin counts from the stored `binIds` (the classifier is not recomputed),
      *  2. reserves one device-scope range `base[bin] = atomicAdd(&next[bin], count, device)` per
      *     nonempty bin,
@@ -23,7 +24,8 @@ namespace graphFlow
      *  5. applies the policy payload mutation and writes the payload fields to the output slot.
      *
      * Ranges of different tiles in the same bin are disjoint; a range may span chunk boundaries.
-     * `counts[T_B]` is the status word and is set to 1 on a checked weight overflow.
+     * `counts[T_B]` is the status word and is set to 1 on a checked weight overflow. Every thread
+     * reaches every block barrier, including inactive tail lanes.
      */
     template<typename TPolicy, std::uint32_t T_B = TPolicy::maxBins>
     struct ScatterKernel
@@ -47,9 +49,10 @@ namespace graphFlow
             alpaka::concepts::IMdSpan auto next,
             alpaka::concepts::IMdSpan auto counts,
             alpaka::concepts::IMdSpan auto capped,
-            std::uint32_t inBase,
-            std::uint32_t outCapacity,
-            std::uint32_t fill) const
+            std::uint32_t chunkIndex,
+            std::uint32_t chunkCapacity,
+            std::uint32_t fill,
+            std::uint32_t tileSize) const
         {
             using namespace alpaka;
 
@@ -59,58 +62,53 @@ namespace graphFlow
             auto tileCursor
                 = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
 
-            auto const threadExtents = acc.getExtentsOf(onAcc::origin::block, onAcc::unit::threads);
-            std::uint32_t const tileWidth = static_cast<std::uint32_t>(threadExtents.product());
+            auto const [tile] = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
+            std::uint32_t const tileOffset = static_cast<std::uint32_t>(tile) * tileSize;
+            std::uint32_t const remaining = fill > tileOffset ? fill - tileOffset : 0u;
+            std::uint32_t const count = remaining < tileSize ? remaining : tileSize;
+            std::uint32_t const inBase = chunkIndex * chunkCapacity;
 
-            for(std::uint32_t tileBaseIdx = 0u; tileBaseIdx < fill; tileBaseIdx += tileWidth)
+            for(auto [bin] :
+                onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                tileCounts[bin] = 0u;
+            onAcc::syncBlockThreads(acc);
+
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
             {
-                std::uint32_t const particles = fill - tileBaseIdx;
-                std::uint32_t const tileLength = particles < tileWidth ? particles : tileWidth;
+                std::uint32_t const bin = binIds[inBase + tileOffset + i];
+                onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
+            }
+            onAcc::syncBlockThreads(acc);
 
-                for(auto [bin] :
-                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
-                    tileCounts[bin] = 0u;
-                onAcc::syncBlockThreads(acc);
-
-                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{tileLength}))
+            for(auto [bin] :
+                onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+            {
+                std::uint32_t const inTile = tileCounts[bin];
+                if(inTile != 0u)
                 {
-                    std::uint32_t const bin = binIds[inBase + tileBaseIdx + i];
-                    onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
+                    tileBase[bin] = onAcc::atomicAdd(acc, &next[bin], inTile, onAcc::scope::device);
+                    tileCursor[bin] = 0u;
                 }
-                onAcc::syncBlockThreads(acc);
+            }
+            onAcc::syncBlockThreads(acc);
 
-                for(auto [bin] :
-                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
-                {
-                    std::uint32_t const inTile = tileCounts[bin];
-                    if(inTile != 0u)
-                    {
-                        tileBase[bin] = onAcc::atomicAdd(acc, &next[bin], inTile, onAcc::scope::device);
-                        tileCursor[bin] = 0u;
-                    }
-                }
-                onAcc::syncBlockThreads(acc);
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+            {
+                std::uint32_t const slotIn = inBase + tileOffset + i;
+                std::uint32_t const bin = binIds[slotIn];
+                std::uint32_t const rank = onAcc::atomicAdd(acc, &tileCursor[bin], std::uint32_t{1u}, onAcc::scope::block);
+                std::uint32_t const j = tileBase[bin] + rank;
+                std::uint32_t const chunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
+                std::uint32_t const offset = j % chunkCapacity;
 
-                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{tileLength}))
-                {
-                    std::uint32_t const slotIn = inBase + tileBaseIdx + i;
-                    std::uint32_t const bin = binIds[slotIn];
-                    std::uint32_t const rank = onAcc::atomicAdd(acc, &tileCursor[bin], std::uint32_t{1u}, onAcc::scope::block);
-                    std::uint32_t const j = tileBase[bin] + rank;
-                    std::uint32_t const chunk = table[std::uint32_t{T_B} + table[bin] + j / outCapacity];
-                    std::uint32_t const offset = j % outCapacity;
+                Particle particle{idsIn[slotIn], propertiesIn[slotIn], weightsIn[slotIn], visitsIn[slotIn]};
+                policy.apply(acc, bin, particle, &counts[T_B], &capped[0u]);
 
-                    Particle particle{idsIn[slotIn], propertiesIn[slotIn], weightsIn[slotIn], visitsIn[slotIn]};
-                    policy.apply(acc, bin, particle, &counts[T_B], &capped[0u]);
-
-                    std::uint32_t const slotOut = chunk * outCapacity + offset;
-                    idsOut[slotOut] = particle.id;
-                    propertiesOut[slotOut] = particle.property;
-                    weightsOut[slotOut] = particle.weight;
-                    visitsOut[slotOut] = particle.visit;
-                }
-                // All threads must leave the tile before the next tile zeroes the shared tables.
-                onAcc::syncBlockThreads(acc);
+                std::uint32_t const slotOut = chunk * chunkCapacity + offset;
+                idsOut[slotOut] = particle.id;
+                propertiesOut[slotOut] = particle.property;
+                weightsOut[slotOut] = particle.weight;
+                visitsOut[slotOut] = particle.visit;
             }
         }
     };
