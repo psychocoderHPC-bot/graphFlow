@@ -32,7 +32,7 @@ required:
   --out DIR                existing, writable output directory
 
 run selection:
-  --backend LIST           cpu,cuda,hip, or a comma-separated list (default: preset)
+  --backend LIST           cpu,cuda,hip; comma- or space-separated (default: preset)
   --device N               device index passed to every run (default: 0)
   --n LIST                 particle counts N (comma-separated)
   --chunk-sizes LIST       chunk sizes C
@@ -41,14 +41,127 @@ run selection:
   --seeds LIST             seeds S
   --matrix PRESET          smoke (default), acceptance, fwk394, or full
   --timeout S              per-run wall-clock limit in seconds (default: preset)
+  --self-test, --dry-run   run the harness self-test and exit
 
 reference hook:
   --copy-reference [CMD]   run CMD and capture its output; with no CMD only the
                            documented copy-bandwidth command is reported
 
-Every list may be overridden independently of the preset. LIST values are
-positive integers, except --seeds, which also accepts 0.
+Every list may be overridden independently of the preset. Numeric LIST values
+are positive integers, except --seeds, which also accepts 0. --backend accepts
+backend names.
 EOF
+}
+
+# Internal tables use an ASCII unit separator instead of a tab. A tab is IFS
+# whitespace, so `read` collapses empty fields and shifts later columns.
+SEP=$'\x1f'
+
+tsv_join()
+{
+    local -a fields=("$@")
+    local out="" i field
+    for i in "${!fields[@]}"; do
+        field="${fields[i]}"
+        field="${field//$SEP/ }"
+        if (( i > 0 )); then
+            out+="$SEP"
+        fi
+        out+="$field"
+    done
+    printf '%s\n' "$out"
+}
+
+csv_quote()
+{
+    local text="${1-}"
+    text="${text//\"/\"\"}"
+    printf '"%s"' "$text"
+}
+
+# Backend names accept a comma- or space-separated list. This must not go
+# through split_list(), which validates unsigned integers.
+split_backends()
+{
+    local input="$1" value
+    IFS=', ' read -r -a SPLIT_VALUES <<< "$input" || true
+    (( ${#SPLIT_VALUES[@]} > 0 )) || die "--backend list is empty"
+    for value in "${SPLIT_VALUES[@]}"; do
+        [[ -n "$value" ]] || die "--backend list '$input' contains an empty element"
+        case "$value" in
+            cpu|cuda|hip) ;;
+            *) die "--backend accepts cpu, cuda, or hip (got '$value')" ;;
+        esac
+    done
+}
+
+# Main-path backend initialisation: split, validate, and de-duplicate in order.
+init_backends()
+{
+    local input="$1" value seen duplicate
+    split_backends "$input"
+    backends=()
+    for value in "${SPLIT_VALUES[@]}"; do
+        duplicate="0"
+        for seen in "${backends[@]:-}"; do
+            [[ "$seen" == "$value" ]] && duplicate="1"
+        done
+        [[ "$duplicate" == "1" ]] || backends+=("$value")
+    done
+}
+
+run_self_test()
+{
+    local -a expected fields
+    local line
+
+    init_backends "cpu,cuda hip"
+    expected=(cpu cuda hip)
+    if [[ "${backends[*]}" != "${expected[*]}" ]]; then
+        printf 'self-test FAIL: backend comma/space split, got [%s]\n' "${backends[*]}" >&2
+        return 1
+    fi
+
+    init_backends "cuda"
+    expected=(cuda)
+    if [[ "${backends[*]}" != "${expected[*]}" ]]; then
+        printf 'self-test FAIL: single backend, got [%s]\n' "${backends[*]}" >&2
+        return 1
+    fi
+
+    init_backends "cpu,cuda cpu"
+    expected=(cpu cuda)
+    if [[ "${backends[*]}" != "${expected[*]}" ]]; then
+        printf 'self-test FAIL: backend de-duplication, got [%s]\n' "${backends[*]}" >&2
+        return 1
+    fi
+
+    # 23 fields with field 10 (failure) empty. The old tab-delimited reader
+    # dropped that empty field and shifted every later column.
+    line="$(tsv_join case_0001 cpu cpu 0 100000 128 1024 1 42 ok "" 0 1.23 456 789 1030 12 6 90 100000 "C=128 P=1024" /tmp/log /tmp/hist)"
+    IFS="$SEP" read -r -a fields <<< "$line"
+    if (( ${#fields[@]} != 23 )); then
+        printf 'self-test FAIL: expected 23 TSV fields, got %d\n' "${#fields[@]}" >&2
+        return 1
+    fi
+    if [[ -n "${fields[10]}" ]]; then
+        printf 'self-test FAIL: empty failure field became [%s]\n' "${fields[10]}" >&2
+        return 1
+    fi
+    if [[ "${fields[11]}" != "0" ]]; then
+        printf 'self-test FAIL: exit_status shifted to [%s]\n' "${fields[11]}" >&2
+        return 1
+    fi
+    if [[ "${fields[20]}" != "C=128 P=1024" || "${fields[21]}" != "/tmp/log" || "${fields[22]}" != "/tmp/hist" ]]; then
+        printf 'self-test FAIL: tail columns shifted after empty failure\n' >&2
+        return 1
+    fi
+    if [[ "$(csv_quote "${fields[10]}")" != '""' ]]; then
+        printf 'self-test FAIL: empty failure is not quoted empty in CSV\n' >&2
+        return 1
+    fi
+
+    printf 'self-test: PASS (backend comma/space split; 23 TSV columns; empty failure preserved; CSV quoting)\n'
 }
 
 matrix="smoke"
@@ -64,6 +177,7 @@ seeds_list=""
 timeout_s=""
 copy_reference_set="0"
 copy_reference=""
+self_test="0"
 
 backend_set="0"
 device_set="0"
@@ -94,6 +208,10 @@ while (( $# > 0 )); do
         --help|-h)
             usage
             exit 0
+            ;;
+        --self-test|--dry-run)
+            self_test="1"
+            continue
             ;;
         --binary|--out|--backend|--device|--n|--chunk-sizes|--live-particles|--batch-chunks|--seeds|--matrix|--timeout)
             if [[ "$inline" == "0" ]]; then
@@ -137,6 +255,11 @@ while (( $# > 0 )); do
     esac
 done
 
+if [[ "$self_test" == "1" ]]; then
+    run_self_test
+    exit 0
+fi
+
 [[ -n "$binary" ]] || die "missing required --binary PATH"
 [[ -n "$out_dir" ]] || die "missing required --out DIR"
 
@@ -158,11 +281,13 @@ case "$matrix" in
         [[ "$timeout_set" == "1" ]] || timeout_s="120"
         ;;
     acceptance)
-        # T7 budget: 24 GiB / 8 = 3 GiB, and 8192 * 16384 * 24 B == 3 GiB.
+        # Measured A30 usable budget: 3,171,090,432 B (24,192 MiB usable).
+        # 8192 * 16128 * 24 B == 3,170,893,824 B, the largest 128-aligned
+        # value under that budget. P=16384 is rejected on this device.
         [[ "$backend_set" == "1" ]] || backend_list="cuda"
         [[ "$n_set" == "1" ]] || n_list="100000000"
         [[ "$c_set" == "1" ]] || c_list="8192"
-        [[ "$p_set" == "1" ]] || p_list="16384"
+        [[ "$p_set" == "1" ]] || p_list="16128"
         [[ "$q_set" == "1" ]] || q_list="1"
         [[ "$seeds_set" == "1" ]] || seeds_list="42"
         [[ "$timeout_set" == "1" ]] || timeout_s="1800"
@@ -209,19 +334,7 @@ split_list()
     done
 }
 
-split_list "--backend" "$backend_list" "0"
-backends=()
-for value in "${SPLIT_VALUES[@]}"; do
-    case "$value" in
-        cpu|cuda|hip) ;;
-        *) die "--backend accepts cpu, cuda, or hip (got '$value')" ;;
-    esac
-    duplicate="0"
-    for seen in "${backends[@]:-}"; do
-        [[ "$seen" == "$value" ]] && duplicate="1"
-    done
-    [[ "$duplicate" == "1" ]] || backends+=("$value")
-done
+init_backends "$backend_list"
 
 split_list "--n" "$n_list" "0"
 ns=("${SPLIT_VALUES[@]}")
@@ -347,13 +460,6 @@ run_env+=("CUDA_DEVICE_ORDER=PCI_BUS_ID" "LC_ALL=C" "LANG=C")
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
     run_env+=("CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}")
 fi
-
-csv_quote()
-{
-    local text="${1-}"
-    text="${text//\"/\"\"}"
-    printf '"%s"' "$text"
-}
 
 case_failed=0
 case_index=0
@@ -495,16 +601,15 @@ run_case()
         pps="$(awk -v n="$n" -v w="$wall" 'BEGIN { if (w + 0 > 0) printf "%.3f", n / w; else print "NA" }')"
     fi
 
-    # TSV order is documented in README.md and consumed by the report writer.
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$name" "$backend" "$selected" "$device" "$n" "$c" "$p" "$q" "$seed" \
+    # Internal table order matches README.md. SEP is non-whitespace so empty
+    # fields, such as a successful case's empty failure field, survive.
+    tsv_join "$name" "$backend" "$selected" "$device" "$n" "$c" "$p" "$q" "$seed" \
         "$status" "$failure" "$rc" "$wall" "$maxrss" "$pps" "$pool" "$peak_live" \
         "$peak_reserved" "$hist_rows" "$hist_sum" "$policy" "$log" "$hist_sorted" \
         >> "$results_tsv"
 
     if [[ "$status" == "ok" && ( "$backend" == "cpu" || "$backend" == "cuda" ) ]]; then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$n" "$c" "$seed" "$q" "$backend" "$hist_sorted" "$name" >> "$pairs_tsv"
+        tsv_join "$n" "$c" "$seed" "$q" "$backend" "$hist_sorted" "$name" >> "$pairs_tsv"
     fi
 }
 
@@ -528,7 +633,7 @@ done
 declare -A cpu_count=() cuda_count=()
 declare -A cpu_hist=() cuda_hist=() cpu_names=() cuda_names=()
 declare -A pair_keys=()
-while IFS=$'\t' read -r n c seed q backend hist name; do
+while IFS="$SEP" read -r n c seed q backend hist name; do
     key="$n|$c|$seed|$q"
     pair_keys["$key"]="1"
     case "$backend" in
@@ -581,7 +686,7 @@ for key in "${!pair_keys[@]}"; do
         rows_equal_by_case["$cname"]="$eq"
         rows_equal_by_case["$uname_"]="$eq"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$c" "$seed" "$q" "$eq" "$cname" "$uname_" "$diff_path" >> "$pair_results_tsv"
+    tsv_join "$n" "$c" "$seed" "$q" "$eq" "$cname" "$uname_" "$diff_path" >> "$pair_results_tsv"
 done
 fi
 
@@ -608,7 +713,7 @@ fi
 
 {
     printf 'case,backend,selected_backend,device,n,chunk_size,live_particles,batch_chunks,seed,status,failure,exit_status,wall_s,max_rss_kb,particles_per_s,pool_chunks,peak_live_chunks,peak_reserved_chunks,histogram_rows,histogram_sum,rows_equal,policy,log\n'
-    while IFS=$'\t' read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
+    while IFS="$SEP" read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
         eq="${rows_equal_by_case[$name]:--}"
         printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
             "$name" "$backend" "$selected" "$dev" "$n" "$c" "$p" "$q" "$seed" \
@@ -638,7 +743,7 @@ fi
     printf '## Cases\n\n'
     printf '| case | backend | N | C | P | Q | seed | status | wall_s | particles/s | max RSS KiB | pool | peak live | peak res | hist rows | hist sum | rows_equal |\n'
     printf '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n'
-    while IFS=$'\t' read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
+    while IFS="$SEP" read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
         eq="${rows_equal_by_case[$name]:--}"
         printf '| `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
             "$name" "$backend" "$n" "$c" "$p" "$q" "$seed" "$status" "$wall" "$pps" \
@@ -652,8 +757,8 @@ fi
     printf '| N | C | seed | Q | rows_equal | CPU case | CUDA case | diff |\n'
     printf '| ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n'
     if [[ -s "$pair_results_tsv" ]]; then
-        sort -t$'\t' -k1,1n -k2,2n -k3,3n -k4,4n "$pair_results_tsv" |
-        while IFS=$'\t' read -r n c seed q eq cname uname_ diff_path; do
+        sort -t"$SEP" -k1,1n -k2,2n -k3,3n -k4,4n "$pair_results_tsv" |
+        while IFS="$SEP" read -r n c seed q eq cname uname_ diff_path; do
             printf '| %s | %s | %s | %s | %s | `%s` | `%s` | `%s` |\n' \
                 "$n" "$c" "$seed" "$q" "$eq" "$cname" "$uname_" "$diff_path"
         done
@@ -672,7 +777,7 @@ fi
 
     if (( case_failed > 0 )); then
         printf '\n## Failures\n\n'
-        while IFS=$'\t' read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
+        while IFS="$SEP" read -r name backend selected dev n c p q seed status failure rc wall maxrss pps pool peak_live peak_reserved hist_rows hist_sum policy log hist_sorted; do
             if [[ "$status" == "fail" ]]; then
                 printf -- '- `%s`: %s (log: `%s`)\n' "$name" "$failure" "$log"
             fi

@@ -5,7 +5,9 @@ matrix and writes a machine-readable CSV plus a Markdown summary. The driver
 never builds the project, never runs `N = 1e8` unless the `acceptance` or
 `fwk394` preset is selected, and never invents a bandwidth number. This
 document contains no measured result; every number in a report comes from a real
-run of the binary.
+run of the binary. The integrated-main evidence is in
+[`BENCH_TABLE.md`](BENCH_TABLE.md), and the harness has a no-device self-test
+(`--self-test` / `--dry-run`) for the two regressions found by that run.
 
 ## Requirements
 
@@ -24,7 +26,7 @@ run of the binary.
 | --- | --- |
 | `--binary PATH` | example executable, required |
 | `--out DIR` | existing writable output directory, required |
-| `--backend LIST` | `cpu`, `cuda`, `hip`, or a comma-separated list |
+| `--backend LIST` | `cpu`, `cuda`, `hip`; comma- or space-separated |
 | `--device N` | device index passed to every run (default `0`) |
 | `--n LIST` | particle counts `N` |
 | `--chunk-sizes LIST` | chunk sizes `C` |
@@ -34,19 +36,20 @@ run of the binary.
 | `--matrix smoke\|acceptance\|fwk394\|full` | preset, default `smoke` |
 | `--timeout S` | per-run wall-clock limit in seconds |
 | `--copy-reference [CMD]` | optional copy-bandwidth hook, see below |
+| `--self-test`, `--dry-run` | run the harness self-test and exit, no binary or device needed |
 
-Every list overrides one dimension of the selected preset. A comma-separated
-`--backend` list is the normal way to produce CPU and CUDA runs in one report,
-so the histogram comparison is computed automatically. Lists can be repeated
-across dimensions; the driver runs the full Cartesian product.
+Every list overrides one dimension of the selected preset. A comma- or
+space-separated `--backend` list is the normal way to produce CPU and CUDA runs
+in one report, so the histogram comparison is computed automatically. Lists can
+be repeated across dimensions; the driver runs the full Cartesian product.
 
 ## Presets
 
 | Preset | Backends | N | C | P | Q | Seeds | Timeout | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `smoke` | `cpu` | 4097, 100000 | 128 | 1024 | 1 | 42 | 120 s | default; small and local-safe |
-| `acceptance` | `cuda` | 100000000 | 8192 | 16384 | 1 | 42 | 1800 s | A30 acceptance shape; exactly 3.0 GiB |
-| `fwk394` | `cuda` | 100000000 | 4096 | 16384 | 1 | 42 | 1800 s | requested 2080 Ti pair; over budget on 11 GiB, see below |
+| `acceptance` | `cuda` | 100000000 | 8192 | 16128 | 1 | 42 | 1800 s | measured A30 budget; 3,170,893,824 B |
+| `fwk394` | `cuda` | 100000000 | 4096 | 16384 | 1 | 42 | 1800 s | CUDA preset; nvcc 12.5 ICE and over budget, see below |
 | `full` | `cpu,cuda` | 100000, 1000000 | 1024, 8192 | 2048, 8192 | 1, 2, 8 | 42, 7 | 900 s | long sweep; over-budget cases are recorded as negatives |
 
 ## Payload budget (T7)
@@ -68,14 +71,16 @@ that contains a negative case exits 1 at the end.
 
 | Host | Policy budget | Pair | Payload | Result |
 | --- | ---: | --- | ---: | --- |
-| A30 24 GiB | 3 GiB | C=8192, P=16384 | 3 GiB | passes at the boundary |
-| A30 24 GiB | 3 GiB | C=8192, P=65536 | ~12.9 GB | rejected, canonical negative case |
-| fwk394 11 GiB | 1.375 GiB | C=4096, P=16384 | 1.5 GiB | rejected |
-| fwk394 11 GiB | 1.375 GiB | C=4096, P=8192 | 0.75 GiB | passes |
+| A30 24 GiB reported, 24,192 MiB usable | 3,171,090,432 B | C=8192, P=16128 | 3,170,893,824 B | passes with 196,608 B margin |
+| A30 | 3,171,090,432 B | C=8192, P=16384 | 3,221,225,472 B | rejected, over by 50,135,040 B |
+| A30 | 3,171,090,432 B | C=8192, P=65536 | 12,884,901,888 B | rejected, canonical negative case |
+| fwk394 11 GiB GPU | 1.375 GiB | C=4096, P=8192 | 805,306,368 B | fits the GPU budget; CUDA build blocked by the nvcc 12.5 ICE |
+| fwk394 CPU | 16 MiB | C=4096, P=8192 | 805,306,368 B | rejected |
+| fwk394 CPU | 16 MiB | C=1024, P=512 | 12,582,912 B | passes |
 
-`--matrix acceptance` is the A30 pair. The former `P=65536` pair remains
-reachable through `--live-particles 65536`; run it deliberately to record the
-rejection:
+`--matrix acceptance` is the measured A30 pair. The former `P=65536` pair and
+the earlier `P=16384` pair remain reachable through `--live-particles`; run one
+deliberately to record the rejection:
 
 ```sh
 mkdir -p /tmp/gf-bench-negative
@@ -106,7 +111,7 @@ C/P lists, for an all-pass sweep.
 | `histograms/<case>.csv` | the case histogram rows, sorted by weight |
 | `histograms/<case>.raw.csv` | rows in emission order |
 | `pairs/<key>.diff` | `diff -u` of a CPU/CUDA pair whose rows differ |
-| `results.tsv`, `pairs.tsv`, `pair-results.tsv` | driver-internal tables |
+| `results.tsv`, `pairs.tsv`, `pair-results.tsv` | driver-internal unit-separator tables, not for external parsing |
 | `environment.txt` | host, kernel, binary SHA-256, git commit, timer tool, GPU list, scrub record |
 | `copy-reference.txt` | raw output of `--copy-reference CMD`, when supplied |
 
@@ -185,53 +190,70 @@ env CUDA_VISIBLE_DEVICES=0 \
 
 ## fwk394 (RTX 2080 Ti, sm_75, 11 GiB)
 
-T7 gives this card a 1.375 GiB policy budget. The `fwk394` preset is
-C=4096, P=16384 (about 1.6 GB, 1.5 GiB), so that pair is the documented
-over-budget negative case on this card. The passing 1e8 run overrides P to 8192
-(about 0.75 GiB). Neither value is the A30 acceptance configuration, so label
-any fwk394 report accordingly.
+The integrated main's CUDA build fails with the known nvcc 12.5 ICE at
+`HashScatterKernel.hpp:153`; no CUDA execution is claimed. fwk394 runs use the
+CPU backend, whose T7 host budget is 16 MiB. C=4096/P=8192 (805,306,368 B) and
+C=4096/P=16384 (1,610,612,736 B) are rejected there. The passing
+reduced-memory CPU case is C=1024/P=512 (12,582,912 B; N=1e6 in 52.75 s in the
+integrated run). On a CUDA build that avoids the ICE, the 11 GiB GPU policy
+budget is 1.375 GiB, so C=4096/P=8192 fits the GPU but still not the CPU host
+budget. See [`BENCH_TABLE.md`](BENCH_TABLE.md).
 
 ```sh
 cd <graphFlow checkout>
 cmake -S . -B build-fwk394 -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
-  -DGRAPHFLOW_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 \
   -DGRAPHFLOW_BUILD_TESTS=OFF
 cmake --build build-fwk394 -j 14
 
-# pick an idle GPU from nvidia-smi; this example uses index 0
+# CPU smoke
 mkdir -p /tmp/gf-bench-fwk394-smoke
-env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
-  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+env -u OMP_NUM_THREADS -u OMP_PROC_BIND -u OMP_PLACES \
   bash tools/bench_matrix.sh \
     --binary build-fwk394/graphFlow_particle_feedback \
-    --backend cuda --device 0 \
-    --matrix smoke --out /tmp/gf-bench-fwk394-smoke
+    --backend cpu --device 0 --matrix smoke \
+    --out /tmp/gf-bench-fwk394-smoke
 
-# requested fwk394 pair: expected T7 negative case on 11 GiB
-mkdir -p /tmp/gf-bench-fwk394-negative
-env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
-  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
-  bash tools/bench_matrix.sh \
-    --binary build-fwk394/graphFlow_particle_feedback \
-    --backend cuda --device 0 \
-    --matrix fwk394 --out /tmp/gf-bench-fwk394-negative
-
-# passing 1e8 run on 11 GiB: same C, P reduced to 8192
+# passing reduced-memory CPU case, not the 1e8 acceptance
 mkdir -p /tmp/gf-bench-fwk394
-env -u CUDA_LAUNCH_BLOCKING -u CUDA_DEVICE_MAX_CONNECTIONS \
-  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+env -u OMP_NUM_THREADS -u OMP_PROC_BIND -u OMP_PLACES \
   bash tools/bench_matrix.sh \
     --binary build-fwk394/graphFlow_particle_feedback \
-    --backend cuda --device 0 \
-    --matrix fwk394 --live-particles 8192 \
+    --backend cpu --device 0 --matrix smoke --n 1000000 \
+    --chunk-sizes 1024 --live-particles 512 --timeout 1800 \
     --out /tmp/gf-bench-fwk394
+
+# documented negative: requested C=4096/P=8192 on the 16 MiB CPU budget
+mkdir -p /tmp/gf-bench-fwk394-negative
+env -u OMP_NUM_THREADS -u OMP_PROC_BIND -u OMP_PLACES \
+  bash tools/bench_matrix.sh \
+    --binary build-fwk394/graphFlow_particle_feedback \
+    --backend cpu --device 0 --matrix acceptance --n 1000000 \
+    --chunk-sizes 4096 --live-particles 8192 --timeout 300 \
+    --out /tmp/gf-bench-fwk394-negative
 ```
 
-`CUDA_VISIBLE_DEVICES` is the only supported device selector. Set it to the
-idle card's index as reported after the ordering is pinned, and pass the same
-logical index to `--device`. The driver sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` for
-every child and forwards `CUDA_VISIBLE_DEVICES` unchanged.
+`CUDA_VISIBLE_DEVICES` selects a GPU only on a CUDA build. The CPU path ignores
+it; the driver still scrubs the CUDA and OpenMP variables for every child.
+
+## Harness self-test
+
+`--self-test` (alias `--dry-run`) needs no binary, output directory, or device.
+It checks:
+
+- `cpu,cuda hip` and `cuda` parse as backend lists, not as unsigned integers.
+- A 23-field internal record with an empty `failure` field decodes with all
+  23 columns in place.
+- The empty failure field becomes `""` in the CSV, keeping the column count
+  stable.
+
+Run it after any harness edit. `bash -n` only checks syntax and would miss both
+regressions. The test exits nonzero with a `self-test FAIL:` message on failure.
+
+Internal tables use ASCII 0x1f as the field separator rather than a tab. A tab
+is IFS whitespace, so `read` collapses empty fields and shifts later columns.
+The CSV writer quotes every text field, including the empty `""` failure of a
+successful case.
 
 ## Environment scrub
 
@@ -265,12 +287,11 @@ host and the same environment, report the median and spread, and never present a
 single shared-host run as an exclusive-hardware acceptance result. A report
 generated on a shared host is a recorded baseline.
 
-## Batching dependency (T5)
+## Batching (T5)
 
-The example parses `--batch-chunks Q` but the current runner still processes one
-chunk per batch (`Cli.hpp` and `ParticleStages.hpp` say so). Until T5 lands,
-`Q = 1, 2, 8` execute the same path and a Q sweep only repeats work. `Q > 1`
-rows are not batching evidence yet. A `rows_equal=yes` across Q values proves
-that the flag is accepted; it does not prove batch-level planning, output fill
-levels, or exact chunk-boundary crossings. The pair key keeps Q so the same driver becomes meaningful once T5
-wires the value into the scheduler.
+On the integrated main `68124ad`, T5 batching is active. Q=1, 2, and 8 produce
+identical histograms, and Q=2/Q=8 avoid most per-chunk host round trips; the
+measured Q effect is in [`BENCH_TABLE.md`](BENCH_TABLE.md). On a pre-T5 build
+(the T13 branch base), the CLI parses `--batch-chunks Q` but the runner still
+processes one chunk per batch. There, Q rows only repeat work and are not
+batching evidence.
