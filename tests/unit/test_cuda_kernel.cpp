@@ -140,7 +140,6 @@ TEST_CASE("CUDA particle feedback matches the scalar oracle through FrameSpec la
         parameters.frameCap = 8u;
         parameters.seed = 42u;
         parameters.maxVisits = 64u;
-        parameters.stallTimeoutMs = 120000u;
 
         CAPTURE(tileSize);
         auto const result = graphFlow::particle::runParticleFeedback(device, parameters);

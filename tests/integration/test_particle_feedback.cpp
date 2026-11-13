@@ -131,3 +131,32 @@ TEST_CASE("max-visits guard terminates pathological feedback", "[integration]")
             CHECK(weight <= maxVisits * 1000u);
     }
 }
+
+TEST_CASE("particle feedback example is a public Flow graph with a derived pool", "[integration][flow]")
+{
+    static_assert(graphFlow::SourceFor<graphFlow::particle::GenerateParticles, graphFlow::Particle>);
+    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::FilterByProperty, graphFlow::Particle>);
+    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::SelectOutcome, graphFlow::Particle>);
+    static_assert(
+        graphFlow::UpdateFor<graphFlow::particle::UpdateWeight, graphFlow::particle::Outcome, graphFlow::Particle>);
+
+    auto const device = graphFlow::test::makeCpuDevice();
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 4097u;
+    parameters.chunkSize = 128u;
+    parameters.liveParticles = 256u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+    graphFlow::test::ScalarOutcome const reference
+        = graphFlow::test::runScalarModel(parameters.seed, parameters.numParticles, parameters.maxVisits);
+
+    CHECK(result.histogram == graphFlow::particle::histogramOf(reference.weights));
+    CHECK(result.weights == reference.weights);
+    CHECK(result.sunkParticles == parameters.numParticles);
+    CHECK(result.cappedParticles == reference.cappedParticles);
+    CHECK(result.liveParticles == 256u);
+    // Flow sums the registered output bounds: filter 2 + A 3 + B 3 = 8 reserve chunks.
+    CHECK(result.stats.poolChunks == 256u + 8u);
+}

@@ -35,16 +35,16 @@ chunk. Consumer ready lists still dispatch partial chunks immediately.
 Transform batches flatten every input chunk into a compact `TileDescriptor`
 list and issue one classify launch and one scatter launch per batch. The batch
 reserves the adaptive `outputChunkBound(sum(fill), C, B)`; under fragmentation
-the largest fitting prefix of the ready list is dispatched. The pool stays
-`S = P + K*R(C)`, so `Q` changes launch amortisation and buffer sizing, not the
-pool bound.
+the largest fitting prefix of the ready list is dispatched. The pool is derived
+from the source capacity plus one output bound per registered node, so `Q`
+changes launch amortisation and buffer sizing, not the pool bound.
 
 The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 `.reuse/dep5`, and `LICENSES/MPL-2.0.txt`. The tree-wide format and SPDX sweep
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 156/156, hal CUDA 192/192. The totals
+Recorded integrated tests: fwk394 CPU 158/158, hal CUDA 194/194. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
 include the kernel execution, FrameSpec matrix, and typed `Flow` execution
 cases. The typed CUDA tests run the feedback graph, exactly-once sink counts,
@@ -53,8 +53,9 @@ CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
 visible.
 
 The public contract is frozen in [public API contract](docs/public-api.md). The typed
-`Flow<T>` execution path now runs source, transform, partition, and sink stages; the
-particle-feedback example keeps its own stages until the example migration lands.
+`Flow<T>` execution path runs source, transform, partition, and sink stages. The
+particle-feedback example now declares its graph with `Flow` handles and named outcome
+ports; `ParticleStages.hpp` remains only for the older low-level tests.
 
 ## Historical measured baseline
 
@@ -95,8 +96,10 @@ include/graphFlow/
 examples/particle_feedback/
   Cli.hpp              option parsing and policy resolution
   main.cpp             backend selection, policy output and histogram
-  ParticleStages.hpp   generate, batched transform, and sink stages
-  ParticleFeedback.hpp graph assembly and run function
+  ParticleFunctors.hpp domain functors and named outcome ports
+  ParticleTypes.hpp    parameters and histogram formatting
+  ParticleFeedback.hpp Flow graph construction and run function
+  ParticleStages.hpp   deprecated low-level stages kept for older tests
 tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases,
                        bin table, Philox mapping, device policy, CUDA kernel
 tests/integration/     particle example, batching, dense and hash pipelines,
@@ -269,14 +272,15 @@ not cross-queue overlap.
   uses `P = min(N, 2*C)` before budget clamping. A source chunk is admitted only
   while fewer than `P` particles are between source and sink, and its fill is
   capped at `P - live`.
-- The pool is `S = P + K*R(C)` chunks, with `K = 3` transform nodes and
-  `R(C) = outputChunkBound(C, C, B)`. `P` data chunks cover the live particles
-  because split routing can fragment them down to one particle per chunk;
-  `K*R(C)` is the transform output reserve. `Q` does not enlarge the pool.
+- `Flow` derives the pool as `P` data chunks plus one output bound per
+  registered node. The example has a two-output filter and two three-output A/B
+  partitions, so the reserve is `2 + 3 + 3 = 8` chunks. `P` data chunks cover
+  the live particles because split routing can fragment them down to one
+  particle per chunk. `Q` does not enlarge the pool.
 - `poolPayloadBudgetBytes` bounds the fixed-capacity pool payload arrays:
-  `S*C*payloadBytesPerSlot` must fit. The CLI uses the policy memory budget plus
-  the exact `K*R(C)` reserve. `Config::validate` rejects a pool over budget
-  before allocation.
+  `S*C*payloadBytesPerSlot` must fit. `Flow` derives the budget from the device
+  policy plus the exact registered-node reserve, and `Config::validate` rejects
+  a pool over budget before allocation.
 - A transform batch carries up to `Q` input chunks. It leases every selected
   input from launch until the completion event of its last device stage, and the
   runner releases all leases and inputs after that event.
@@ -333,10 +337,10 @@ The full design is in [architecture](docs/architecture.md).
 2. **The plan's pool formula `ceil(P/C) + K*R` is not sound for split
    routing.** A transform can split one chunk into one chunk per bin, and
    repeated feedback fragments live particles until they occupy one chunk each.
-   The pool must hold `P` data chunks plus the `K*R` output credits. `Q` is an
-   adaptive batch cap and does not change `S`. `tests/integration/
-   test_pressure.cpp`, `tests/integration/test_batching.cpp`, and
-   `tests/unit/test_pool_budget.cpp` pin the bound and the budget.
+   The pool must hold `P` data chunks plus one output credit per registered
+   output. `Q` is an adaptive batch cap and does not change `S`.
+   `tests/integration/test_pressure.cpp`, `tests/integration/test_batching.cpp`,
+   and `tests/unit/test_pool_budget.cpp` pin the bound and the budget.
 3. **The host backend requires a block extent of one.** `api/host/exec/Serial.hpp`
    throws when `numThreads.product() != 1`, so `launchPolicy` sets the frame
    extent to 1 on `api::Host` and to `T` on an accelerator. `numFrames` still

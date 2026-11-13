@@ -175,6 +175,17 @@ if(GRAPHFLOW_BUILD_TESTS)
     include(Catch)
     catch_discover_tests(graphFlow_tests)
 
+    # Source-level contract: the user-facing example must not fall back to numeric node ids,
+    # route vectors, manual runner/pool construction, or the deprecated example stages.
+    add_test(
+        NAME example.public_api
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DEXAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_public_api.cmake"
+    )
+    set_tests_properties(example.public_api PROPERTIES LABELS "example;api")
+
     # Binary-level contract for the example CLI. This complements, rather than
     # replaces, the in-process Catch2 matrix: every case runs the real
     # executable and checks its exit status and histogram sum.

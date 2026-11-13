@@ -56,12 +56,13 @@ numbers. There is no variance study and no frozen regression target.
 
 ## Pool memory is budget-capped but still fixed-capacity
 
-The pool is `S = P + K*R(C)` and its payload arrays are capped by
-`poolPayloadBudgetBytes`. The CLI uses the policy memory budget plus the exact
-`K*R(C)` reserve; the programmatic default is 4 GiB. The former
-`C=8192`, `P=65536` pair is rejected because it exceeds the budget. The fixed
-allocation still reserves one chunk per live particle plus the transform output
-credits, so a slot-based pool remains the next memory optimization.
+The pool is the source capacity `P` plus one output bound per registered node,
+and its payload arrays are capped by `poolPayloadBudgetBytes`. `Flow` uses the
+policy memory budget plus the exact registered-node reserve; the programmatic
+default is 4 GiB. The former `C=8192`, `P=65536` pair is rejected because it
+exceeds the budget. The fixed allocation still reserves one chunk per live
+particle plus the output credits, so a slot-based pool remains the next memory
+optimization.
 
 ## One in-flight batch per node
 
@@ -69,15 +70,15 @@ Each node has one in-flight batch. A transform batch can carry up to Q chunks,
 but independent batches of the same node do not overlap. A bounded submitted
 depth per node is not implemented.
 
-## Generic graph API is host-only and not used by the example
+## Generic graph API is host-only
 
 The tree has the `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core with
 source/transform/sink roles, per-bin routing, and feedback edges as ordinary
 routes. Node objects are caller-owned and non-owning, the graph is immutable
 after `build()`, and v1 allows one source and no routes into that source.
-Typed payload contracts, runtime graph mutation, join, and broadcast remain
-open. The particle-feedback example still assembles its graph by hand; porting
-it is the next PR.
+Runtime graph mutation, join, and broadcast remain open. The particle-feedback
+example uses the typed `Flow` API; the lower-level `GraphBuilder` core is not
+used by the example.
 
 ## No CI runners
 
@@ -102,9 +103,10 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
 
 ## Other open items
 
-- The example binary is not registered as a separate CTest entry. CLI parsing is
-  covered by Catch2 unit tests, but there is no end-to-end example matrix in
-  CTest.
+- The example binary is registered in CTest as 24 CLI cases per backend
+  (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`) plus one
+  `example.public_api` source-contract case. A CPU build registers 25 example
+  tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract).
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall

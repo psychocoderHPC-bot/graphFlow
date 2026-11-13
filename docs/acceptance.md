@@ -3,10 +3,11 @@
 
 # graphFlow acceptance record
 
-Integrated revision: rebased FrameSpec launch on policy/docs main
-`cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13, T14a).
-This record includes the rebased CTest runs on fwk394 CPU and hal CUDA; the
-historical T13 performance table remains the supplied integrated evidence.
+Integrated T4 revision: typed Flow execution and the particle example port at
+`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd`. The earlier integrated revision
+was `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13,
+T14a); its counts and historical T13 performance table remain below as
+historical evidence. This docs commit adds no new build or test run.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -27,8 +28,8 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 82/82 passed |
-| CUDA CTest on hal | 86/86 passed |
+| CPU CTest on fwk394 | 158/158 passed at T4 |
+| CUDA CTest on hal (`sm_80`) | 194/194 passed at T4 |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
@@ -38,6 +39,26 @@ The CTest totals include `tests/unit/test_launch_policy.cpp` and
 `T > maxThreadsPerBlock` rejection. The CUDA build adds
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
 GPU and fails when no GPU is visible; the FrameSpec matrix also runs on CUDA.
+
+### T4 public Flow example
+
+T4 ports `graphFlow_particle_feedback` to the public `Flow<graphFlow::Particle>`
+API. The graph is declared with source/partition/sink handles and named outcome
+ports; `ParticleFeedback.hpp` is 121 lines and no longer includes the deprecated
+`ParticleStages.hpp`. CTest registers 24 CLI cases per backend
+(`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`) plus one
+`example.public_api` source-contract case: 25 example tests in a CPU build and
+49 in a CUDA build (24 CPU, 24 CUDA, 1 contract).
+
+Recorded at `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` with
+`-Dalpaka_COMPILE_PEDANTIC=ON`: **158/158 CTest pass on fwk394 CPU Release**
+and **194/194 pass on hal CUDA `sm_80` Release**. A fixed-seed 33-invocation
+CLI comparison (the 24 N/C cases plus nine Q/P/T/frameCap and max-visits cases)
+matched the pre-change binary on both backends. The example header (including
+`live-particles`), policy line, histogram rows, non-terminating count, and
+exit status are identical. The derived pool reserve changes from `P+6` to
+`P+8` because the A/B partitions now expose three named outcomes; that
+diagnostic is not a numeric result.
 
 ### PR-A generic graph API core
 
@@ -125,8 +146,9 @@ minimum applies only to source admission.
 
 ## Pool and payload budget
 
-The fixed pool remains `S = P + K*R(C)` with
-`R(C) = outputChunkBound(C, C, B)` for three transform nodes. A transform batch
+The fixed pool remains the source capacity plus one output bound per registered
+node. `Flow` derives the reserve; the example's two-output filter and two
+three-output A/B partitions reserve `2 + 3 + 3 = 8` chunks. A transform batch
 reserves the adaptive `outputChunkBound(sum(fill), C, B)` and shrinks its chunk
 prefix to the largest one that fits the current credits, so Q does not enlarge
 the pool.
@@ -135,7 +157,7 @@ The former `C=8192`, `P=65536` pair is no longer a default and is rejected by
 the payload budget. Its chunk and payload figures appear only in the historical
 table above and are not current defaults. The policy-derived accelerator
 defaults are pinned by the unit tests at `C=8192`, `P=16384`, `T=128` on a
-nominal 24 GiB device; the CLI adds the exact `K*R(C)` reserve to the policy
+nominal 24 GiB device; `Flow` adds the exact registered-node reserve to the policy
 budget. The real A30 reports `24,192 MiB` usable after ECC, so its 1/8 budget is
 `3,171,090,432 B`. A separate test pins that budget: the policy selects
 `P=16128` for the default `C` and for an explicit `C=8192` with auto `P`; an
@@ -143,7 +165,7 @@ explicit `P=16384` is rejected. `applyDevicePolicy` + `derivePoolSize` +
 `Config::validate` accepts the resulting pool.
 
 A slot-based pool remains future work. The budget caps the fixed-capacity
-design without changing the `S = P + K*R(C)` progress bound.
+design without changing the `P` plus registered-node-reserve progress bound.
 
 ## Repository gates
 

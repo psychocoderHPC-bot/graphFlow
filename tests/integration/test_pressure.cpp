@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
@@ -22,7 +23,6 @@ TEST_CASE("bounded pool completes with N much larger than P", "[integration][pre
     parameters.liveParticles = 256u;
     parameters.seed = 42u;
     parameters.maxVisits = 64u;
-    parameters.stallTimeoutMs = 10'000u;
 
     graphFlow::particle::FeedbackResult const result
         = graphFlow::particle::runParticleFeedback(device, parameters);
@@ -34,12 +34,9 @@ TEST_CASE("bounded pool completes with N much larger than P", "[integration][pre
     CHECK(result.weights == reference.weights);
     CHECK(result.sunkParticles == parameters.numParticles);
 
-    // The pool is derived from P, not from N: P data chunks + K*R output credits. The plan's
-    // ceil(P/C)+K*R = 8 is a lower bound that deadlocks once split routing fragments chunks; the
-    // regression records the sound bound (see derivePoolSize and README.md).
-    std::uint32_t const expectedPool
-        = graphFlow::particle::derivePoolSize(parameters.numParticles, parameters.chunkSize, 256u, 2u);
-    CHECK(expectedPool == 256u + 3u * 2u);
+    // The pool is derived from P, not from N. `Flow` reserves one output chunk per registered
+    // bin: filter 2 + A 3 + B 3 = 8, so S = P + 8.
+    constexpr std::uint32_t expectedPool = 256u + 8u;
     CHECK(result.stats.poolChunks == expectedPool);
     CHECK(result.stats.peakLiveChunks <= expectedPool);
     CHECK(result.stats.peakLiveChunks < parameters.numParticles);

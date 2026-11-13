@@ -60,17 +60,15 @@ chunk `k` lives at slot `k*C + i`.
 The fixed pool is sized as
 
 ```text
-S = P + K*R(C)
-R(C) = outputChunkBound(C, C, B)
-K = number of transform nodes (3 in the particle example)
+S = P + sum over nodes of outputChunkBound(C, C, node.maxBins)
 ```
 
-`P` is the source-admission capacity in live particles. `R(C)` is the
-conservative output-chunk bound for one single-chunk transform. `P` data chunks
-cover the live particles because split routing can fragment them down to one
-particle per chunk; `K*R(C)` covers the output credits of the live transform
-nodes. The plan's `ceil(P/C) + K*R` is a lower bound and deadlocks under split
-feedback. Q does not enlarge `S`.
+`Flow` derives the reserve from the registered nodes. The particle example has
+a two-output filter and two three-output A/B partitions, so the reserve is
+`2 + 3 + 3 = 8` chunks. `P` is the source-admission capacity in live particles.
+`P` data chunks cover the live particles because split routing can fragment
+them down to one particle per chunk. The plan's `ceil(P/C) + K*R` is a lower
+bound and deadlocks under split feedback. Q does not enlarge `S`.
 
 A transform batch reserves the adaptive amount
 
@@ -89,7 +87,7 @@ Q-chunk batch, but the runtime reserve follows the actual prefix.
 The pool payload budget is explicit. `poolPayloadBudgetBytes` bounds
 `S*C*payloadBytesPerSlot`, with `payloadBytesPerSlot = 24` bytes for the id,
 property, weight, visit, and bin-id arrays. The policy memory budget covers the
-`P*C` live working set; the example adds the exact `K*R(C)` output-credit
+`P*C` live working set; `Flow` adds the exact registered-node output-credit
 reserve. `Config::validate` rejects a pool over budget before any allocation.
 The former `C=8192`, `P=65536` pair exceeds the default budget and is rejected.
 

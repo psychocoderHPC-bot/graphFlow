@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "TestDevice.hpp"
 
 #include <catch2/catch_test_macros.hpp>

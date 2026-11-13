@@ -4,9 +4,10 @@
 # Public API contract
 
 This document freezes the application-facing API of the simplified graphFlow
-interface. The typed execution path is implemented in `flow/Execution.hpp`; the
-particle-feedback example keeps using `ChunkPool` and `GraphRunner` until the
-example migration lands. The API is additive and replaces no existing public type.
+interface. The typed execution path is implemented in `flow/Execution.hpp`. The
+particle-feedback example declares its graph with `Flow` handles and named
+outcome ports, while `ParticleStages.hpp` remains only for the older low-level
+tests. The API is additive and replaces no existing public type.
 
 ## Payload
 

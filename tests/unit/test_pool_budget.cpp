@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
 
@@ -318,7 +319,6 @@ TEST_CASE("bounded P with Q>1 completes without a full batch", "[pool][budget][b
     parameters.batchChunks = 8u;
     parameters.seed = 42u;
     parameters.maxVisits = 64u;
-    parameters.stallTimeoutMs = 10'000u;
 
     particle::FeedbackResult const result = particle::runParticleFeedback(test::makeCpuDevice(), parameters);
     test::ScalarOutcome const reference
@@ -326,15 +326,10 @@ TEST_CASE("bounded P with Q>1 completes without a full batch", "[pool][budget][b
 
     CHECK(result.histogram == particle::histogramOf(reference.weights));
     CHECK(result.sunkParticles == parameters.numParticles);
-    // T5 batching is integrated, so Q>1 is live. Q must not enlarge the pool: S stays P + K*R(C)
-    // and a fragmented run shrinks the batch prefix instead of reserving Q times the credits.
-    CHECK(
-        result.stats.poolChunks
-        == particle::derivePoolSize(
-            parameters.numParticles,
-            parameters.chunkSize,
-            parameters.liveParticles,
-            particle::FlowBins));
+    // Q must not enlarge the pool. `Flow` derives the reserve from the registered bins: the
+    // filter has two outputs and each A/B partition has sink, feedback and capped, so the reserve
+    // is 2 + 3 + 3 = 8 chunks.
+    CHECK(result.stats.poolChunks == parameters.liveParticles + 8u);
 }
 
 TEST_CASE("pool budget arithmetic accepts a generic slot size", "[pool][budget][slot]")

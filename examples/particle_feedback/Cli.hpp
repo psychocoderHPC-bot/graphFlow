@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ParticleStages.hpp"
+#include "ParticleTypes.hpp"
 
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/core/Config.hpp"
@@ -50,6 +50,7 @@ namespace graphFlow::cli
     {
         graphFlow::Backend backend = graphFlow::Backend::cpu;
         graphFlow::particle::Parameters parameters{};
+        graphFlow::Tuning tuning{};
         graphFlow::DevicePolicy policy{};
         bool liveParticlesExplicit = false; // P came from --live-particles
     };
@@ -198,10 +199,7 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
-        // The policy budget bounds the live set P*C; the fixed-capacity pool additionally holds
-        // the K*R transform output-credit chunks, so resolve the total pool budget here.
-        resolved.parameters.poolPayloadBudgetBytes
-            = particle::poolPayloadBudgetBytes(resolved.policy.memoryBudgetBytes, resolved.policy.chunkCapacity);
+        resolved.tuning = particle::tuningOf(resolved.parameters);
         return resolved;
     }
 } // namespace graphFlow::cli

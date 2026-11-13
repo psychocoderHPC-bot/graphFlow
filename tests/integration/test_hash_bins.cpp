@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "ParticleStages.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/graph/BinTable.hpp"
@@ -75,7 +76,7 @@ namespace
         TDevice device,
         std::uint64_t particles,
         std::uint32_t capacity,
-        TPolicy policy)
+        [[maybe_unused]] TPolicy policy)
     {
         std::uint64_t const reserve
             = graphFlow::outputChunkBound(capacity, capacity, TPolicy::maxBins);
