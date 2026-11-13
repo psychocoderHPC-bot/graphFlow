@@ -99,7 +99,7 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
     CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) < defaultPoolPayloadBudgetBytes);
 }
 
-TEST_CASE("A30 usable memory clamps the default P below 2*C", "[pool][budget][policy]")
+TEST_CASE("A30 usable memory limits the default P to 16128", "[pool][budget][policy]")
 {
     using namespace graphFlow;
 
@@ -120,15 +120,16 @@ TEST_CASE("A30 usable memory clamps the default P below 2*C", "[pool][budget][po
     CHECK(policy.chunkCapacity > 0u);
     CHECK(policy.chunkCapacity % policy.tileSize == 0u);
     CHECK(policy.liveParticles == 16128u);
-    CHECK(policy.liveParticles < 16384u);
+    CHECK_FALSE(policy.liveParticlesExplicit);
     CHECK(requiredPayloadBytes(policy.liveParticles, policy.chunkCapacity) <= policy.memoryBudgetBytes);
 
-    // An explicit documented C keeps the chunk size and clamps the derived P instead.
+    // An explicit documented C keeps the chunk size and clamps the auto-derived P instead.
     DevicePolicyOverrides chunkOnly;
     chunkOnly.chunkCapacity = 8192u;
     DevicePolicy const documented = makeDevicePolicy(properties, 100'000'000u, chunkOnly);
     CHECK(documented.chunkCapacity == 8192u);
     CHECK(documented.liveParticles == 16128u);
+    CHECK_FALSE(documented.liveParticlesExplicit);
     CHECK(requiredPayloadBytes(documented.liveParticles, documented.chunkCapacity) <= documented.memoryBudgetBytes);
 
     // The former default pair is the exact rejection this clamp fixes.
@@ -155,7 +156,7 @@ TEST_CASE("A30 usable memory clamps the default P below 2*C", "[pool][budget][po
     CHECK_NOTHROW(validatePayloadBudget(config.numChunks, config.chunkCapacity, cliBudget));
 }
 
-TEST_CASE("explicit C and P clamp to the A30 budget boundary", "[pool][budget][policy]")
+TEST_CASE("explicit P over the A30 budget is rejected", "[pool][budget][policy]")
 {
     using namespace graphFlow;
 
@@ -167,13 +168,30 @@ TEST_CASE("explicit C and P clamp to the A30 budget boundary", "[pool][budget][p
     properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
 
     // The T13 acceptance preset used C=8192, P=16384 explicitly. On the real A30 that pair
-    // exceeds the usable budget, so the policy clamps P instead of throwing.
-    DevicePolicyOverrides overrides;
-    overrides.chunkCapacity = 8192u;
-    overrides.liveParticles = 16384u;
-    DevicePolicy const policy = makeDevicePolicy(properties, 100'000'000u, overrides);
+    // exceeds the usable budget: explicit P is a user request and must fail, not be clamped.
+    DevicePolicyOverrides overPair;
+    overPair.chunkCapacity = 8192u;
+    overPair.liveParticles = 16384u;
+    CHECK_THROWS_WITH(
+        makeDevicePolicy(properties, 100'000'000u, overPair),
+        Catch::Matchers::ContainsSubstring("explicit liveParticles 16384")
+            && Catch::Matchers::ContainsSubstring("largest feasible P is 16128"));
+
+    DevicePolicyOverrides overOld;
+    overOld.chunkCapacity = 8192u;
+    overOld.liveParticles = 65536u;
+    CHECK_THROWS_AS(
+        makeDevicePolicy(properties, 100'000'000u, overOld),
+        std::invalid_argument);
+
+    // The largest feasible explicit P still passes and builds a valid pool.
+    DevicePolicyOverrides fitting;
+    fitting.chunkCapacity = 8192u;
+    fitting.liveParticles = 16128u;
+    DevicePolicy const policy = makeDevicePolicy(properties, 100'000'000u, fitting);
     CHECK(policy.chunkCapacity == 8192u);
     CHECK(policy.liveParticles == 16128u);
+    CHECK(policy.liveParticlesExplicit);
     CHECK(requiredPayloadBytes(policy.liveParticles, policy.chunkCapacity) <= policy.memoryBudgetBytes);
 
     Config config;
@@ -185,6 +203,7 @@ TEST_CASE("explicit C and P clamp to the A30 budget boundary", "[pool][budget][p
         config.liveParticles,
         particle::FlowBins);
     CHECK_NOTHROW(config.validate());
+    CHECK(requiredPayloadBytes(config.numChunks, config.chunkCapacity) <= config.poolPayloadBudgetBytes);
 }
 
 TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[pool][budget][policy]")

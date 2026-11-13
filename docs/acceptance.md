@@ -81,12 +81,11 @@ Recorded effects:
   `N=1e8` wall time from 218.87 s to 9.83 s and 8.50 s, and the `N=1e6` wall
   time from 2.32 s to 0.41 s and 0.35 s. The sorted histogram rows are
   identical across Q within each N.
-- The `N=1e8` run used `P=16128`, not the policy default `P=16384`: the
+- The `N=1e8` run used `P=16128`, not the documented default `P=16384`: the
   measured A30 payload budget is 3,171,090,432 B, and `C=8192`, `P=16384`
   needs 3,221,225,472 B, so T7 rejects it; `C=8192`, `P=16128`
-  (3,170,893,824 B) passes. The default-policy clamp that would keep `P`
-  within the device budget is not yet fixed in this revision; the run used an
-  explicit `P=16128`.
+  (3,170,893,824 B) passes. The auto-derived policy now clamps `P` to 16,128 on
+  this device; explicit `P=16384` and `P=65536` are rejected.
 
 CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42: `rows_equal`
 is yes for `N=1e5` (CPU 15.23 s, CUDA 1.96 s) and `N=1e6` (CPU 149.44 s,
@@ -120,8 +119,9 @@ defaults are pinned by the unit tests at `C=8192`, `P=16384`, `T=128` on a
 nominal 24 GiB device; the CLI adds the exact `K*R(C)` reserve to the policy
 budget. The real A30 reports `24,192 MiB` usable after ECC, so its 1/8 budget is
 `3,171,090,432 B`. A separate test pins that budget: the policy selects
-`P=16128` (an explicit `C=8192` clamps `P` below `2*C`) and `applyDevicePolicy`
-+ `derivePoolSize` + `Config::validate` accepts the resulting pool.
+`P=16128` for the default `C` and for an explicit `C=8192` with auto `P`; an
+explicit `P=16384` is rejected. `applyDevicePolicy` + `derivePoolSize` +
+`Config::validate` accepts the resulting pool.
 
 A slot-based pool remains future work. The budget caps the fixed-capacity
 design without changing the `S = P + K*R(C)` progress bound.

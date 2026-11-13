@@ -76,9 +76,9 @@ namespace graphFlow
     /** Optional explicit overrides; an absent value is derived from the device.
      *
      * `chunkCapacity` and `tileSize` are preserved exactly when they fit the device limits.
-     * `liveParticles` is preserved when it fits the payload budget and clamped to the largest
-     * feasible value otherwise. Zero or a value beyond the device limits or `numParticles` is
-     * rejected with `std::invalid_argument`.
+     * `liveParticles` is preserved exactly when it fits the payload budget and rejected with
+     * `std::invalid_argument` when it does not; only the auto-derived P is clamped. Zero or a
+     * value beyond the device limits or `numParticles` is rejected with `std::invalid_argument`.
      */
     struct DevicePolicyOverrides
     {
@@ -92,6 +92,7 @@ namespace graphFlow
     {
         std::uint32_t chunkCapacity = 0u;     // C
         std::uint32_t liveParticles = 0u;     // P
+        bool liveParticlesExplicit = false;   // P came from an override, not the default
         std::uint32_t tileSize = 0u;          // T
         std::uint32_t waves = 0u;             // wave target used for the estimate
         std::uint32_t targetBlocksPerSm = 0u; // blocks per multiprocessor used for the estimate
@@ -216,10 +217,10 @@ namespace graphFlow
      *   configured pool size.
      *
      * `C` and `T` explicit overrides are kept when they fit the device limits. An explicit `P`
-     * is kept when it fits the budget and clamped to the largest feasible value otherwise; an
-     * explicit `P` above `numParticles`, a zero override or an override beyond a device limit
-     * raises `std::invalid_argument`. A budget that cannot hold one live particle, or one tile
-     * for a derived C, raises as well.
+     * is kept exactly: it is rejected with `std::invalid_argument` when `P * C` exceeds the
+     * budget, when it is above `numParticles`, or when it is zero. The auto-derived default `P`
+     * is clamped instead. A budget that cannot hold one live particle, or one tile for a derived
+     * C, raises as well.
      */
     inline DevicePolicy makeDevicePolicy(
         alpaka::onHost::DeviceProperties const& properties,
@@ -375,11 +376,12 @@ namespace graphFlow
         }
 
         // --- Live-particle capacity P.
-        // The default C is already capped so that `min(N, factor*C)` fits. The final clamp also
-        // covers an explicit C or an explicit P: both are reduced to the largest value whose
-        // `P*C*payloadBytesPerSlot` fits the budget.
+        // Explicit and auto-derived P are handled differently: an explicit P is a user request
+        // and must fail when it does not fit, while the default is clamped to the largest
+        // feasible tile-rounded value. `liveParticlesExplicit` records which one was used.
+        bool const liveParticlesExplicit = overrides.liveParticles.has_value();
         std::uint32_t liveParticles = 0u;
-        if(overrides.liveParticles)
+        if(liveParticlesExplicit)
         {
             liveParticles = *overrides.liveParticles;
         }
@@ -414,7 +416,18 @@ namespace graphFlow
             if(maxLive == 0u)
                 throw std::invalid_argument{
                     "graphFlow::DevicePolicy: the payload memory budget is too small for one live particle"};
-            if(std::uint64_t{liveParticles} > maxLive)
+            if(liveParticlesExplicit)
+            {
+                if(std::uint64_t{liveParticles} > maxLive)
+                    throw std::invalid_argument{
+                        "graphFlow::DevicePolicy: explicit liveParticles "
+                        + std::to_string(liveParticles) + " with chunkCapacity "
+                        + std::to_string(chunkCapacity) + " requires "
+                        + std::to_string(requiredPayloadBytes(liveParticles, chunkCapacity))
+                        + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes)
+                        + " bytes; the largest feasible P is " + std::to_string(maxLive)};
+            }
+            else if(std::uint64_t{liveParticles} > maxLive)
             {
                 liveParticles = static_cast<std::uint32_t>(
                     std::min<std::uint64_t>(maxLive, std::numeric_limits<std::uint32_t>::max()));
@@ -429,6 +442,7 @@ namespace graphFlow
         DevicePolicy policy;
         policy.chunkCapacity = chunkCapacity;
         policy.liveParticles = liveParticles;
+        policy.liveParticlesExplicit = liveParticlesExplicit;
         policy.tileSize = tile;
         policy.waves = config.waves;
         policy.targetBlocksPerSm = config.targetBlocksPerSm;
