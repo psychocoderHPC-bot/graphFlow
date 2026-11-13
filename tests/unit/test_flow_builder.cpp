@@ -3,6 +3,7 @@
  */
 
 #include "TestDevice.hpp"
+#include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graphFlow.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -32,6 +33,14 @@ namespace flow_test
     };
 
     using Flow = graphFlow::Flow<Payload, Device>;
+    using ParticleFlow = graphFlow::Flow<graphFlow::Particle, Device>;
+
+    static_assert(
+        std::same_as<typename Flow::Storage, graphFlow::PayloadSlotStorage<Payload, Device>>,
+        "a non-particle payload must default to the generic payload-slot storage");
+    static_assert(
+        std::same_as<typename ParticleFlow::Storage, graphFlow::ParticleStorage<Device>>,
+        "the canonical particle payload must keep the particle SoA storage");
 
     struct Generate
     {

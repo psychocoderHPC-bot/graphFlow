@@ -55,18 +55,24 @@ namespace graphFlow
     /** Payload bytes of `numChunks * chunkCapacity` slots, checked for 64-bit overflow.
      *
      * Both multiplications are guarded so a malformed configuration raises `std::overflow_error`
-     * instead of wrapping into a small budget that the caller would accept.
+     * instead of wrapping into a small budget that the caller would accept. `slotBytes` defaults
+     * to the particle SoA slot size, so existing callers keep their 24-byte particle budget. A
+     * generic storage passes its own `slotBytes` (for example `sizeof(TPayload)` in
+     * `PayloadSlotStorage`).
      */
     inline constexpr std::uint64_t requiredPayloadBytes(
         std::uint64_t numChunks,
-        std::uint64_t chunkCapacity)
+        std::uint64_t chunkCapacity,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
     {
+        if(slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::requiredPayloadBytes: slotBytes must be non-zero"};
         if(chunkCapacity != 0u && numChunks > std::numeric_limits<std::uint64_t>::max() / chunkCapacity)
             throw std::overflow_error{"graphFlow::requiredPayloadBytes: slot count overflows 64 bits"};
         std::uint64_t const slots = numChunks * chunkCapacity;
-        if(slots != 0u && payloadBytesPerSlot > std::numeric_limits<std::uint64_t>::max() / slots)
+        if(slots != 0u && slotBytes > std::numeric_limits<std::uint64_t>::max() / slots)
             throw std::overflow_error{"graphFlow::requiredPayloadBytes: byte count overflows 64 bits"};
-        return slots * payloadBytesPerSlot;
+        return slots * slotBytes;
     }
 
     /** Add the payload bytes of `reserveChunks` output-credit chunks to a policy budget.
@@ -78,11 +84,12 @@ namespace graphFlow
     inline std::uint64_t payloadBudgetWithReserve(
         std::uint64_t policyBudgetBytes,
         std::uint64_t chunkCapacity,
-        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks)
+        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
     {
         if(policyBudgetBytes == 0u)
             throw std::invalid_argument{"graphFlow::payloadBudgetWithReserve: policy budget must be non-zero"};
-        std::uint64_t const reserveBytes = requiredPayloadBytes(reserveChunks, chunkCapacity);
+        std::uint64_t const reserveBytes = requiredPayloadBytes(reserveChunks, chunkCapacity, slotBytes);
         if(policyBudgetBytes > std::numeric_limits<std::uint64_t>::max() - reserveBytes)
             throw std::overflow_error{"graphFlow::payloadBudgetWithReserve: budget overflows 64 bits"};
         return policyBudgetBytes + reserveBytes;
@@ -90,23 +97,50 @@ namespace graphFlow
 
     /** Reject a fixed-capacity pool whose payload arrays exceed `budgetBytes`.
      *
-     * The check is `numChunks * chunkCapacity * payloadBytesPerSlot <= budgetBytes`. A zero
-     * budget is invalid: it would otherwise silently disable the cap.
+     * The check is `numChunks * chunkCapacity * slotBytes <= budgetBytes`, with `slotBytes`
+     * defaulting to the 24-byte particle SoA slot. A zero budget is invalid: it would otherwise
+     * silently disable the cap.
      */
+    inline void validatePayloadBudget(
+        std::uint64_t numChunks,
+        std::uint64_t chunkCapacity,
+        std::uint64_t budgetBytes,
+        std::string const& context,
+        std::uint64_t slotBytes)
+    {
+        if(budgetBytes == 0u)
+            throw std::invalid_argument{context + ": payload budget must be non-zero"};
+        std::uint64_t const required = requiredPayloadBytes(numChunks, chunkCapacity, slotBytes);
+        if(required > budgetBytes)
+            throw std::invalid_argument{
+                context + ": " + std::to_string(numChunks) + " chunks x " + std::to_string(chunkCapacity)
+                + " slots x " + std::to_string(slotBytes) + " bytes requires "
+                + std::to_string(required) + " bytes, exceeding the payload budget of "
+                + std::to_string(budgetBytes) + " bytes"};
+    }
+
+    /** Particle-budget overload; `slotBytes` defaults to the particle SoA slot size. */
     inline void validatePayloadBudget(
         std::uint64_t numChunks,
         std::uint64_t chunkCapacity,
         std::uint64_t budgetBytes,
         std::string const& context = "graphFlow::validatePayloadBudget")
     {
-        if(budgetBytes == 0u)
-            throw std::invalid_argument{context + ": payload budget must be non-zero"};
-        std::uint64_t const required = requiredPayloadBytes(numChunks, chunkCapacity);
-        if(required > budgetBytes)
-            throw std::invalid_argument{
-                context + ": " + std::to_string(numChunks) + " chunks x " + std::to_string(chunkCapacity)
-                + " slots x " + std::to_string(payloadBytesPerSlot) + " bytes requires "
-                + std::to_string(required) + " bytes, exceeding the payload budget of "
-                + std::to_string(budgetBytes) + " bytes"};
+        validatePayloadBudget(numChunks, chunkCapacity, budgetBytes, context, payloadBytesPerSlot);
+    }
+
+    /** Slot-size overload without an explicit diagnostic context. */
+    inline void validatePayloadBudget(
+        std::uint64_t numChunks,
+        std::uint64_t chunkCapacity,
+        std::uint64_t budgetBytes,
+        std::uint64_t slotBytes)
+    {
+        validatePayloadBudget(
+            numChunks,
+            chunkCapacity,
+            budgetBytes,
+            "graphFlow::validatePayloadBudget",
+            slotBytes);
     }
 } // namespace graphFlow

@@ -32,9 +32,10 @@ namespace graphFlow
      * policy budget from the device properties.
      *
      * `poolPayloadBudgetBytes` bounds the fixed-capacity pool payload arrays, not just the live
-     * working set: `numChunks * chunkCapacity * payloadBytesPerSlot` must fit. Its default is the
-     * documented accelerator default. `applyDevicePolicy()` replaces it with the policy memory
-     * budget plus `poolOutputReserveChunks` output-credit chunks, so the programmatic
+     * working set: `numChunks * chunkCapacity * slotBytes` must fit. `slotBytes` defaults to the
+     * 24-byte particle SoA slot; a generic storage sets it to `sizeof(TPayload)`. The budget
+     * itself defaults to the documented accelerator default. `applyDevicePolicy()` replaces it with
+     * the policy memory budget plus `poolOutputReserveChunks` output-credit chunks, so the programmatic
      * `applyDevicePolicy` + `derivePoolSize` + `Config::validate` path is consistent. The CLI
      * passes the exact graph reserve instead. Zero is rejected because it would disable the cap.
      * The slot-based pool remains the next memory optimization; this budget only makes the
@@ -62,6 +63,8 @@ namespace graphFlow
         std::uint32_t policyMaxChunkCapacity = 8192u;
         std::uint32_t policyLiveParticlesPerChunk = 2u;
         std::uint64_t policyMemoryBudgetBytes = 0u; // zero means "derive from the device"
+        /** Payload bytes of one storage slot; the particle SoA default is 24. */
+        std::uint64_t slotBytes = payloadBytesPerSlot;
 
         /** Largest bin count the dense shared table supports in this slice. */
         static constexpr std::uint32_t denseBinLimit = 1024u;
@@ -77,7 +80,8 @@ namespace graphFlow
                     numChunks,
                     chunkCapacity,
                     poolPayloadBudgetBytes,
-                    "graphFlow::Config");
+                    "graphFlow::Config",
+                    slotBytes);
             if(tileSize == 0u)
                 throw std::invalid_argument{"graphFlow::Config: tileSize must be non-zero"};
             if(batchChunks == 0u)
