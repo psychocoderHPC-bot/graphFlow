@@ -52,12 +52,12 @@ resource or decision is missing.
   whether the CUDA probe's kernels or the shared A30 prevent overlap, and either
   use independent node queues for real overlap or document that the scheduler
   relies on full-chunk pipelining. Correctness must never depend on overlap.
-- [ ] **P1: device-aware chunk sizing.** The default is `C=128`, `P=8*C`; the
-  plan asks for a heuristic from `multiProcessorCount`, `maxThreadsPerBlock`,
-  `sharedMemPerBlockBytes`, `warpSize`, and the verified launch limits. Print
-  the chosen policy, keep `C` and `T` independently tunable, and cap `C`/`P` by
-  the memory budget. Acceptance: CPU defaults remain reasonable; CUDA defaults
-  are documented and benchmarked at roughly one, two, and four waves.
+- [x] **P1: device-aware chunk sizing.** The device-aware policy is in main
+  (T1) and the integrated T13 matrix is recorded (`docs/benchmarks.md`).
+  Open boundary: the policy default `P=16384` exceeds the measured A30 payload
+  budget of 3,171,090,432 B (needs 3,221,225,472 B), so the T13 `N=1e8` run
+  used an explicit `P=16128`; the default-policy clamp to the actual device
+  budget is in progress, tracked in Section 7.
 - [ ] **P1: reduce pool memory.** `S=P+K*R` at `C=8192`, `P=65536` allocates
   about 12.9 GB of payload storage while observed peak live is under 1000
   chunks. Implement a slot-based pool or a documented smaller `P`/memory budget
@@ -229,6 +229,12 @@ resource or decision is missing.
   `P`, or a memory-budget cap.
 - **Queue overlap:** the CUDA probe reports no overlap between distinct queues.
   Decide whether to investigate further or document the full-chunk strategy.
+- **Policy-default budget boundary:** the policy default `C=8192`, `P=16384`
+  exceeds the actual A30 payload budget of 3,171,090,432 B (it needs
+  3,221,225,472 B), so the T13 `N=1e8` run had to use an explicit `P=16128`
+  (3,170,893,824 B) to pass. The default-policy clamp to the measured device
+  budget is in progress; until it lands, an un-overridden CUDA run on this
+  device is rejected.
 
 ## 8. Explicitly out of scope for v1
 

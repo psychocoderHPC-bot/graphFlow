@@ -47,10 +47,10 @@ is resolved.
 
 ## Throughput is a shared-host baseline
 
-`hal` reports `sharing=unknown`. The historical `N=1e8` result of 187.5 s,
-about `5.33e5` particles/s, is a shared-host baseline, not an
-exclusive-allocation acceptance number. The integrated T13 benchmark is
-pending. There is no variance study and no frozen regression target.
+`hal` reports `sharing=unknown` and fwk394 is shared. The historical `N=1e8`
+result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
+wall times are shared-host baselines, not exclusive-allocation acceptance
+numbers. There is no variance study and no frozen regression target.
 
 ## Pool memory is budget-capped but still fixed-capacity
 
@@ -103,7 +103,9 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
   CTest.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
-- The integrated T13 benchmark is pending.
+- The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall
+  times remain shared-host baselines, and no frozen regression target exists
+  yet.
 - The result buffer is `O(N)` (about 400 MB at `N=1e8`).
 - The `sm_75` RTX 2080 Ti path is a documented build target, not a measured run.
 - The hash load factor (`2*T` entries by default) has not been measured.
