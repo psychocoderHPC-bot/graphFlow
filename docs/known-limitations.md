@@ -142,6 +142,71 @@ Each node has one in-flight batch. A transform batch can carry up to Q chunks,
 but independent batches of the same node do not overlap. A bounded submitted
 depth per node is not implemented.
 
+## Queue overlap is advisory and the CUDA probe is timing-sensitive
+
+`probeQueueIndependence()` creates two non-blocking queues, runs a delay kernel
+on the first and a no-op on the second, and polls both events. The scheduler
+never depends on the verdict, and correctness does not depend on overlap.
+
+`tools/queue_probe.sh` adds a timed two-queue mode and a same-queue baseline.
+Measured at main `dd9ce3c` with 20,000,000 delay iterations and 5 repeats on
+the shared `hal` host (A30, CUDA 13.4) and `fwk394` (CPU, g++ 13.3):
+
+| Backend | two queues | one queue | committed probe |
+| --- | --- | --- | --- |
+| CPU (fwk394) | overlap 5/5 | 0/5 | yes 5/5 |
+| CUDA (hal A30) | overlap 4/5 | 0/5 | yes 4/5, no 1/5 |
+| HIP (hal RX 7900 XTX) | overlap 5/5 | 0/5 | yes 5/5 |
+
+Reproduce with `tools/queue_probe.sh --help`; the probe takes the backend,
+`--alpaka-source`, and the backend architecture (`sm_80` on the A30, `gfx1100`
+on the RX 7900 XTX). The timed CUDA run observes the no-op event at a median
+10.0 us while the delay kernel completes at 28.6 ms, so the streams do overlap.
+The same-queue baseline serializes as expected. The committed probe reported `no` in one of five CUDA
+repetitions at 20,000,000 iterations and `yes` in every repetition at
+100,000,000 and 400,000,000 iterations. Its `no` verdict is a polling-resolution
+artifact, not stream serialization: the loop polls with
+`std::this_thread::yield()` and classifies "first event complete" as `no`, which
+also happens when both events complete between two polls. A busy shared host can
+delay the polling thread past the delay kernel. CPU and HIP use the same probe
+and submission pattern, so the CUDA `no` is not caused by the kernels, the
+shared A30, or the scheduler. Do not use a single committed-probe `no` as
+evidence that CUDA streams are serialized.
+
+The scheduler keeps one in-flight batch per node and relies on full-chunk
+pipelining, not cross-queue overlap, for progress. A device whose queues alias
+or run sequentially follows the same path.
+
+## Host planning stays; batching amortizes the round trip
+
+An `nsys` profile of `graphFlow_particle_feedback` on the shared `hal` A30
+(N=1e6, C=1024, P=8192, seed 42, max-visits 64, Release) separates the
+per-batch stages from `CUPTI_ACTIVITY_KIND_KERNEL/MEMCPY/MEMSET`. "Host
+residual" is classify end to scatter start minus the traced D2H, H2D, and
+memset time. It covers event polling, `planDenseBins`/`buildDenseTable`, queue
+submission, and API latency.
+
+| Q | partition batches | classify med (total) | scatter med (total) | D2H med | H2D med | memset med | host residual med | round trip med (total) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 171,347 | 2.40 us (431 ms) | 3.26 us (566 ms) | 2.98 us | 3.07 us | 2.72 us | 53.76 us | 62.66 us (10.88 s) |
+| 8 | 1,724 | 4.54 us (7.9 ms) | 5.47 us (9.6 ms) | 3.94 us | 4.16 us | 4.19 us | 52.37 us | 66.14 us (116 ms) |
+
+The totals are sums over the three partition streams, not wall time. The
+per-batch round trip is dominated by a fixed roughly 52 us host residual. The
+plan itself is small: `planDenseBins` plus `buildDenseTable` takes 0.087 us for
+the example's 2 and 3 bins and 2.99 us for 1024 bins (200,000 iterations, host
+microbenchmark). Q=8 reduces the number of handoffs by about 99x and the total
+traced round-trip time from 10.88 s to 116 ms. On this shared host the measured
+wall time was 8.08-8.12 s at Q=1 and 0.39-0.41 s at Q=8; both include the 44 ms
+queue probe and are shared-host baselines, not acceptance numbers.
+
+Decision: keep host-side planning. Batching already removes most handoffs, and
+the remaining cost is event and dispatch latency that device-side planning does
+not remove, because the host still reserves output chunks and builds the
+scatter table. Revisit device-side planning only with a design that also makes
+the output chunk pool device-resident, or with a many-bin workload where the
+O(B) plan itself is measurable.
+
 ## Generic graph API is host-only
 
 The tree has the `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core with
