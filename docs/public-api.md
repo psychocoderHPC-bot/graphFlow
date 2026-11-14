@@ -161,7 +161,9 @@ seed, offset, or purpose.
 The contract is exercised on CPU, CUDA, and HIP. The HIP build on `hal`
 (AMD Radeon RX 7900 XTX, `gfx1100`, ROCm 7.2) runs 8 typed Flow cases through
 the public `Flow` API, plus the particle and photon example CLI/output cases:
-245/245 CTest with 43 HIP cases. The typed cases cover the feedback matrix,
+245/245 CTest with 35 HIP cases, measured on `b972eaa` and recorded in
+`/home/agent/final-hip-b972eaa/ctest.log`. The typed cases cover the feedback
+matrix,
 partial tails, bounded pools, empty and single runs, the generic POD chain,
 one batch-wide transform launch, one classify plus one scatter partition
 launch, and Q=8 feedback termination. `rocprof` confirms the device kernels.
