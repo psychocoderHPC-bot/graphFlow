@@ -216,6 +216,7 @@ TEST_CASE("a source status failure is detected before publication", "[unit][flow
     graphFlow::detail::SourceStage<Device, Storage, Pod, FailSource> stage{device, storage, config, FailSource{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
     stage.launch(queue, batch);
@@ -242,6 +243,7 @@ TEST_CASE("a sink status failure is detected before publication", "[unit][flow][
     graphFlow::detail::SinkStage<Device, Storage, Pod, FailSink> stage{device, storage, config, FailSink{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
     stage.launch(queue, batch);
@@ -310,6 +312,7 @@ TEST_CASE("a classifier status failure rejects the batch before planning", "[uni
         stage{device, storage, config, StatusClassifier{}, graphFlow::NoUpdate{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
 
@@ -343,6 +346,7 @@ TEST_CASE("an invalid updater result rejects the planned batch", "[unit][flow][s
         stage{device, storage, config, ValidClassifier{}, InvalidUpdate{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
 
@@ -378,6 +382,7 @@ TEST_CASE("a successful updater keeps the status word clear", "[unit][flow][stat
         stage{device, storage, config, ValidClassifier{}, BusyUpdate{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
 
@@ -441,6 +446,7 @@ TEST_CASE("a checked updater overflow fails the planned batch", "[unit][flow][st
         stage{device, storage, config, ValidClassifier{}, OverflowUpdate{}};
 
     graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
     using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
     Batch const batch{{input}, 0u};
 
