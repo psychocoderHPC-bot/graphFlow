@@ -106,44 +106,149 @@ size, not a scatter-bandwidth claim. The example does not report classify,
 scatter, or host round-trip timings at this revision, so no scatter bandwidth
 is derived from it.
 
-## Kernel matrix: scatter, dense/hash, distributions
+## P07b: Q/C re-run and kernel-axis e2e
 
-The example CLI exposes only N, C, P, Q, and seed. Scatter mode, dense versus
-hash, and the balanced/one-hot/skewed/sparse distributions are selectable only
-through the committed integration tests, so end-to-end throughput for those
-axes is blocked at this revision. The driver ran the test cases and recorded
-their durations:
+Provenance: graphFlow main `a61028192884bb92e0107b32f20e12b5c9ca76c9` plus the
+P07b kernel-workload CLI on branch `gf/p07b-e2e`. One exclusive
+`gpu-v100-int` allocation on `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
+driver 570.158.01, CUDA 12.6.85, `sm_70`, Release. Binary SHA-256
+`23c2bbeed6b9b7b0216ffaf865eaa081a80176b44d14ab05f163ba8a749775b4`. Every
+case ran three independent repetitions; the tables report the median and the
+interquartile range (inclusive halves). No H100 was used.
+
+The example gained an opt-in `--workload kernel` path: Generate -> Transform ->
+Sink with `--scatter shared|direct` (P03 `ScatterMode`), `--bin-path
+dense|hash`, `--bins 64|1024|4096|65536` and `--distribution
+balanced|one-hot|skewed|sparse`. The default feedback workload and its output
+are unchanged. The sink stores the chosen bin, so each kernel case prints the
+exact per-bin occupancy and the driver rejects a count sum that differs from N.
+
+### Q sweep and frozen target
+
+Command:
+
+```sh
+env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+  bash tools/bench_matrix.sh \
+    --binary build-cuda/graphFlow_particle_feedback --out /tmp/gf-p07b-run-q \
+    --matrix p07 --reps 3 --device 0 \
+    --kernel-tests build-cuda/graphFlow_tests --copy-reference \
+    --target-pps 13000000 --target-n 100000000 --target-c 8192 \
+    --target-q 8 --target-tolerance 10
+```
+
+`N=100000000`, `C=8192`, `P=16384`, seed 42, `T=128`, `Q=1/2/8`.
+
+| Q | median wall s | IQR wall s | median particles/s | IQR particles/s | peak live | peak reserved |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 192.890 | 0.110 | 5.184e5 | 2.96e2 | 236–237 | 6–8 |
+| 2 | 9.170 | 0.315 | 1.0905e7 | 3.70e5 | 26–28 | 6–9 |
+| 8 | 7.700 | 0.010 | 1.2987e7 | 1.68e4 | 13 | 7 |
+
+The Q=8 median is `12,987,013` particles/s against the `13,000,000` target and
+the 10 percent floor `11,700,000`; the verdict is **PASS**. Every one of the
+nine runs printed 260 sorted rows whose count column sums to exactly
+`100,000,000`; all nine hash to
+`21ab0aeb9ec72d380af2ce6e9631f8fa7b9111d24ff7831f272aa9f6a7be9dab`.
+
+### C-wave sweep
+
+Command:
+
+```sh
+env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+  bash tools/bench_matrix.sh \
+    --binary build-cuda/graphFlow_particle_feedback --out /tmp/gf-p07b-run-c \
+    --backend cuda --n 100000000 --chunk-sizes 2048,4096,8192 \
+    --live-particles 8192 --batch-chunks 8 --seeds 42 --reps 3 --timeout 1800
+```
+
+`P=8192`, Q=8, so `P/C` is 4, 2, and 1 resident full chunks.
+
+| C | P/C | median wall s | IQR wall s | median particles/s | IQR particles/s | peak live |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2048 | 4 | 11.120 | 0.055 | 8.9928e6 | 4.45e4 | 15 |
+| 4096 | 2 | 11.360 | 0.330 | 8.8028e6 | 2.43e5 | 12–13 |
+| 8192 | 1 | 23.010 | 0.125 | 4.3459e6 | 2.38e4 | 11–12 |
+
+The three C groups also print the same 260 rows and the same SHA-256. One
+resident chunk stalls the pipeline, as in the earlier P07 run.
+
+Sustained device-to-device copy reference at the same 3,221,225,472 B payload:
+`409.808` GB/s, `7.860` ms per copy over 10 iterations. It is a copy-engine
+context number, not a scatter-bandwidth claim.
+
+### Kernel-axis matrix
+
+Command:
+
+```sh
+env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+  bash tools/bench_matrix.sh \
+    --binary build-cuda/graphFlow_particle_feedback --out /tmp/gf-p07b-run-k \
+    --matrix p07b --device 0 --kernel-n 1000000 --kernel-c 4096 \
+    --kernel-p 16384 --kernel-q 8 --kernel-seed 42 --kernel-reps 3
+```
+
+The kernel workload is a separate Generate -> Transform -> Sink pipeline. It
+does not run the feedback loop, so its particles/s is not comparable with the
+feedback Q/C numbers above.
+
+| scatter | bin path | bins | distribution | N | C | P | Q | median wall s | IQR wall s | median particles/s | IQR particles/s |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| shared | hash | 4096 | sparse | 262144 | 4096 | 16384 | 8 | 2.030 | 0.010 | 1.2913e5 | 6.30e2 |
+| shared | hash | 65536 | sparse | 262144 | 4096 | 16384 | 8 | 2.170 | 0.005 | 1.2080e5 | 2.77e2 |
+| direct | dense | 64 | balanced | 1000000 | 4096 | 16384 | 8 | 0.340 | 0.000 | 2.9412e6 | 0 |
+| shared | dense | 64 | balanced | 1000000 | 4096 | 16384 | 8 | 0.340 | 0.005 | 2.9412e6 | 4.46e4 |
+| shared | dense | 64 | one-hot | 1000000 | 4096 | 16384 | 8 | 0.210 | 0.005 | 4.7619e6 | 1.08e5 |
+| shared | dense | 64 | skewed | 1000000 | 4096 | 16384 | 8 | 0.230 | 0.010 | 4.3478e6 | 2.07e5 |
+| direct | dense | 1024 | balanced | 1000000 | 4096 | 16384 | 8 | 2.000 | 0.000 | 5.0000e5 | 0 |
+| shared | dense | 1024 | balanced | 1000000 | 4096 | 16384 | 8 | 2.000 | 0.005 | 5.0000e5 | 1.26e3 |
+| shared | hash | 64 | balanced | 1000000 | 4096 | 16384 | 8 | 0.340 | 0.010 | 2.9412e6 | 9.19e4 |
+| shared | hash | 1024 | balanced | 1000000 | 4096 | 16384 | 8 | 2.000 | 0.020 | 5.0000e5 | 5.00e3 |
+
+All 30 runs exited 0 and their histogram sums equal N. The sorted rows are
+identical across the repetitions, across the two scatter modes, and across the
+dense/hash paths at the same bin count:
+
+| N | bins | distribution | runs | rows equal | SHA-256 |
+| ---: | ---: | --- | ---: | --- | --- |
+| 262144 | 4096 | sparse | 3 | yes | `06f1bd73ff252b1a8f2f51aa879ad8195ac6816d0627d8edb5071fe4dc441e55` |
+| 262144 | 65536 | sparse | 3 | yes | `968f4a008df5ad231cfb5578843033a9d4f2a28233f8568f0c7c6ed51fd638c0` |
+| 1000000 | 64 | balanced | 9 | yes | `f3a977d720ab00c985bb39e0fffab715f57696fe6a762412e14e3f3810ce3505` |
+| 1000000 | 64 | one-hot | 3 | yes | `e59ef1c49b3c32c8714b7d10b1aabc17be313c9124ebee3c53e1337afe7678b4` |
+| 1000000 | 64 | skewed | 3 | yes | `ab5932dacd593dc0ff4734c4903dd396da7d07f00c375aeefc0f83e6224200d2` |
+| 1000000 | 1024 | balanced | 9 | yes | `8b946fbb08966136cf9f17d9547ceb262187e11781345e184da1c0798d2de9a6` |
+
+The 4096/65536 sparse cases use `N=262144` because per-bin planning then
+produces one sink chunk per particle; `N=1e6` would multiply that scheduler
+overhead without changing the axis comparison. The wall timer has 10 ms
+resolution, so the sub-second cases are quantized; an IQR of 0 means every
+repetition printed the same 10 ms bucket.
+
+`sparse` is the P03 many-bin balanced mapping over `B >= 1024`; the committed
+tests have no separate sparse classifier. `direct` is the dense-path variant,
+so `--bin-path hash --scatter direct` is rejected. The CLI instantiates the bin
+counts 64, 1024, 4096 and 65536; dense rejects anything above 1024 and hash
+handles all four. A wider logical tile than 128 is rejected on the hash path
+because the committed 2*T table assumes T=128.
+
+The committed integration cases still pass; their Catch2 durations cover whole
+cases including device setup, not isolated kernels:
 
 ```sh
 build-cuda/graphFlow_tests --durations yes --order decl '[scatter]'
 build-cuda/graphFlow_tests --durations yes --order decl '[hash]'
 ```
 
-| Axis | Test case | Duration s |
-| --- | --- | ---: |
-| Scatter default | scatter mode defaults to shared staging | 0.000 |
-| Scatter, all distributions | direct and shared-staging scatter agree on all distributions | 1.360 |
-| Dense/hash overlap | hash and dense pipelines agree at overlapping bin counts | 1.042 |
-| 2*T vs 4*T | 2*T and 4*T hash tables agree with dense at overlapping bins | 1.447 |
-| Sparse bins | hash pipeline handles sparse 4096 and 65536 bin distributions | 0.729 |
+The scatter cases took 1.329 s (all distributions) and the hash cases ranged
+from 0.010 s to 1.546 s. These durations are not throughput numbers.
 
-Both commands exited 0. The durations cover the whole Catch2 case, including
-device setup, not an isolated kernel. The distribution cases are balanced,
-one-hot, skewed, and sparse (1024 bins at about two particles per bin in the
-scatter comparison; 4096 and 65536 bins in the sparse case). No P07
-kernel-level throughput number is claimed.
-
-The earlier P03 measurement on fwk394 (Xeon W-2175, CPU, `C=1024`, `T=128`,
-`N=1<<20`, 14 OpenMP threads) is the only committed kernel-timing provenance:
-shared staging versus direct was 5.48 vs 15.85 ms (balanced), 2.13 vs
-48.31 ms (one-hot), 2.21 vs 37.25 ms (skewed), and 4.19 vs 6.62 ms (sparse,
-B=1024). At B=1024 the dense table took 4.06 ms against 5.11 ms (2*T) and
-4.90 ms (4*T). Those numbers were not re-measured here.
-
-Artifacts from the run: `/tmp/gf-p07-run-q/` and `/tmp/gf-p07-run-c/`
-(`results.csv`, `aggregates.csv`, `summary.md`, `copy-reference.txt`,
-`kernel-matrix.md`, `target.md`, `histogram-stability.tsv`, per-run logs). These
-are outside the repository.
+Artifacts from the P07b runs: `/tmp/gf-p07b-run-q/`,
+`/tmp/gf-p07b-run-c/`, and `/tmp/gf-p07b-run-k/` (`results.csv`,
+`aggregates.csv`, `histogram-stability.tsv`, `target.md`, `copy-reference.txt`,
+`kernel-axes.md`, `kernel-axes.csv`, `kernel-axes-aggregates.csv`,
+`kernel-axes-histogram.csv`, per-run logs). These are outside the repository.
 
 ---
 

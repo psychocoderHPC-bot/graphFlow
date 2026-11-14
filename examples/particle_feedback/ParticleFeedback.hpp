@@ -18,9 +18,6 @@
 
 namespace graphFlow::particle
 {
-    /** Sentinel left in the result buffer when a particle never reaches a sink. */
-    inline constexpr std::uint32_t missingWeight = 0xDEAD'BEEFu;
-
     struct FeedbackResult
     {
         std::vector<std::uint32_t> weights; // final weight indexed by particle id

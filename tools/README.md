@@ -33,8 +33,11 @@ run of the binary. The integrated-main evidence is in
 | `--live-particles LIST` | source-admission capacities `P` |
 | `--batch-chunks LIST` | `Q` values |
 | `--seeds LIST` | seeds `S` (also accepts `0`) |
-| `--matrix smoke\|acceptance\|fwk394\|full` | preset, default `smoke` |
+| `--matrix smoke\|acceptance\|fwk394\|full\|p07\|p07b` | preset, default `smoke` |
 | `--timeout S` | per-run wall-clock limit in seconds |
+| `--kernel-tests PATH` | run the committed scatter/hash Catch2 cases and record their durations |
+| `--kernel-matrix` | run the opt-in kernel workload over the curated P07b axes |
+| `--kernel-n/-c/-p/-q/-seed/-reps` | N, C, P, Q, seed and repetitions of the kernel matrix |
 | `--copy-reference [CMD]` | optional copy-bandwidth hook, see below |
 | `--self-test`, `--dry-run` | run the harness self-test and exit, no binary or device needed |
 
@@ -51,6 +54,8 @@ be repeated across dimensions; the driver runs the full Cartesian product.
 | `acceptance` | `cuda` | 100000000 | 8192 | 16128 | 1 | 42 | 1800 s | measured A30 budget; 3,170,893,824 B |
 | `fwk394` | `cuda` | 100000000 | 4096 | 16384 | 1 | 42 | 1800 s | CUDA preset; nvcc 12.5 ICE and over budget, see below |
 | `full` | `cpu,cuda` | 100000, 1000000 | 1024, 8192 | 2048, 8192 | 1, 2, 8 | 42, 7 | 900 s | long sweep; over-budget cases are recorded as negatives |
+| `p07` | `cuda` | 100000000 | 8192 | 16384 | 1, 2, 8 | 42 | 1800 s | Q sweep and frozen target; 3 reps |
+| `p07b` | `cuda` | 1000000 | 4096 | 16384 | 8 | 42 | 1800 s | kernel axes only; 3 reps |
 
 ## Payload budget (T7)
 
@@ -116,6 +121,7 @@ C/P lists, for an all-pass sweep.
 | `histograms/<case>.raw.csv` | rows in emission order |
 | `pairs/<key>.diff` | `diff -u` of a CPU/CUDA pair whose rows differ |
 | `results.tsv`, `pairs.tsv`, `pair-results.tsv` | driver-internal unit-separator tables, not for external parsing |
+| `kernel-axes.csv`, `kernel-axes.md`, `kernel-axes-histogram.csv` | curated P07b scatter/bin-path/bins/distribution runs, medians and exact-histogram stability |
 | `environment.txt` | host, kernel, binary SHA-256, git commit, timer tool, GPU list, scrub record |
 | `copy-reference.txt` | raw output of `--copy-reference CMD`, when supplied |
 
