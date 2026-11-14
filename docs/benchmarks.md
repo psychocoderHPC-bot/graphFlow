@@ -126,6 +126,27 @@ Payload budget against the measured 3,171,090,432 B A30 budget:
 | `C=8192`, `P=16384` | 3,221,225,472 | rejected |
 | `C=8192`, `P=65536` | 12,884,901,888 | rejected |
 
+## N=1e8 acceptance on rosi_v100 (V100 SXM2-32GB)
+
+The P0 acceptance run is re-recorded on `rosi_v100` at main `f3ef355`
+(V100 SXM2-32GB, CUDA 12.6.85, `sm_70`, Release), three repetitions.
+Parameters: `C=8192`, `P=16384`, `T=128`, seed 42, max-visits 64. The
+`P=16384` payload (3,221,225,472 B) fits the V100 SXM2-32GB budget; the A30
+run needed `P=16128` against the smaller measured A30 budget.
+
+| N | Q | Wall time | Histogram sum | particles/s | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 100,000,000 | 1 | 194.685 s | 100,000,000 | ~5.14e5 | 260 rows |
+| 100,000,000 | 2 | 9.093 s | 100,000,000 | ~1.10e7 | 260 rows |
+| 100,000,000 | 8 | 7.676 s | 100,000,000 | 1.30e7 | 260 rows |
+
+The sorted histogram has 260 rows and the count column sums to exactly
+100,000,000 for every Q; the sorted `weight,count` rows hash to SHA-256
+`89dc7fb9962e898fe2f1fe0116ad98fe2df9dceb77d33aa890a56467615d02e9`. Peak
+memory is 5702 MiB. This is the recorded P0 acceptance run; the hal A30
+numbers above stay labelled shared-host baselines. H100 was not used, so no
+H100 claim is made.
+
 ## Current state and caveats
 
 - The integrated main adds device-aware `C`/`P`/`T`, multi-chunk batching with
@@ -141,7 +162,8 @@ Payload budget against the measured 3,171,090,432 B A30 budget:
   not an exclusive-hardware acceptance claim. The same caveat applies to the
   integrated T13 table: all of its wall times and derived particles/s values
   are single-run baselines on shared hosts, not exclusive-hardware acceptance
-  numbers.
+  numbers. The `N=1e8` acceptance section above is the exception: it is the
+  recorded exclusive-platform run on `rosi_v100` (V100 SXM2-32GB).
 - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
   `gfx1100`, ROCm 7.2) with 245/245 CTest (43 HIP cases), measured on
   `b972eaa`, but no HIP benchmark is recorded.
