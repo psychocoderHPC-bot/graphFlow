@@ -3,6 +3,7 @@
  */
 
 #include "ParticleFeedback.hpp"
+#include "HookAdapters.hpp"
 #include "ParticleStages.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
@@ -103,15 +104,15 @@ TEST_CASE("a throwing source launch fails the run without stalling", "[integrati
     graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     std::uint32_t launches = 0u;
-    auto sourceHooks = graphFlow::particle::hooksOf<Device>(generate);
-    auto const generateLaunch = sourceHooks.launch;
-    sourceHooks.launch = [generateLaunch, &launches](Runner::Queue const& queue, Runner::Batch const& batch)
-    {
-        ++launches;
-        if(launches == 2u)
-            throw graphFlow::BatchError{"source launch failed on purpose"};
-        generateLaunch(queue, batch);
-    };
+    auto sourceHooks = graphFlow::test::wrapLaunch<Device, graphFlow::ChunkPool<Device>>(
+        graphFlow::particle::hooksOf<Device>(generate),
+        [&launches](auto const& generateLaunch, auto const& queue, auto const& batch)
+        {
+            ++launches;
+            if(launches == 2u)
+                throw graphFlow::BatchError{"source launch failed on purpose"};
+            generateLaunch(queue, batch);
+        });
 
     Runner runner{device, pool};
     auto const source = runner.addNode("generate", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
@@ -237,13 +238,13 @@ namespace
         // Count abort invocations test-side. A second abort would attempt to release the already
         // returned pending chunks; its stale-handle error is swallowed by teardown, so the counter
         // is the observable that proves the exactly-once contract.
-        auto mergeHooks = graphFlow::particle::hooksOf<Device>(merge);
-        auto const mergeAbort = mergeHooks.abort;
-        mergeHooks.abort = [&outcome, mergeAbort]()
-        {
-            ++outcome.abortCalls;
-            mergeAbort();
-        };
+        auto mergeHooks = graphFlow::test::wrapAbort<Device, graphFlow::ChunkPool<Device>>(
+            graphFlow::particle::hooksOf<Device>(merge),
+            [&outcome](auto const& mergeAbort)
+            {
+                ++outcome.abortCalls;
+                mergeAbort();
+            });
 
         Runner runner{device, pool};
         auto const source = runner.addNode(
@@ -335,16 +336,16 @@ TEST_CASE("a later unroutable output still releases the batch input", "[integrat
         transform{device, pool, SplitEvenPolicy{}, capped, 128u};
     graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
-    auto transformHooks = graphFlow::particle::hooksOf<Device>(transform);
-    auto const baseFinish = transformHooks.finish;
-    transformHooks.finish = [baseFinish](Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
-    {
-        baseFinish(batch, outputs);
-        if(outputs.size() < 2u)
-            throw std::runtime_error{"test expects two output chunks"};
-        // The first descriptor routes fine; the second one is unroutable for a two-bin route table.
-        outputs[1].bin = 200u;
-    };
+    auto transformHooks = graphFlow::test::wrapFinish<Device, graphFlow::ChunkPool<Device>>(
+        graphFlow::particle::hooksOf<Device>(transform),
+        [](auto const& baseFinish, auto const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+        {
+            baseFinish(batch, outputs);
+            if(outputs.size() < 2u)
+                throw std::runtime_error{"test expects two output chunks"};
+            // The first descriptor routes fine; the second one is unroutable for a two-bin route table.
+            outputs[1].bin = 200u;
+        });
 
     Runner runner{device, pool};
     auto const source = runner.addNode(
@@ -500,17 +501,18 @@ namespace
         auto sinkHooks = graphFlow::detail::makeHooks<Device, Storage>(static_cast<Base*>(sink.get()));
 
         TypedFailureOutcome outcome;
-        auto const transformAbort = transformHooks.abort;
-        transformHooks.abort = [&outcome, transformAbort]()
-        {
-            ++outcome.abortCalls;
-            transformAbort();
-        };
+        auto wrappedTransformHooks = graphFlow::test::wrapAbort<Device, Storage>(
+            std::move(transformHooks),
+            [&outcome](auto const& transformAbort)
+            {
+                ++outcome.abortCalls;
+                transformAbort();
+            });
 
         using Runner = graphFlow::GraphRunner<Device, Storage>;
         Runner runner{device, storage};
         auto const sourceNode = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
-        runner.addNode("transform", graphFlow::NodeRole::transform, 1u, {2}, std::move(transformHooks));
+        runner.addNode("transform", graphFlow::NodeRole::transform, 1u, {2}, std::move(wrappedTransformHooks));
         auto const sinkNode = runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, std::move(sinkHooks));
         runner.setSource(sourceNode, particles);
         runner.setBatchChunks(batchChunks);

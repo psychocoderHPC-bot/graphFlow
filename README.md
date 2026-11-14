@@ -51,19 +51,21 @@ remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results: CPU CTest **193/193 passed** at the RNG API change (OMP=ON Release,
-pedantic); CPU OpenMP with
+results at the sm_70 ICE workaround: CPU CTest **193/193 passed** (OMP=ON
+Release, pedantic) and CUDA CTest **245/245 passed** on V100 `sm_70`
+(CUDA 12.6.85, Release). Both totals are one lower than before the RNG merge
+because the RNG change removes one `TEST_CASE`. The explicit
+concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
+the RNG main is preserved. CPU OpenMP with
 `GOMP_SPINCOUNT=0` (passive) at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, OMP=2 Q8 4.46 s. All histogram sums are exact and no
 hangs were observed with passive spinning. The previously recorded counts,
 fwk394 CPU 194/194 and hal CUDA 246/246, are **historical validation on a
 shared host** (`hal` reports `sharing=unknown`) and are **not the final
-current validation**. CUDA V100 `sm_70` on `rosi_v100` is currently
-**blocked by an nvcc 12.6.85 internal compiler error at
-`flow/Execution.hpp:348`** (`check_name_hiding_by_template_parameters`);
-no V100 CUDA test counts are claimed. The CUDA build fails its `[cuda]`
-tests when no NVIDIA GPU is visible.
+current validation**. CUDA 13.4/`sm_80` was not re-run in this validation,
+and no H100 or fwk394 result is updated here. The CUDA build fails its
+`[cuda]` tests when no NVIDIA GPU is visible.
 
 The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
@@ -292,9 +294,9 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
 claimed runtime. CUDA execution was historically validated on `hal` with
-`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build is currently blocked by an
-nvcc 12.6.85 ICE at `flow/Execution.hpp:348`, so no `rosi_v100` CUDA
-validation is claimed.
+`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build passes 245/245 with the
+explicit concept-parameter workaround. CUDA 13.4/`sm_80` was not re-run in
+this validation.
 
 ## Semantics
 
@@ -418,7 +420,8 @@ The full design is in [architecture](docs/architecture.md).
   is blocked until an AMD runtime device is available; no HIP runtime result is
   claimed.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
-  CUDA 13.4 is the validated compiler.
+  CUDA 13.4 compiled `sm_80` historically; nvcc 12.6.85 now builds V100
+  `sm_70` with the explicit concept-parameter workaround.
 - TSAN is blocked on hal by `unexpected memory mapping`; the non-PIE
   scheduler/pool subset is clean on fwk394 (14/14). No full integrated TSAN run
   is claimed.
@@ -432,9 +435,9 @@ The full design is in [architecture](docs/architecture.md).
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
   multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
-  193/193 with OMP=ON at the RNG API change.
-- CUDA V100 `sm_70` on `rosi_v100` is blocked by an nvcc 12.6.85 ICE at
-  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed.
+  193/193 with OMP=ON at the sm_70 ICE workaround.
+- CUDA V100 `sm_70` on `rosi_v100` passes 245/245 (CUDA 12.6.85 Release)
+  with the explicit concept-parameter workaround.
 - CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
 - No CI runners or `.github/workflows` yet (PR #4 is a draft).
 - The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun

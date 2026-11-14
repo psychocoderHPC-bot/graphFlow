@@ -5,6 +5,7 @@
 #include "ParticleFeedback.hpp"
 #include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
+#include "HookAdapters.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/graph/Classifier.hpp"
@@ -367,14 +368,14 @@ namespace
         graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         PipelineOutcome outcome;
-        auto sinkHooks = graphFlow::particle::hooksOf<Device>(sink);
-        auto const sinkLaunch = sinkHooks.launch;
-        sinkHooks.launch = [sinkLaunch, &outcome](Runner::Queue const& queue, Runner::Batch const& batch)
-        {
-            for(graphFlow::ChunkDescriptor const& chunk : batch.chunks)
-                outcome.sinkFills.push_back(chunk.fill);
-            sinkLaunch(queue, batch);
-        };
+        auto sinkHooks = graphFlow::test::wrapLaunch<Device, graphFlow::ChunkPool<Device>>(
+            graphFlow::particle::hooksOf<Device>(sink),
+            [&outcome](auto const& sinkLaunch, auto const& queue, auto const& batch)
+            {
+                for(graphFlow::ChunkDescriptor const& chunk : batch.chunks)
+                    outcome.sinkFills.push_back(chunk.fill);
+                sinkLaunch(queue, batch);
+            });
 
         std::vector<int> const splitRoute(Mod8Policy::maxBins, 2);
         std::vector<int> const joinRoute(Mod8Policy::maxBins, 3);

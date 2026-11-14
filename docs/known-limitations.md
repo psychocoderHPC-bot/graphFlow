@@ -35,7 +35,7 @@ result.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 194/194 with
+spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 193/193 with
 OMP=ON Release. CPU OpenMP wall times at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
@@ -57,13 +57,19 @@ CUDA 12.5 nvcc hits an internal compiler error while compiling
 CUDA compiler. Do not pin CUDA 12.5 for this project until the compiler failure
 is resolved.
 
-## CUDA V100 `sm_70` build is blocked on `rosi_v100`
+## CUDA V100 `sm_70` ICE is worked around on `rosi_v100`
 
-The `rosi_v100` CUDA V100 `sm_70` build is currently blocked by an nvcc
-12.6.85 internal compiler error at `flow/Execution.hpp:348`
-(`check_name_hiding_by_template_parameters`). No V100 CUDA test counts are
-claimed. This is a compiler bug, not a project defect; the same tree compiles
-on CUDA 13.4.
+nvcc 12.6.85 aborts in `check_name_hiding_by_template_parameters` when a
+function template has ten or more abbreviated parameters. The transform,
+partition, scatter, and hash-scatter kernels now declare the trailing
+`IMdSpan` parameters explicitly, which keeps the abbreviated count below the
+threshold; deduction and the instantiated signatures are unchanged. The test
+hook adapters keep `GraphRunner::Queue` and `Batch` out of non-template
+`std::function` construction, the other nvcc 12.6.85 frontend crash. With the
+workaround the `rosi_v100` V100 `sm_70` Release CTest passes 245/245 and the
+CPU CTest passes 193/193; the RNG main is preserved. The recorded run is
+Release only. Debug, the hash-path rerun, and CI remain open, and CUDA
+13.4/`sm_80` was not re-run in this validation.
 
 ## Throughput is a shared-host baseline
 
@@ -73,10 +79,11 @@ wall times are shared-host baselines, not exclusive-allocation acceptance
 numbers. There is no variance study and no frozen regression target.
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results: CPU CTest 194/194 (OMP=ON Release); CPU OpenMP wall times recorded
-(passive, `GOMP_SPINCOUNT=0`). CUDA V100 `sm_70` is blocked by the nvcc
-12.6.85 ICE; no V100 CUDA test counts are claimed. No frozen regression
-target exists yet.
+results: CPU CTest 193/193 and CUDA CTest 245/245 on V100 `sm_70` (OMP=ON
+Release and CUDA 12.6.85 Release, both with the explicit concept-parameter
+workaround); CPU OpenMP wall times recorded (passive, `GOMP_SPINCOUNT=0`).
+No frozen regression target exists yet. CUDA 13.4/`sm_80`, fwk394, and H100
+were not re-run in this validation.
 
 JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
 gateway sharing flag is unknown. The recorded H100 run observed external load
@@ -141,8 +148,9 @@ is the static 1024-bin limit, not a measured crossover.
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract). The
   historical integrated CTest totals are 194/194 CPU on fwk394 and 246/246
-  CUDA on hal. The `rosi_v100` CPU CTest passes 194/194 (OMP=ON Release); the
-  `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE.
+  CUDA on hal. The `rosi_v100` CPU CTest passes 193/193 (OMP=ON Release) and
+  the CUDA CTest on V100 `sm_70` passes 245/245 with the explicit
+  concept-parameter workaround.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall
