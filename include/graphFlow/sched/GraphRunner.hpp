@@ -207,9 +207,11 @@ namespace graphFlow
 
     /** Host-side dataflow scheduler.
      *
-     * One non-blocking queue and one event per node. Every node has at most one in-flight batch and
-     * one host ready deque; a transform batch may carry up to `batchChunks` ready input chunks, so
-     * live device work is bounded by the node count, the batch size and the chunk pool. The
+     * One non-blocking queue per node and one event per submitted-depth lane. A node has one host
+     * ready deque and up to `depth` in-flight batches; a transform batch may carry up to
+     * `batchChunks` ready input chunks, so live device work is bounded by the total lane count, the
+     * batch size and the chunk pool. The depth defaults to one and preserves the historical
+     * one-batch-per-node scheduling. The
      * scheduler thread owns queue submission, routing, event retirement, free-list updates and
      * output-chunk reservation; it never blocks on a queue in the steady state.
      *
@@ -300,18 +302,45 @@ namespace graphFlow
         {
         }
 
+        /** Builds the hooks of one submitted-depth lane of a node. */
+        using HooksFactory = std::function<Hooks(std::uint32_t)>;
+
         /** Register a node. `route[bin]` is the destination node index for that bin.
          *
          * `maxBins` is the node's partition width: the classifier `maxBins` for a partition node
          * and the route table size. The adaptive output credit is derived from exactly this
          * width, never from the hash table entry count, the tile width, or the batch size Q.
+         *
+         * `depth` is the number of concurrently in-flight batches of this node. The default of one
+         * preserves the historical one-batch-per-node scheduling. A depth above one replicates the
+         * same hooks over every lane, so a caller that passes stateful hooks must use the factory
+         * overload and supply one independent hook set per lane.
          */
         std::uint32_t addNode(
             std::string name,
             NodeRole role,
             std::uint32_t maxBins,
             std::vector<int> route,
-            Hooks hooks)
+            Hooks hooks,
+            std::uint32_t depth = 1u)
+        {
+            return addNode(
+                std::move(name),
+                role,
+                maxBins,
+                std::move(route),
+                HooksFactory{[hooks = std::move(hooks)](std::uint32_t) { return hooks; }},
+                depth);
+        }
+
+        /** Register a node and create one independent hook set per submitted-depth lane. */
+        std::uint32_t addNode(
+            std::string name,
+            NodeRole role,
+            std::uint32_t maxBins,
+            std::vector<int> route,
+            HooksFactory makeHooks,
+            std::uint32_t depth)
         {
             if(role == NodeRole::sink)
             {
@@ -327,14 +356,26 @@ namespace graphFlow
                 if(dst < 0)
                     throw std::invalid_argument{"graphFlow: negative route destination"};
             }
+            if(depth == 0u)
+                throw std::invalid_argument{"graphFlow: node depth must be non-zero"};
+
+            std::vector<Hooks> laneHooks;
+            std::vector<Event> laneEvents;
+            laneHooks.reserve(depth);
+            laneEvents.reserve(depth);
+            for(std::uint32_t lane = 0u; lane < depth; ++lane)
+            {
+                laneHooks.push_back(makeHooks(lane));
+                laneEvents.push_back(m_device.makeEvent());
+            }
             auto node = std::make_unique<Node>(
                 std::move(name),
                 role,
                 maxBins,
                 std::move(route),
-                std::move(hooks),
+                std::move(laneHooks),
+                std::move(laneEvents),
                 m_device.makeQueue(alpaka::queueKind::nonBlocking),
-                m_device.makeEvent(),
                 static_cast<std::uint32_t>(m_nodes.size()));
             m_nodes.push_back(std::move(node));
             return static_cast<std::uint32_t>(m_nodes.size() - 1u);
@@ -357,8 +398,8 @@ namespace graphFlow
         /** Maximum number of ready input chunks a transform node dispatches as one batch.
          *
          * `1` reproduces the single-chunk dispatch of the earlier scheduler. The value is applied
-         * to transform nodes only; source and sink nodes always dispatch one chunk per batch. Every
-         * node still has at most one in-flight batch.
+         * to transform nodes only; source and sink nodes always dispatch one chunk per batch. The
+         * per-node in-flight depth is configured separately at `addNode()`.
          */
         void setBatchChunks(std::uint32_t batchChunks)
         {
@@ -439,100 +480,104 @@ namespace graphFlow
                 {
                     bool progress = false;
 
-                    // 1) Retire completed events.
+                    // 1) Retire completed events. Each node has up to `depth` lanes, so every
+                    //    lane owns its batch, event, leases and output credit independently.
                     for(auto& nodePtr : m_nodes)
                     {
                         Node& node = *nodePtr;
-                        if(!node.armed || !node.event.isComplete())
-                            continue;
-                        node.armed = false;
-                        Batch const batch = *node.inflight;
+                        for(Lane& lane : node.lanes)
+                        {
+                            if(!lane.armed || !lane.event.isComplete())
+                                continue;
+                            lane.armed = false;
+                            Batch const batch = *lane.inflight;
 
-                        std::uint32_t allocated = 0u;
-                        bool const moreWork = node.hooks.advance(node.queue, batch, allocated);
-                        if(allocated != 0u)
-                        {
-                            if(allocated > node.reserved)
-                                throw std::logic_error{"graphFlow: node acquired more chunks than reserved"};
-                            reservedTotal -= node.reserved;
-                            node.reserved = 0u;
-                        }
-                        else if(!moreWork && node.reserved != 0u)
-                        {
-                            // A finished batch that produced no output releases its credit.
-                            reservedTotal -= node.reserved;
-                            node.reserved = 0u;
-                        }
-
-                        if(moreWork)
-                        {
-                            enqueueEvent(node);
-                        }
-                        else
-                        {
-                            std::vector<ChunkDescriptor> outputs;
-                            node.hooks.finish(batch, outputs);
-                            ++node.completedChunks;
-                            ++stats.completedBatches;
-
-                            for(std::size_t o = 0u; o < outputs.size(); ++o)
+                            std::uint32_t allocated = 0u;
+                            bool const moreWork = lane.hooks.advance(node.queue, batch, allocated);
+                            if(allocated != 0u)
                             {
-                                ChunkDescriptor const& output = outputs[o];
-                                try
+                                if(allocated > lane.reserved)
+                                    throw std::logic_error{"graphFlow: node acquired more chunks than reserved"};
+                                reservedTotal -= lane.reserved;
+                                lane.reserved = 0u;
+                            }
+                            else if(!moreWork && lane.reserved != 0u)
+                            {
+                                // A finished batch that produced no output releases its credit.
+                                reservedTotal -= lane.reserved;
+                                lane.reserved = 0u;
+                            }
+
+                            if(moreWork)
+                            {
+                                enqueueEvent(node, lane);
+                            }
+                            else
+                            {
+                                std::vector<ChunkDescriptor> outputs;
+                                lane.hooks.finish(batch, outputs);
+                                ++node.completedChunks;
+                                ++stats.completedBatches;
+
+                                for(std::size_t o = 0u; o < outputs.size(); ++o)
                                 {
-                                    if(output.bin >= node.route.size())
-                                        throw std::runtime_error{
-                                            "graphFlow: node '" + node.name + "' produced an unroutable bin"};
-                                    int const dst = node.route[output.bin];
-                                    if(dst < 0)
-                                        throw std::runtime_error{
-                                            "graphFlow: node '" + node.name + "' bin " + std::to_string(output.bin)
-                                            + " has no route"};
-                                    m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
-                                }
-                                catch(...)
-                                {
-                                    // Do not leak outputs that were not published; the input is
-                                    // released by teardown because `inflight` is still set.
-                                    for(std::size_t rest = o; rest < outputs.size(); ++rest)
+                                    ChunkDescriptor const& output = outputs[o];
+                                    try
                                     {
-                                        if(isInput(batch, outputs[rest].handle))
-                                            node.inputOwned = false;
-                                        m_storage.release(outputs[rest].handle);
+                                        if(output.bin >= node.route.size())
+                                            throw std::runtime_error{
+                                                "graphFlow: node '" + node.name + "' produced an unroutable bin"};
+                                        int const dst = node.route[output.bin];
+                                        if(dst < 0)
+                                            throw std::runtime_error{
+                                                "graphFlow: node '" + node.name + "' bin "
+                                                + std::to_string(output.bin) + " has no route"};
+                                        m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                     }
-                                    throw;
+                                    catch(...)
+                                    {
+                                        // Do not leak outputs that were not published; the input
+                                        // is released by teardown because `inflight` is still set.
+                                        for(std::size_t rest = o; rest < outputs.size(); ++rest)
+                                        {
+                                            if(isInput(batch, outputs[rest].handle))
+                                                lane.inputOwned = false;
+                                            m_storage.release(outputs[rest].handle);
+                                        }
+                                        throw;
+                                    }
                                 }
-                            }
 
-                            // A source publishes its input chunks as outputs, so a fully routed
-                            // batch has transferred them downstream. Every other node still owns
-                            // its input chunks and releases them below. Setting this per routed
-                            // output would drop the input release when a later output is
-                            // unroutable.
-                            if(node.role == NodeRole::source)
-                                node.inputOwned = false;
+                                // A source publishes its input chunks as outputs, so a fully
+                                // routed batch has transferred them downstream. Every other node
+                                // still owns its input chunks and releases them below. Setting
+                                // this per routed output would drop the input release when a
+                                // later output is unroutable.
+                                if(node.role == NodeRole::source)
+                                    lane.inputOwned = false;
 
-                            if(node.role == NodeRole::sink)
-                                sunkParticles += batch.particles();
+                                if(node.role == NodeRole::sink)
+                                    sunkParticles += batch.particles();
 
-                            // A source hands its chunk downstream; every other node retires its input
-                            // chunks only after the completion event of the last device stage (the
-                            // scatter) has fired.
-                            if(node.role != NodeRole::source)
-                            {
-                                if(node.leaseHeld)
+                                // A source hands its chunk downstream; every other node retires
+                                // its input chunks only after the completion event of the last
+                                // device stage (the scatter) has fired.
+                                if(node.role != NodeRole::source)
                                 {
+                                    if(lane.leaseHeld)
+                                    {
+                                        for(ChunkDescriptor const& input : batch.chunks)
+                                            m_storage.releaseLease(input.handle);
+                                        lane.leaseHeld = false;
+                                    }
                                     for(ChunkDescriptor const& input : batch.chunks)
-                                        m_storage.releaseLease(input.handle);
-                                    node.leaseHeld = false;
+                                        m_storage.release(input.handle);
+                                    lane.inputOwned = false;
                                 }
-                                for(ChunkDescriptor const& input : batch.chunks)
-                                    m_storage.release(input.handle);
-                                node.inputOwned = false;
+                                lane.inflight.reset();
                             }
-                            node.inflight.reset();
+                            progress = true;
                         }
-                        progress = true;
                     }
                     observePeaks(stats);
 
@@ -556,7 +601,8 @@ namespace graphFlow
                     bool const enoughBudget
                         = configuredLive == 0u
                           || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
-                    if(generated < m_sourceParticles && !source.inflight && withinAdmission && enoughBudget
+                    Lane* sourceLane = Node::freeLane(source);
+                    if(generated < m_sourceParticles && sourceLane != nullptr && withinAdmission && enoughBudget
                        && m_storage.freeCount() > reservedTotal)
                     {
                         std::uint64_t budget = remaining;
@@ -573,10 +619,10 @@ namespace graphFlow
                         generated += fill;
                         // Publish the in-flight batch before the hook so a throwing launch is
                         // still owned by the teardown path.
-                        source.inflight = batch;
-                        source.inputOwned = true;
-                        source.hooks.launch(source.queue, batch);
-                        enqueueEvent(source);
+                        sourceLane->inflight = batch;
+                        sourceLane->inputOwned = true;
+                        sourceLane->hooks.launch(source.queue, batch);
+                        enqueueEvent(source, *sourceLane);
                         progress = true;
                     }
                     observePeaks(stats);
@@ -588,7 +634,10 @@ namespace graphFlow
                     auto tryDispatch = [&](std::size_t index) -> bool
                     {
                         Node& node = *m_nodes[index];
-                        if(node.ready.empty() || node.inflight)
+                        if(node.ready.empty())
+                            return false;
+                        Lane* lane = Node::freeLane(node);
+                        if(lane == nullptr)
                             return false;
 
                         // A transform node batches up to `batchChunks` ready input chunks; source
@@ -629,8 +678,8 @@ namespace graphFlow
                             selected.push_back(node.ready[i]);
 
                         Batch const batch{selected, 0u};
-                        node.inflight = batch;
-                        node.inputOwned = true;
+                        lane->inflight = batch;
+                        lane->inputOwned = true;
                         std::size_t leased = 0u;
                         try
                         {
@@ -646,10 +695,10 @@ namespace graphFlow
                                     m_storage.acquireLease(selected[i].handle);
                                     leased = i + 1u;
                                 }
-                                node.leaseHeld = true;
+                                lane->leaseHeld = true;
                             }
-                            node.hooks.launch(node.queue, batch);
-                            enqueueEvent(node);
+                            lane->hooks.launch(node.queue, batch);
+                            enqueueEvent(node, *lane);
                         }
                         catch(...)
                         {
@@ -664,7 +713,7 @@ namespace graphFlow
                             {
                                 // Keep the original launch error; teardown releases `ready` anyway.
                             }
-                            node.leaseHeld = false;
+                            lane->leaseHeld = false;
                             for(std::size_t i = 0u; i < leased; ++i)
                             {
                                 try
@@ -675,13 +724,13 @@ namespace graphFlow
                                 {
                                 }
                             }
-                            node.inputOwned = false;
-                            node.inflight.reset();
+                            lane->inputOwned = false;
+                            lane->inflight.reset();
                             throw;
                         }
                         for(std::size_t i = 0u; i < selected.size(); ++i)
                             node.ready.pop_front();
-                        node.reserved = reserve;
+                        lane->reserved = reserve;
                         reservedTotal += reserve;
                         if(reservedTotal > stats.peakReservedChunks)
                             stats.peakReservedChunks = reservedTotal;
@@ -718,7 +767,10 @@ namespace graphFlow
                     bool drained = true;
                     for(auto const& nodePtr : m_nodes)
                     {
-                        if(nodePtr->inflight || !nodePtr->ready.empty())
+                        bool laneInflight = false;
+                        for(Lane const& lane : nodePtr->lanes)
+                            laneInflight = laneInflight || lane.inflight.has_value();
+                        if(laneInflight || !nodePtr->ready.empty())
                         {
                             drained = false;
                             break;
@@ -764,10 +816,13 @@ namespace graphFlow
             // Drain every queue so the caller may read result buffers immediately.
             for(auto& nodePtr : m_nodes)
             {
-                if(nodePtr->armed)
-                    nodePtr->queue.waitFor(nodePtr->event);
+                for(Lane& lane : nodePtr->lanes)
+                {
+                    if(lane.armed)
+                        nodePtr->queue.waitFor(lane.event);
+                    lane.armed = false;
+                }
                 alpaka::onHost::wait(nodePtr->queue);
-                nodePtr->armed = false;
             }
             if(m_storage.freeCount() != m_storage.numChunks())
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
@@ -793,6 +848,22 @@ namespace graphFlow
         }
 
     private:
+        /** One submitted-depth slot of a node: its own hooks, event and batch ownership. */
+        struct Lane
+        {
+            Lane(Hooks laneHooks, Event laneEvent) : hooks{std::move(laneHooks)}, event{std::move(laneEvent)}
+            {
+            }
+
+            Hooks hooks;
+            Event event;
+            std::optional<Batch> inflight;
+            bool armed = false;
+            bool leaseHeld = false;
+            bool inputOwned = false;
+            std::uint32_t reserved = 0u;
+        };
+
         struct Node
         {
             Node(
@@ -800,35 +871,43 @@ namespace graphFlow
                 NodeRole nodeRole,
                 std::uint32_t nodeBins,
                 std::vector<int> nodeRoute,
-                Hooks nodeHooks,
+                std::vector<Hooks> nodeHooks,
+                std::vector<Event> nodeEvents,
                 Queue nodeQueue,
-                Event nodeEvent,
                 std::uint32_t nodeId)
                 : name{std::move(nodeName)}
                 , role{nodeRole}
                 , maxBins{nodeBins}
                 , route{std::move(nodeRoute)}
-                , hooks{std::move(nodeHooks)}
                 , queue{std::move(nodeQueue)}
-                , event{std::move(nodeEvent)}
                 , id{nodeId}
             {
+                if(nodeHooks.empty() || nodeHooks.size() != nodeEvents.size())
+                    throw std::logic_error{"graphFlow: invalid node depth"};
+                lanes.reserve(nodeHooks.size());
+                for(std::size_t i = 0u; i < nodeHooks.size(); ++i)
+                    lanes.push_back(Lane{std::move(nodeHooks[i]), std::move(nodeEvents[i])});
+            }
+
+            /** First lane that does not own a batch, or null when the depth is exhausted. */
+            [[nodiscard]] static Lane* freeLane(Node& node)
+            {
+                for(Lane& lane : node.lanes)
+                {
+                    if(!lane.inflight)
+                        return &lane;
+                }
+                return nullptr;
             }
 
             std::string name;
             NodeRole role;
             std::uint32_t maxBins;
             std::vector<int> route;
-            Hooks hooks;
             Queue queue;
-            Event event;
             std::uint32_t id;
             std::deque<ChunkDescriptor> ready;
-            std::optional<Batch> inflight;
-            bool armed = false;
-            bool leaseHeld = false;
-            bool inputOwned = false;
-            std::uint32_t reserved = 0u;
+            std::vector<Lane> lanes;
             std::uint32_t completedChunks = 0u;
             std::uint32_t eventEnqueues = 0u;
         };
@@ -849,14 +928,14 @@ namespace graphFlow
                 "graphFlow: transform batch output reserve");
         }
 
-        /** Enqueue the node completion event, with an optional injected failure for tests. */
-        void enqueueEvent(Node& node)
+        /** Enqueue one lane's completion event, with an optional injected failure for tests. */
+        void enqueueEvent(Node& node, Lane& lane)
         {
             ++node.eventEnqueues;
             if(m_failureHook)
                 m_failureHook(FailurePoint::eventEnqueue, node.id, node.eventEnqueues);
-            node.queue.enqueue(node.event);
-            node.armed = true;
+            node.queue.enqueue(lane.event);
+            lane.armed = true;
         }
 
         /** True when `handle` is one of the batch's input chunks. */
@@ -891,13 +970,16 @@ namespace graphFlow
                 if(depth != 0u)
                     ++readyNodes;
                 maxReadyDepth = std::max(maxReadyDepth, depth);
-                if(node.inflight)
+                for(Lane const& lane : node.lanes)
                 {
-                    ++inflightBatches;
-                    inflightChunks += static_cast<std::uint32_t>(node.inflight->chunks.size());
+                    if(lane.inflight)
+                    {
+                        ++inflightBatches;
+                        inflightChunks += static_cast<std::uint32_t>(lane.inflight->chunks.size());
+                    }
+                    if(lane.armed)
+                        ++eventSlots;
                 }
-                if(node.armed)
-                    ++eventSlots;
             }
 
             stats.peakReadyChunks = std::max(stats.peakReadyChunks, readyChunks);
@@ -920,13 +1002,16 @@ namespace graphFlow
                 if(depth != 0u)
                     ++snapshot.readyNodes;
                 snapshot.readyDepth = std::max(snapshot.readyDepth, depth);
-                if(node.inflight)
+                for(Lane const& lane : node.lanes)
                 {
-                    ++snapshot.inflightBatches;
-                    snapshot.inflightChunks += static_cast<std::uint32_t>(node.inflight->chunks.size());
+                    if(lane.inflight)
+                    {
+                        ++snapshot.inflightBatches;
+                        snapshot.inflightChunks += static_cast<std::uint32_t>(lane.inflight->chunks.size());
+                    }
+                    if(lane.armed)
+                        ++snapshot.eventSlotsInUse;
                 }
-                if(node.armed)
-                    ++snapshot.eventSlotsInUse;
             }
 
             snapshot.reservedChunks = m_reservedTotal;
@@ -962,8 +1047,11 @@ namespace graphFlow
                 if(!first)
                     message << "; ";
                 first = false;
+                std::uint32_t laneInflight = 0u;
+                for(Lane const& lane : nodePtr->lanes)
+                    laneInflight += lane.inflight ? 1u : 0u;
                 message << "node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
-                        << " inflight=" << (nodePtr->inflight ? 1 : 0);
+                        << " inflight=" << laneInflight;
             }
             return message.str();
         }
@@ -993,40 +1081,47 @@ namespace graphFlow
             for(auto& nodePtr : m_nodes)
             {
                 Node& node = *nodePtr;
-                if(node.inflight)
+                bool anyInflight = false;
+                for(Lane& lane : node.lanes)
                 {
-                    if(node.armed)
-                        node.queue.waitFor(node.event);
-                    else
-                        alpaka::onHost::wait(node.queue);
-                    node.armed = false;
+                    anyInflight = anyInflight || lane.inflight.has_value();
+                    if(lane.inflight && lane.armed)
+                        node.queue.waitFor(lane.event);
+                }
+                if(anyInflight)
+                    alpaka::onHost::wait(node.queue);
+                for(Lane& lane : node.lanes)
+                {
+                    if(!lane.inflight)
+                        continue;
+                    lane.armed = false;
                     // A batch that acquired output chunks but never published them (for example
                     // when the completion-event enqueue failed) must hand them back exactly once.
-                    if(node.hooks.abort)
+                    if(lane.hooks.abort)
                     {
                         try
                         {
-                            node.hooks.abort();
+                            lane.hooks.abort();
                         }
                         catch(...)
                         {
                             // A release failure must not hide the original batch error.
                         }
                     }
-                    if(node.leaseHeld)
+                    if(lane.leaseHeld)
                     {
-                        for(ChunkDescriptor const& input : node.inflight->chunks)
+                        for(ChunkDescriptor const& input : lane.inflight->chunks)
                             m_storage.releaseLease(input.handle);
-                        node.leaseHeld = false;
+                        lane.leaseHeld = false;
                     }
-                    if(node.inputOwned)
+                    if(lane.inputOwned)
                     {
-                        for(ChunkDescriptor const& input : node.inflight->chunks)
+                        for(ChunkDescriptor const& input : lane.inflight->chunks)
                             m_storage.release(input.handle);
-                        node.inputOwned = false;
+                        lane.inputOwned = false;
                     }
-                    node.inflight.reset();
-                    node.reserved = 0u;
+                    lane.inflight.reset();
+                    lane.reserved = 0u;
                 }
                 for(ChunkDescriptor const& chunk : node.ready)
                     m_storage.release(chunk.handle);
