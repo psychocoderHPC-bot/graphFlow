@@ -3,12 +3,62 @@
 
 # Benchmarks
 
-This page contains the historical pre-T5/T7 baseline and the integrated T13
-result. The integrated numbers are the recorded T13 evidence for main
-`68124ad3875e42cbe09247f64bd218a7ac8d58fc`, supplied from the run on that
-revision. They are not a fresh run in this worktree, and every number on this
-page states its provenance. The full matrix, budget rejections, and raw-row
-provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md) (PR #8).
+This page contains the P07 exclusive measurement on main `64d4a1e`, the
+historical pre-T5/T7 baseline, and the integrated T13 result. Every number
+states its provenance. The full matrix, budget rejections, copy reference,
+kernel matrix, and raw-row provenance live in
+[tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
+
+## P07 measurement matrix and frozen target (main `64d4a1e`)
+
+Provenance: main `64d4a1e11949886c7147c082cc386edde4bdb01f`, one exclusive
+`gpu-v100-int` allocation on `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
+driver 570.158.01, CUDA 12.6.85, `sm_70`, Release, three repetitions per case.
+The tables report median and interquartile range across the three runs. No H100
+was used.
+
+Q sweep at `N=100,000,000`, `C=8192`, `P=16384`, seed 42:
+
+| Q | median wall s | IQR wall s | median particles/s | IQR particles/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 191.990 | 2.315 | 5.209e5 | 6.18e3 |
+| 2 | 8.710 | 0.535 | 1.148e7 | 6.59e5 |
+| 8 | 7.690 | 0.045 | 1.300e7 | 7.56e4 |
+
+Every run printed 260 histogram rows summing to exactly `100,000,000`; the
+sorted rows are identical across Q, C, P, and repetitions and hash to
+`21ab0aeb9ec72d380af2ce6e9631f8fa7b9111d24ff7831f272aa9f6a7be9dab`.
+
+C-wave sweep at `P=8192`, Q=8 (1, 2, and 4 resident `C`-chunks):
+
+| C | P/C | median wall s | IQR wall s | median particles/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 2048 | 4 | 11.010 | 0.045 | 9.083e6 |
+| 4096 | 2 | 11.330 | 0.025 | 8.826e6 |
+| 8192 | 1 | 22.980 | 0.090 | 4.352e6 |
+
+The frozen target is `13,000,000` particles/s at `N=1e8`, `C=8192`, `P=16384`,
+Q=8, with a 10 percent tolerance (floor `11,700,000`). The measured median is
+`13,003,901` particles/s, so the gate passes. The nominal value is rounded from
+the earlier exclusive `rosi_v100` Q=8 run at `f3ef355` (7.676 s, 1.303e7
+particles/s). `tools/bench_matrix.sh --target-pps ...` enforces the gate and
+writes `target.md`; no CI job invokes it yet.
+
+Sustained copy-bandwidth reference on the same device and payload
+(3,221,225,472 B, 10 device-to-device copies): `409.733` GB/s, 7.862 ms per
+copy. This is a D2D copy-engine reference, not a scatter-bandwidth claim.
+
+Scatter mode, dense versus hash, and the balanced/one-hot/skewed/sparse
+distributions are not selectable through the example CLI at this revision.
+Their end-to-end throughput is therefore blocked. The committed integration
+cases pass: direct versus shared-staging scatter across all four distributions
+(1.360 s), dense/hash agreement at overlapping bins (1.042 s), 2*T versus 4*T
+(1.447 s), and sparse 4096/65536 bins (0.729 s). The durations cover whole
+Catch2 cases, not isolated kernels, so they are not throughput numbers. The
+committed CPU kernel timings remain the P03 measurement on fwk394: shared
+staging versus direct 5.48 vs 15.85 ms (balanced), 2.13 vs 48.31 ms (one-hot),
+2.21 vs 37.25 ms (skewed), 4.19 vs 6.62 ms (sparse), and dense 4.06 ms versus
+5.11/4.90 ms for 2*T/4*T at B=1024. P07 did not re-measure those.
 
 ## Historical environment
 
@@ -169,6 +219,9 @@ H100 claim is made.
   `b972eaa`, but no HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
-- There is no sustained copy-bandwidth reference for the same device and data
-  size yet.
-- No CI job runs these benchmarks.
+- The P07 section records a sustained D2D copy reference (`409.733` GB/s at
+  3,221,225,472 B) on the V100. It is a context number, not a scatter
+  bandwidth. Isolated kernel timings for scatter, dense/hash, and the
+  distributions remain unavailable through the example CLI.
+- No CI job runs these benchmarks. The frozen target is implemented in
+  `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.
