@@ -14,7 +14,7 @@ Current state at the sm_70 ICE workaround
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
   Current `rosi_v100` results at the sm_70 ICE workaround: CPU CTest
-  **193/193 passed** (OMP=ON Release, pedantic) and CUDA CTest **245/245
+  **195/195 passed** (OMP=ON Release, pedantic) and CUDA CTest **247/247
   passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
   concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
   the RNG main is preserved.
@@ -37,7 +37,7 @@ Current state at the sm_70 ICE workaround
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
-  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 193/193 with
+  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 195/195 with
   OMP=ON at the sm_70 ICE workaround. The previous multi-region pathology is not observed on `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
@@ -55,8 +55,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 193/193 and the V100 `sm_70` CUDA CTest
-  passes 245/245 with the explicit concept-parameter workaround. Open
+  `rosi_v100` CPU CTest passes 195/195 and the V100 `sm_70` CUDA CTest
+  passes 247/247 with the explicit concept-parameter workaround. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -146,7 +146,7 @@ resource or decision is missing.
   removed; floating-point draws use `UniformReal` and integer decisions use the
   engine output. The independent scalar oracles use the same mapping without
   the production header. Fixed-seed particle and photon baselines changed once
-  at this commit. V100 CUDA `sm_70` passes 245/245 with the explicit
+  at this commit. V100 CUDA `sm_70` passes 247/247 with the explicit
   concept-parameter workaround on the RNG main.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
@@ -282,7 +282,7 @@ resource or decision is missing.
   stale, so no final H100 claim is made.
 - **CPU OMP backend:** CPU execution with the OpenMP backend works on
   `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the CPU CTest
-  passes 193/193 with OMP=ON Release.
+  passes 195/195 with OMP=ON Release.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
   `P=65536` (about 12.9 GB). Decide between a slot-based pool, a smaller default
   `P`, or a memory-budget cap.
@@ -312,8 +312,8 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
-  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 193/193
-  (OMP=ON) and the CUDA V100 `sm_70` CTest passes 245/245 with the explicit
+  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 195/195
+  (OMP=ON) and the CUDA V100 `sm_70` CTest passes 247/247 with the explicit
   concept-parameter workaround.
 - [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
   HIP remains blocked by the missing AMD runtime device.
@@ -321,7 +321,7 @@ These are not missing work; the plan excludes them from v1:
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.
 - [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
-  histograms. The `rosi_v100` CPU CTest passes 193/193; the `rosi_v100`
+  histograms. The `rosi_v100` CPU CTest passes 195/195; the `rosi_v100`
   33-invocation baseline comparison is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
   `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times

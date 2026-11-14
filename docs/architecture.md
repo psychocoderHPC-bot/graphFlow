@@ -238,9 +238,10 @@ photon `PhotonDebug.hpp` helper. A build with
 `-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` validates a finite position and
 direction, `z` inside `[0, L]`, a finite non-negative proposal distance, and
 proposal/event agreement. A failed check reports `StatusCode::invalid`, so the
-host fails the batch before it publishes output. The option is off by default;
-release builds compile the helper to a constant `true` and keep no per-event
-state branch.
+host fails the batch before it publishes output. The option defaults to `ON` for
+`CMAKE_BUILD_TYPE=Debug` and `OFF` for `Release` and `RelWithDebInfo`; pass
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` to override. Release builds compile
+the helper to a constant `true` and keep no per-event state branch.
 
 The release path keeps the physics errors: a vacuum ray with no reachable face,
 an invalid proposal or classifier bin, counter and weight overflow, and

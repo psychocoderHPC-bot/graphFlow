@@ -36,10 +36,19 @@ option(
     OFF
 )
 option(GRAPHFLOW_ENABLE_HIP "Compile the HIP backend (sets alpaka_DEP_HIP=ON)" OFF)
+# Default the debug validation to the build type: ON for CMAKE_BUILD_TYPE=Debug
+# and OFF otherwise. An explicit
+# -DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF overrides the default because
+# option() keeps an existing cache entry.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_graphflow_debug_validation_default ON)
+else()
+    set(_graphflow_debug_validation_default OFF)
+endif()
 option(
     GRAPHFLOW_ENABLE_DEBUG_VALIDATION
     "Compile the debug-only per-event payload validation"
-    OFF
+    ${_graphflow_debug_validation_default}
 )
 option(GRAPHFLOW_ENABLE_OPENMP "Enable the OpenMP executor" OFF)
 option(GRAPHFLOW_BUILD_TESTS "Build the Catch2 test suite" ON)

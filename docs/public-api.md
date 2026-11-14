@@ -78,7 +78,9 @@ Release kernels do not repeat per-event payload checks. Configure a build with
 `-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` to compile the checks in
 `graphFlow/flow/Debug.hpp` and `PhotonDebug.hpp`; a failed debug check reports
 `StatusCode::invalid` through the same channel and fails the batch before it
-publishes output. The option is off by default. It never replaces a physics
+publishes output. The option defaults to `ON` for `CMAKE_BUILD_TYPE=Debug` and
+`OFF` for `Release` and `RelWithDebInfo`, and an explicit
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` overrides it. It never replaces a physics
 error: a vacuum ray with no reachable face, an invalid proposal or bin, a
 counter or weight overflow, and duplicate terminal delivery stay release-path
 failures.
