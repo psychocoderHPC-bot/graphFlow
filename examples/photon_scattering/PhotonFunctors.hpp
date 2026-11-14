@@ -167,9 +167,9 @@ namespace graphFlow::photon
      */
     ALPAKA_FN_ACC inline Vec3 isotropicDirection(rng::Engine& engine)
     {
+        constexpr double pi = alpaka::math::constants::pi;
         double const mu = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(engine) -1.0;
-        double const phi
-            = 2.0 * 3.141592653589793238462643383279502884 * alpaka::rand::distribution::UniformReal<double>{}(engine);
+        double const phi = 2.0 * pi * alpaka::rand::distribution::UniformReal<double>{}(engine);
         double const transverse = alpaka::math::sqrt(alpaka::math::max(0.0, 1.0 - mu * mu));
         return Vec3{transverse * alpaka::math::cos(phi), transverse * alpaka::math::sin(phi), mu};
     }
