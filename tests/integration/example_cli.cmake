@@ -15,6 +15,10 @@ foreach(required BINARY BACKEND PARTICLES CHUNK_SIZE SEED MAX_VISITS)
     endif()
 endforeach()
 
+if(NOT DEFINED TIMEOUT)
+    set(TIMEOUT 240)
+endif()
+
 if(NOT EXISTS "${BINARY}")
     message(
         FATAL_ERROR
@@ -42,7 +46,7 @@ execute_process(
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_stdout
     ERROR_VARIABLE run_stderr
-    TIMEOUT 240
+    TIMEOUT ${TIMEOUT}
 )
 
 if(NOT "${run_result}" STREQUAL "0")

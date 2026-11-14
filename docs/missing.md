@@ -11,20 +11,28 @@ HIP runtime validation is measured on `b972eaa3bd778b81f2dca505d3662df710792bd9`
 (HIP runtime merge, PR #35), recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`; the earlier 238/238 at
 `58bb514def3f3c956126ab7c34d0de74a45f679e` is historical. The validated code
-main is `2ad7d86ceaebed7da11c352ebee12e9525c2b0d2`. The `rosi_v100` CPU/CUDA
-counts below are the final main values:
+main is `2ad7d86ceaebed7da11c352ebee12e9525c2b0d2`. The source-admission tests
+and the N=1e6 CPU smoke are on `gf/p1-admission-smoke`
+(`12871ad19ac1eea9d4bac5c15db9f59085f89a46`), not yet merged. The `rosi_v100`
+CPU/CUDA counts at `2ad7d86` below are the final validated-main values; they
+are historical for this branch, whose current CPU CTest is 205/205 (202 plus
+the two admission cases plus the one N=1e6 smoke):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
-  Final `rosi_v100` results: CPU CTest
+  `rosi_v100` results at validated code main `2ad7d86`: CPU CTest
   **202/202 passed** (OMP=ON Release, pedantic) and CUDA CTest **254/254
-  passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
+  passed** on V100 `sm_70` (CUDA 12.6.85 Release); the 202/202 count is the
+  historical pre-P1 suite and no longer the current total. The current CPU
+  CTest is **205/205 passed** (202 plus two source-admission cases plus one
+  N=1e6 smoke). The explicit
    concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
    the RNG main is preserved. The `Debug` build was not re-run on `rosi_v100`
    after the seven hash cases: the measured `Debug` totals are the pre-hash
    195/195 CPU and 247/247 CUDA, and 202/202 and 254/254 are the expected
-   (not-yet-re-run) `Debug` totals; hosted CI measures the `Debug` CPU suite at
-   202/202.
+   (not-yet-re-run) `Debug` totals for the `2ad7d86` suite; hosted CI measures
+   the `Debug` CPU suite at 205/205 on this branch (the 202/202 figure is
+   historical for it).
    CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The
   previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
   `sm_80`, are **historical validation on a shared host** (`hal` reports
@@ -47,8 +55,10 @@ counts below are the final main values:
   because those runners have no AMD GPU; the `gfx90a` compile-only gate is
   historical.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
-  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 202/202 with
-  OMP=ON. The previous multi-region pathology is not observed on `rosi_v100`.
+  `GOMP_SPINCOUNT=0`) works with no hangs; the CPU CTest suite passes 205/205
+  with OMP=ON on this branch (historical: 202/202 at validated main
+  `2ad7d86`). The previous multi-region pathology is not observed on
+  `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
   no final H100 claim is made. H100 remains blocked/preliminary.
@@ -65,7 +75,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 202/202 (Release) and the V100 `sm_70` CUDA CTest
+  `rosi_v100` CPU CTest passes 202/202 (Release) at validated main `2ad7d86`
+  (historical; 205/205 on this branch) and the V100 `sm_70` CUDA CTest
   passes 254/254 (Release) with the explicit concept-parameter workaround. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
@@ -104,9 +115,9 @@ resource or decision is missing.
   chunks. Implement a slot-based pool or a documented smaller `P`/memory budget
   without breaking the fragmentation bound or progress guarantee. Acceptance:
   peak memory falls while `N >> P` still completes and the histogram is exact.
-- [ ] **P1: chunk-fill policy tests.** Pin `min(C, P, remaining)` admission
-  for `P<C`, `P==0`, the tail, and `N>>P`. Add a regression test that would fail
-  if one-particle source chunks return.
+- [x] **P1: chunk-fill policy tests.** Done: `tests/integration/test_admission.cpp`
+  pins `min(C, P, remaining)` for `P<C`, `P==C`, `P==0`, the tail, and `N>>P`,
+  and rejects one-particle source chunks with a mutation-style assertion.
 - [ ] **P1: scheduler state and stall diagnostics.** The stall timeout and state
   dump exist; expose the remaining counters (ready depth per node, in-flight
   depth, reserved credits, event-pool use, source budget) in the example output
@@ -250,8 +261,11 @@ resource or decision is missing.
 - [ ] **P1: copy-bandwidth reference.** Measure a sustained copy-bandwidth
   reference on the same device and data size and report it next to the scatter
   bandwidth.
-- [ ] **P1: `N=1e6` CI smoke.** Run `N=1e6` on CPU and CUDA in CI (and HIP when
-  available) with a finite timeout; keep `N=1e8` as the manual acceptance run.
+- [x] **P1: `N=1e6` CI smoke.** Done for the hosted CPU job: the fixed-seed
+  `example.particle_feedback.smoke.N1000000` CTest case runs in the ordinary
+  CTest job with a finite timeout and an exact histogram-sum check. Hosted CUDA
+  and HIP stay compile-only, so their `N=1e6` runtime smoke remains a manual
+  `rosi_v100`/`hal` check. `N=1e8` stays the manual acceptance run.
 - [ ] **P1: HAL acceptance record.** Record exact commit, alpaka pin, compiler,
   CUDA/ROCm versions, driver, GPU, commands, test counts, JUnit, and the
   no-skipped-test assertion. Keep raw logs outside the repository and link their
@@ -286,12 +300,15 @@ resource or decision is missing.
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
   is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
   TSAN run.
-- **CI status:** hosted CI is green on final main: CPU 202/202 (Release and
-  Debug) and ASAN+UBSAN Debug 202/202 on the CPU suite; `format` (clang-format
-  20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs are compile-only; no
-  self-hosted runner, SYCL job, or GitLab pipeline. TSAN stays a local/manual
-  check. The CUDA or HIP runtime gate still needs a device host with a known
-  sharing and label configuration; no self-hosted runner is provisioned.
+- **CI status:** on this branch the hosted CPU jobs run the 205-case CPU suite
+  (Release and Debug) and the `sanitizers` job runs ASAN+UBSAN over it, with no
+  skip: the N=1e6 smoke runs in the ordinary CTest job. Hosted CI was green on
+  final main with the historical 202-case suite (CPU 202/202 Release and Debug,
+  ASAN+UBSAN Debug 202/202); `format` (clang-format 20.1.8, T14b) and `reuse
+  lint` pass; CUDA and HIP jobs are compile-only; no self-hosted runner, SYCL
+  job, or GitLab pipeline. TSAN stays a local/manual check. The CUDA or HIP
+  runtime gate still needs a device host with a known sharing and label
+  configuration; no self-hosted runner is provisioned.
 - **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
   and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
   host with a known sharing and label configuration; no self-hosted runner is
@@ -303,7 +320,8 @@ resource or decision is missing.
   stale, so no final H100 claim is made.
 - **CPU OMP backend:** CPU execution with the OpenMP backend works on
   `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the CPU CTest
-   passes 202/202 with OMP=ON Release.
+   passes 205/205 with OMP=ON Release on this branch (202/202 was the
+  historical validated-main count).
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
   `P=65536` (about 12.9 GB). Decide between a slot-based pool, a smaller default
   `P`, or a memory-budget cap.
@@ -334,7 +352,8 @@ These are not missing work; the plan excludes them from v1:
 - [ ] All P0 items above are implemented and covered by tests.
 - [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
   XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 43 HIP cases, measured on
-  `b972eaa`. `rosi_v100` CPU CTest passes 202/202 (OMP=ON Release) and the
+  `b972eaa`. `rosi_v100` CPU CTest passes 205/205 (OMP=ON Release) on this
+  branch (202/202 historical at validated main `2ad7d86`) and the
   CUDA V100 `sm_70` CTest passes 254/254 (Release) with the explicit
   concept-parameter workaround.
 - [x] The example CLI is registered in CTest for the full CPU, CUDA, and HIP
@@ -342,9 +361,13 @@ These are not missing work; the plan excludes them from v1:
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.
-- [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
-   histograms. The `rosi_v100` CPU CTest passes 202/202; the `rosi_v100`
-  33-invocation baseline comparison is not yet recorded.
+- [x] `N=1e6` runs in CI: the fixed-seed `N=1e6` CPU smoke
+   (`example.particle_feedback.smoke.N1000000`) runs in the ordinary hosted CPU
+   CTest job with a finite timeout and exact histogram-sum check, no skip.
+   `N=1e8` still needs the validation-platform pass with exact histograms. The
+   `rosi_v100` CPU CTest passes 205/205 on this branch (202/202 historical at
+   validated main `2ad7d86`); the `rosi_v100` 33-invocation baseline comparison
+   is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
   `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times
   are recorded (see `docs/acceptance.md`), but no frozen regression target

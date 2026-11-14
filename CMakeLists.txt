@@ -209,6 +209,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_particle_feedback.cpp
         tests/integration/test_scripted_routing.cpp
         tests/integration/test_pressure.cpp
+        tests/integration/test_admission.cpp
         tests/integration/test_failure_paths.cpp
         tests/integration/test_batching.cpp
         tests/integration/test_framespec.cpp
@@ -273,6 +274,10 @@ if(GRAPHFLOW_BUILD_TESTS)
     set(GRAPHFLOW_EXAMPLE_CLI_SEED 42)
     set(GRAPHFLOW_EXAMPLE_CLI_MAX_VISITS 64)
     set(GRAPHFLOW_EXAMPLE_CLI_TIMEOUT 300)
+    # The N=1e6 smoke runs inside the ordinary CTest job. The driver gets a shorter
+    # internal timeout so a hang is reported by the script before CTest kills it.
+    set(GRAPHFLOW_EXAMPLE_SMOKE_TIMEOUT 960)
+    set(GRAPHFLOW_EXAMPLE_SMOKE_DRIVER_TIMEOUT 900)
 
     if(TARGET graphFlow_particle_feedback)
         set(
@@ -323,6 +328,30 @@ if(GRAPHFLOW_BUILD_TESTS)
             endif()
         endforeach()
     endforeach()
+
+    # Scale smoke: the fixed-seed N=1e6 CPU run must stay inside a finite timeout
+    # and produce an exact histogram. It runs unconditionally in the normal CTest
+    # job, so hosted CPU CI exercises it without a skip. CUDA and HIP remain
+    # compile-only there; their runtime smoke stays a manual rosi/hal check.
+    add_test(
+        NAME example.particle_feedback.smoke.N1000000
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DBINARY=${GRAPHFLOW_EXAMPLE_CLI_BINARY}"
+            "-DBACKEND=cpu"
+            "-DPARTICLES=1000000"
+            "-DCHUNK_SIZE=512"
+            "-DSEED=${GRAPHFLOW_EXAMPLE_CLI_SEED}"
+            "-DMAX_VISITS=${GRAPHFLOW_EXAMPLE_CLI_MAX_VISITS}"
+            "-DTIMEOUT=${GRAPHFLOW_EXAMPLE_SMOKE_DRIVER_TIMEOUT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_cli.cmake"
+    )
+    set_tests_properties(
+        example.particle_feedback.smoke.N1000000
+        PROPERTIES
+            TIMEOUT ${GRAPHFLOW_EXAMPLE_SMOKE_TIMEOUT}
+            LABELS "example;cli;cpu;smoke;long"
+    )
 
     add_test(
         NAME example.photon_public_api
