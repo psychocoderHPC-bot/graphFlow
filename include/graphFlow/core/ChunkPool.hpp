@@ -9,9 +9,11 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -27,6 +29,13 @@ namespace graphFlow
      * so the constructor rejects a pool whose total slot count exceeds `UINT32_MAX` instead of
      * letting `numChunks * C` wrap. This caps `numChunks` for large `C`; the limit is the supported
      * pool size, not a silent truncation.
+     *
+     * The payload allocation is additionally clamped to `payloadBudgetBytes`: a request for more
+     * chunks than the budget can hold is reduced to the largest fitting count, and `numChunks()`
+     * reports that physical count. This is the slot-based memory cap that replaces the former
+     * ~12.9 GB `C=8192`, `P=65536` pool with at most the 4 GiB documented default. The clamp is
+     * explicit, never a wrap: a request below the cap keeps its exact size, and a graph that
+     * exhausts the reduced pool still fails loudly in `acquire()`.
      */
     template<typename TDevice>
     class ChunkPool
@@ -37,22 +46,26 @@ namespace graphFlow
         using U32View = ALPAKA_TYPEOF(
             alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
-        ChunkPool(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
-            : m_numChunks{numChunks}
+        ChunkPool(
+            TDevice device,
+            std::uint32_t numChunks,
+            std::uint32_t chunkCapacity,
+            std::uint64_t payloadBudgetBytes = defaultPoolPayloadBudgetBytes)
+            : m_numChunks{checkedChunkCount(numChunks, chunkCapacity, payloadBudgetBytes)}
             , m_chunkCapacity{chunkCapacity}
-            , m_slots{checkedSlotCount(numChunks, chunkCapacity)}
+            , m_slots{checkedPoolSlotCount(m_numChunks, chunkCapacity, "graphFlow::ChunkPool")}
             , m_ids{alpaka::onHost::alloc<PoolIdValue>(device, alpaka::Vec{m_slots})}
             , m_properties{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_weights{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_visits{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_binIds{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
-            , m_generations(numChunks, 0u)
-            , m_leases(numChunks, 0u)
+            , m_generations(m_numChunks, 0u)
+            , m_leases(m_numChunks, 0u)
         {
-            m_free.reserve(numChunks);
+            m_free.reserve(m_numChunks);
             // Deterministic free list order; the last entry is handed out first.
-            for(std::uint32_t i = 0u; i < numChunks; ++i)
-                m_free.push_back(numChunks - 1u - i);
+            for(std::uint32_t i = 0u; i < m_numChunks; ++i)
+                m_free.push_back(m_numChunks - 1u - i);
         }
 
         [[nodiscard]] std::uint32_t numChunks() const
@@ -63,6 +76,12 @@ namespace graphFlow
         [[nodiscard]] std::uint32_t chunkCapacity() const
         {
             return m_chunkCapacity;
+        }
+
+        /** Payload bytes actually allocated by this pool after the budget clamp. */
+        [[nodiscard]] std::uint64_t payloadBytes() const
+        {
+            return m_slots * payloadBytesPerSlot;
         }
 
         [[nodiscard]] std::uint32_t freeCount() const
@@ -99,7 +118,8 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::ChunkPool: stale chunk handle"};
             if(m_leases[handle.index] != 0u)
                 throw std::logic_error{"graphFlow::ChunkPool: release while a reader lease is outstanding"};
-            ++m_generations[handle.index];
+            m_generations[handle.index]
+                = checkedCounterIncrement(m_generations[handle.index], "graphFlow::ChunkPool generation");
             m_free.push_back(handle.index);
         }
 
@@ -112,7 +132,7 @@ namespace graphFlow
         void acquireLease(ChunkHandle handle)
         {
             validateLive(handle);
-            ++m_leases[handle.index];
+            m_leases[handle.index] = checkedCounterIncrement(m_leases[handle.index], "graphFlow::ChunkPool lease");
             m_peakLeases = m_leases[handle.index] > m_peakLeases ? m_leases[handle.index] : m_peakLeases;
         }
 
@@ -149,9 +169,16 @@ namespace graphFlow
             return handle.index < m_numChunks && m_generations[handle.index] == handle.generation;
         }
 
-        /** Slot offset of the first particle of a chunk. */
+        /** Slot offset of the first particle of a chunk.
+         *
+         * The index is range-checked so a malformed handle cannot produce an out-of-bounds slot
+         * offset. The product is formed in 64 bits; the constructor already proved it fits the
+         * 32-bit slot index used by the kernels.
+         */
         [[nodiscard]] std::uint64_t base(ChunkHandle handle) const
         {
+            if(handle.index >= m_numChunks)
+                throw std::invalid_argument{"graphFlow::ChunkPool: chunk index out of range"};
             return static_cast<std::uint64_t>(handle.index) * m_chunkCapacity;
         }
 
@@ -219,18 +246,25 @@ namespace graphFlow
         }
 
     private:
-        /** Validated total slot count; kernels address slots with a 32-bit index. */
-        [[nodiscard]] static std::uint64_t checkedSlotCount(std::uint32_t numChunks, std::uint32_t chunkCapacity)
+        /** Chunk count after clamping the payload to `payloadBudgetBytes`.
+         *
+         * The clamp keeps the requested count when it fits, so existing small pools and their
+         * free-list order stay bit-identical. A request above the ceiling is reduced instead of
+         * being rejected, which is what lets the documented large-N case run in bounded memory.
+         */
+        [[nodiscard]] static std::uint32_t checkedChunkCount(
+            std::uint32_t numChunks,
+            std::uint32_t chunkCapacity,
+            std::uint64_t payloadBudgetBytes)
         {
             if(numChunks == 0u)
                 throw std::invalid_argument{"graphFlow::ChunkPool: numChunks must be non-zero"};
             if(chunkCapacity == 0u)
                 throw std::invalid_argument{"graphFlow::ChunkPool: chunkCapacity must be non-zero"};
-            std::uint64_t const slots = static_cast<std::uint64_t>(numChunks) * chunkCapacity;
-            if(slots > std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error{
-                    "graphFlow::ChunkPool: numChunks * chunkCapacity exceeds the 32-bit slot index"};
-            return slots;
+            std::uint64_t const maxChunks = maxPayloadChunks(payloadBudgetBytes, chunkCapacity, payloadBytesPerSlot);
+            if(maxChunks == 0u)
+                throw std::invalid_argument{"graphFlow::ChunkPool: payload budget cannot hold one chunk"};
+            return static_cast<std::uint32_t>(std::min<std::uint64_t>(numChunks, maxChunks));
         }
 
         std::uint32_t m_numChunks;
