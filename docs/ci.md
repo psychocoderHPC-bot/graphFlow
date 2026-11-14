@@ -37,10 +37,10 @@ oneAPI jobs do the same inside their container; they install `git` before
 
 | Target | CTest cases | Where the result comes from |
 | --- | ---: | --- |
-| CPU, Release and Debug | 207 on `gf/stall-diagnostics` (202 at `2ad7d86`); 207 = 202 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics | the hosted `cpu` jobs |
-| CPU, ASAN+UBSAN Debug | 207 on `gf/stall-diagnostics` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
-| CUDA `sm_70` | 254 at `2ad7d86` (historical); 256 adds the two `gf/stall-diagnostics` stall diagnostics cases, not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only |
-| HIP `gfx1100` | 245 at `b972eaa` (historical); 247 adds the two `gf/stall-diagnostics` stall diagnostics cases, not re-run on `hal` | `hal` device run on `b972eaa`; the hosted job compiles only |
+| CPU, Release and Debug | 210 on `gf/cross-backend-equality` (202 at `2ad7d86`); 210 = 202 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality | the hosted `cpu` jobs |
+| CPU, ASAN+UBSAN Debug | 210 on `gf/cross-backend-equality` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
+| CUDA `sm_70` | 254 at `2ad7d86` (historical); 259 = 256 + 3 cross-backend equality cases (256 adds the two `gf/stall-diagnostics` stall diagnostics cases), not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only |
+| HIP `gfx1100` | 245 at `b972eaa` (historical); 250 = 247 + 3 cross-backend equality cases (247 adds the two `gf/stall-diagnostics` stall diagnostics cases), not re-run on `hal` | `hal` device run on `b972eaa`; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
@@ -56,8 +56,17 @@ hosted CPU CI runs them without a skip; there is no label or configuration that
 excludes them. The two stall-diagnostics cases added on `gf/stall-diagnostics`
 carry the `[stall]`/`[stats]` and `[diagnostics-check]` tags, which the default
 suite does not exclude (only the opt-in photon `[diagnostics]` tag is excluded),
-so they run in the same ordinary CPU CTest job without a skip. CUDA and HIP
-remain compile-only there; their runtime smoke stays a manual
+so they run in the same ordinary CPU CTest job without a skip. The three
+cross-backend equality cases added on `gf/cross-backend-equality`
+(`example.particle_feedback.cross_backend.Q1`, `.Q2`, `.Q8`,
+`N=1e6`, `C=128`, `P=1024`, seed 42) carry the
+`example;cli;cross-backend;long;cpu` labels (plus `cuda`/`hip` only when those
+backends are compiled), which the default suite does not exclude, so they run
+in the same ordinary CPU CTest job without a skip; CUDA and HIP cases register
+only when their backend is compiled, and a compiled backend without a usable
+device fails the case instead of being skipped, so the CPU-only hosted build
+still exercises the CPU path and a mismatch fails the job. CUDA and HIP
+runtime validation of the equality cases stays a manual
 `rosi_v100`/`hal` check.
 
 The two stall-diagnostics cases cover the P1 stall work on CPU: a forced
@@ -72,10 +81,13 @@ T14b re-ran all three suites on the formatted tree: CPU Release 202/202 on
 `rosi_v100` (the 202-case historical suite; 205/205 includes the two
 source-admission cases and the N=1e6 smoke added on
 `gf/p1-admission-smoke`; 207/207 adds the two stall diagnostics cases on
-`gf/stall-diagnostics`), CUDA `sm_70` 254/254 on `rosi_v100` (256 on
-`gf/stall-diagnostics`, not re-run), and HIP `gfx1100` 245/245 on `hal` (247 on
-`gf/stall-diagnostics`, not re-run). The format sweep changed whitespace, line
-breaks, include and `using` order, and configured numeric separators only.
+`gf/stall-diagnostics`; 210/210 adds the three cross-backend equality cases on
+`gf/cross-backend-equality`, measured on that branch, not re-run on
+`rosi_v100`), CUDA `sm_70` 254/254 on `rosi_v100` (256 on
+`gf/stall-diagnostics`, 259 on `gf/cross-backend-equality`, not re-run), and
+HIP `gfx1100` 245/245 on `hal` (247 on `gf/stall-diagnostics`, 250 on
+`gf/cross-backend-equality`, not re-run). The format sweep changed whitespace,
+line breaks, include and `using` order, and configured numeric separators only.
 
 ## Pins
 
@@ -248,9 +260,12 @@ not change program behavior.
 
 - Self-hosted runners or labels (`fwk394`, `a30`, `rocm`).
 - CUDA or HIP execution; both jobs are compile-only.
-- TSAN on a self-hosted host.
+- TSAN on a self-hosted host: blocked by the hal `unexpected memory mapping`
+  failure and `rosi_v100` being unreachable; the hosted runner has no known-good
+  mapping configuration.
 - GitLab CI.
-- H100 or any other specific GPU target.
+- H100 or any other specific GPU target: `rosi_v100` is unreachable and no
+  final H100 run has been recorded, so no H100 performance claim is made.
 
 ## Local reproduction
 
@@ -261,12 +276,15 @@ image and the extra `git` install before checkout.
 
 ## Status
 
-On `gf/stall-diagnostics` the hosted jobs pass `cpu (Release)`, `cpu (Debug)`,
-`sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`, `format`, and
-`reuse`. Each CPU job runs 207 CTest cases (Release and Debug), 202 at
-`2ad7d86` plus two source-admission cases, one N=1e6 smoke, and two stall
-diagnostics cases; the `sanitizers` job runs ASAN+UBSAN over the same CPU
-suite, and the N=1e6 smoke and the two stall diagnostics cases run in the
+On `gf/cross-backend-equality` the hosted jobs pass `cpu (Release)`,
+`cpu (Debug)`, `sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`,
+`format`, and
+`reuse`. Each CPU job runs 210 CTest cases (Release and Debug), 202 at
+`2ad7d86` plus two source-admission cases, one N=1e6 smoke, two stall
+diagnostics cases, and the three cross-backend equality cases; the
+`sanitizers` job runs ASAN+UBSAN over the same CPU
+suite, and the N=1e6 smoke, the two stall diagnostics cases, and the three
+cross-backend equality cases run in the
 ordinary CTest job without a skip. The `format` job
 enforces the T14b
 sweep with clang-format 20.1.8. The `sm_70` workaround clears the nvcc internal
