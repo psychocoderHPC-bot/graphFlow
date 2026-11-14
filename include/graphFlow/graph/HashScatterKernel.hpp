@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "graphFlow/flow/Debug.hpp"
 #include "graphFlow/graph/BinTable.hpp"
 #include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graph/TileDescriptor.hpp"
@@ -70,6 +71,9 @@ namespace graphFlow
                 acc,
                 CVec<std::uint32_t, TBinTable::entries>{});
             auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
+            // Debug-only write counter; `if constexpr` guards every read, atomic and barrier, so
+            // release carries no counter instruction and no extra block synchronization.
+            auto& written = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
 
             std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
             for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
@@ -86,6 +90,8 @@ namespace graphFlow
                 {
                     alpaka::unused(one);
                     tableFull = 0u;
+                    if constexpr(graphFlow::debug::checksEnabled)
+                        written = 0u;
                 }
                 onAcc::syncBlockThreads(acc);
 
@@ -156,6 +162,21 @@ namespace graphFlow
                     propertiesOut[slotOut] = particle.property;
                     weightsOut[slotOut] = particle.weight;
                     visitsOut[slotOut] = particle.visit;
+
+                    if constexpr(graphFlow::debug::checksEnabled)
+                        onAcc::atomicAdd(acc, &written, std::uint32_t{1u}, onAcc::scope::block);
+                }
+
+                if constexpr(graphFlow::debug::checksEnabled)
+                {
+                    onAcc::syncBlockThreads(acc);
+                    for(auto [one] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{1u}))
+                    {
+                        alpaka::unused(one);
+                        // Every input particle of the tile must produce exactly one output write.
+                        if(written != count)
+                            onAcc::atomicExch(acc, &counts[maxBins], std::uint32_t{1u}, onAcc::scope::device);
+                    }
                 }
             }
         }

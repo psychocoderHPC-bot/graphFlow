@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -218,6 +219,70 @@ namespace
         return host;
     }
 
+    struct BalancedTag
+    {
+    };
+
+    struct OneHotTag
+    {
+    };
+
+    struct SkewedTag
+    {
+    };
+
+    /** Distribution and scatter-mode policy for the direct/staged comparison.
+     *
+     * The mode is an optional policy member: `ScatterKernel` reads it through `ScatterModeOf`.
+     * The sink records `bin` in the weight, so the two kernels must produce byte-identical
+     * id-indexed vectors for the same distribution.
+     */
+    template<typename TTag, std::uint32_t T_Bins, graphFlow::ScatterMode TMode>
+    struct DistributionPolicy
+    {
+        static constexpr std::uint32_t maxBins = T_Bins;
+        static constexpr graphFlow::ScatterMode scatterMode = TMode;
+
+        ALPAKA_FN_ACC std::uint32_t classify(
+            std::uint64_t id,
+            [[maybe_unused]] std::uint32_t property,
+            [[maybe_unused]] std::uint32_t weight,
+            [[maybe_unused]] std::uint32_t visit) const
+        {
+            if constexpr(std::is_same_v<TTag, BalancedTag>)
+                return static_cast<std::uint32_t>(id % maxBins);
+            else if constexpr(std::is_same_v<TTag, OneHotTag>)
+                return 0u;
+            else
+                return id % 8u == 0u ? static_cast<std::uint32_t>(id % maxBins) : 0u;
+        }
+
+        template<typename TAcc>
+        ALPAKA_FN_ACC void apply(
+            [[maybe_unused]] TAcc const& acc,
+            std::uint32_t bin,
+            graphFlow::Particle& particle,
+            [[maybe_unused]] std::uint32_t* status,
+            [[maybe_unused]] std::uint32_t* capped) const
+        {
+            particle.weight = bin;
+        }
+    };
+
+    template<typename TDevice, typename TTag, std::uint32_t T_Bins>
+    void checkScatterModesAgree(TDevice device, std::uint64_t particles, std::uint32_t capacity)
+    {
+        using Device = TDevice;
+        using SharedPolicy = DistributionPolicy<TTag, T_Bins, graphFlow::ScatterMode::SharedStaging>;
+        using DirectPolicy = DistributionPolicy<TTag, T_Bins, graphFlow::ScatterMode::Direct>;
+
+        std::vector<std::uint32_t> const shared
+            = runPipeline<Device, SharedPolicy, graphFlow::DenseBinTable>(device, particles, capacity, SharedPolicy{});
+        std::vector<std::uint32_t> const direct
+            = runPipeline<Device, DirectPolicy, graphFlow::DenseBinTable>(device, particles, capacity, DirectPolicy{});
+        CHECK(direct == shared);
+    }
+
     template<std::uint32_t T_Bins>
     std::vector<std::uint32_t> expectedBins(std::uint64_t particles)
     {
@@ -237,6 +302,16 @@ TEST_CASE("hash bin table is a compile-time multiple of the tile", "[bintable][h
     CHECK(graphFlow::HashBinTable<128u, 4u>::entries == 512u);
     CHECK(graphFlow::HashBinTable<100u>::requestedEntries == 200u);
     CHECK(graphFlow::HashBinTable<100u>::entries == 256u);
+}
+
+TEST_CASE("scatter mode defaults to shared staging", "[integration][hash][scatter]")
+{
+    // A policy without the optional member keeps the current default; an explicit member selects
+    // the direct variant. This pins the no-public-default-change guarantee.
+    CHECK(graphFlow::detail::ScatterModeOf<ModPolicy<16u>>::value == graphFlow::ScatterMode::SharedStaging);
+    CHECK(
+        graphFlow::detail::ScatterModeOf<DistributionPolicy<BalancedTag, 64u, graphFlow::ScatterMode::Direct>>::value
+        == graphFlow::ScatterMode::Direct);
 }
 
 TEST_CASE("hash and dense pipelines agree at overlapping bin counts", "[integration][hash]")
@@ -282,6 +357,68 @@ TEST_CASE("hash and dense pipelines agree at overlapping bin counts", "[integrat
             CHECK(hash == expectedBins<1024u>(particles));
         }
     }
+}
+
+TEST_CASE("direct and shared-staging scatter agree on all distributions", "[integration][hash][scatter]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    constexpr std::uint64_t particles = 2000u;
+    constexpr std::uint32_t capacity = 17u;
+    // Balanced, one-hot, and skewed over 64 bins; sparse uses 1024 bins with ~2 particles each.
+    checkScatterModesAgree<Device, BalancedTag, 64u>(device, particles, capacity);
+    checkScatterModesAgree<Device, OneHotTag, 64u>(device, particles, capacity);
+    checkScatterModesAgree<Device, SkewedTag, 64u>(device, particles, capacity);
+    checkScatterModesAgree<Device, BalancedTag, 1024u>(device, particles, capacity);
+}
+
+TEST_CASE("2*T and 4*T hash tables agree with dense at overlapping bins", "[integration][hash]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+    constexpr std::uint64_t particles = 2000u;
+    constexpr std::uint32_t capacity = 31u;
+
+    // T=128: 2*T=256 and 4*T=512 entries. Both must agree with the dense table at B=2*T and
+    // B=4*T, so the capacity measurement does not change the result.
+    std::vector<std::uint32_t> const dense256 = runPipeline<Device, ModPolicy<256u>, graphFlow::DenseBinTable>(
+        device,
+        particles,
+        capacity,
+        ModPolicy<256u>{});
+    std::vector<std::uint32_t> const hash2T = runPipeline<Device, ModPolicy<256u>, graphFlow::HashBinTable<128u, 2u>>(
+        device,
+        particles,
+        capacity,
+        ModPolicy<256u>{});
+    std::vector<std::uint32_t> const hash4T = runPipeline<Device, ModPolicy<256u>, graphFlow::HashBinTable<128u, 4u>>(
+        device,
+        particles,
+        capacity,
+        ModPolicy<256u>{});
+    CHECK(hash2T == dense256);
+    CHECK(hash4T == dense256);
+
+    std::vector<std::uint32_t> const dense512 = runPipeline<Device, ModPolicy<512u>, graphFlow::DenseBinTable>(
+        device,
+        particles,
+        capacity,
+        ModPolicy<512u>{});
+    std::vector<std::uint32_t> const hash2T512
+        = runPipeline<Device, ModPolicy<512u>, graphFlow::HashBinTable<128u, 2u>>(
+            device,
+            particles,
+            capacity,
+            ModPolicy<512u>{});
+    std::vector<std::uint32_t> const hash4T512
+        = runPipeline<Device, ModPolicy<512u>, graphFlow::HashBinTable<128u, 4u>>(
+            device,
+            particles,
+            capacity,
+            ModPolicy<512u>{});
+    CHECK(hash2T512 == dense512);
+    CHECK(hash4T512 == dense512);
 }
 
 TEST_CASE("dense and hash pipelines tile a chunk larger than T", "[integration][hash]")
@@ -422,6 +559,15 @@ TEST_CASE("hash table exhaustion aborts the batch", "[integration][hash]")
     std::vector<std::uint32_t> const control
         = runPipeline<Device, ModPolicy<16u>, graphFlow::HashBinTable<16u>>(device, 16u, capacity, ModPolicy<16u>{});
     CHECK(control == expectedBins<16u>(16u));
+
+    // 4*T (16 entries) also holds the same sixteen bins, while 2*T (8 entries) did not. This pins
+    // the 2*T/4*T capacity difference to the same hard-error path.
+    std::vector<std::uint32_t> const control4T = runPipeline<Device, ModPolicy<16u>, graphFlow::HashBinTable<4u, 4u>>(
+        device,
+        16u,
+        capacity,
+        ModPolicy<16u>{});
+    CHECK(control4T == expectedBins<16u>(16u));
 }
 
 TEST_CASE("invalid classifier results abort the hash batch", "[integration][hash]")
