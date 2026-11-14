@@ -10,9 +10,9 @@ repository state, not on the intended final state.
 HIP runtime validation is measured on `b972eaa3bd778b81f2dca505d3662df710792bd9`
 (HIP runtime merge, PR #35), recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`; the earlier 238/238 at
-`58bb514def3f3c956126ab7c34d0de74a45f679e` is historical. The final main is
-`cb2de187297bb7277b21ea47a6d2a8ed05b909ba`. The `rosi_v100` CPU/CUDA counts
-below are the final main values:
+`58bb514def3f3c956126ab7c34d0de74a45f679e` is historical. The validated code
+main is `2ad7d86ceaebed7da11c352ebee12e9525c2b0d2`. The `rosi_v100` CPU/CUDA
+counts below are the final main values:
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
@@ -353,7 +353,7 @@ These are not missing work; the plan excludes them from v1:
 - [ ] ASAN/UBSAN/TSAN pass on a compatible host. The `rosi_v100` sanitizer
   results are not yet recorded; the CPU CTest pass does not include a sanitizer
   run.
-- [ ] Format, REUSE, docs, and the API map are complete and green. T14b
+ - [x] Format, REUSE, docs, and the API map are complete and green. T14b
   (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
   format gate.
 - [ ] The repository is public or explicitly kept private, with branch

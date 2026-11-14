@@ -3,8 +3,9 @@
 
 # graphFlow acceptance record
 
-Current main is `cb2de187297bb7277b21ea47a6d2a8ed05b909ba` (merge of the
-debug-validation work). The T5 photon scattering record is at
+Validated code main is `2ad7d86ceaebed7da11c352ebee12e9525c2b0d2` (after the
+debug-validation work, T14b format sweep, and the alpaka-math change). The T5
+photon scattering record is at
 `ac89ab558c26b938038035b26ca5dbe6d7ce7727`, building on the typed Flow
 execution and particle example port at
 `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` and the earlier integrated

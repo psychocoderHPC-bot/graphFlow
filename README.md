@@ -22,7 +22,7 @@ Documentation:
 
 ## Status
 
-Current main: `cb2de187297bb7277b21ea47a6d2a8ed05b909ba`. The T5 photon
+Validated code main: `2ad7d86ceaebed7da11c352ebee12e9525c2b0d2`. The T5 photon
 scattering record is at `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T1, T2,
 T3, T5, T7, T13, T14a). The public API is implemented: the typed
 `Flow<TPayload, TDevice, TStorage>` topology, execution, storage, and status
