@@ -452,7 +452,14 @@ namespace graphFlow
             {
                 if(node.role != NodeRole::transform)
                     continue;
-                std::uint64_t const bound = outputChunkBound(chunkCapacity, chunkCapacity, node.bins);
+                // `node.bins` is the partition width (the classifier's maxBins), not a route
+                // destination count, a hash table capacity, the tile width, or Q. Using anything
+                // smaller under-reserves a hash batch whose particles spread over more bins.
+                std::uint64_t const bound = checkedOutputChunkBound(
+                    chunkCapacity,
+                    chunkCapacity,
+                    node.bins,
+                    "graphFlow: transform output reserve");
                 if(total > max || bound > max - total)
                     throw std::overflow_error{"graphFlow: transform output reserve exceeds 32 bits"};
                 total += bound;

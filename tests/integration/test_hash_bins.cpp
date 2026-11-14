@@ -70,20 +70,29 @@ namespace
         }
     };
 
-    /** Run Generate -> Transform -> Sink with an explicit bin-table policy. */
+    /** Run Generate -> Transform -> Sink with an explicit bin-table policy.
+     *
+     * `numChunks == 0` uses a generous test pool. A caller-supplied pool lets the tests pin the
+     * production bound `P + K*R(C, C, maxBins)` and check that a hash partition never acquires
+     * more output credits than the scheduler reserved for it.
+     */
     template<typename TDevice, typename TPolicy, typename TBinTable>
     std::vector<std::uint32_t> runPipeline(
         TDevice device,
         std::uint64_t particles,
         std::uint32_t capacity,
-        [[maybe_unused]] TPolicy policy)
+        [[maybe_unused]] TPolicy policy,
+        std::uint32_t batchChunks = 1u,
+        std::uint32_t liveParticles = 0u,
+        std::uint32_t numChunks = 0u,
+        graphFlow::SchedulerStats* statsOut = nullptr)
     {
         std::uint64_t const reserve
             = graphFlow::outputChunkBound(capacity, capacity, TPolicy::maxBins);
-        std::uint64_t const chunks = particles / capacity + 2u * reserve + 10u;
-        std::uint32_t const numChunks = static_cast<std::uint32_t>(chunks);
+        std::uint64_t const chunks
+            = numChunks != 0u ? numChunks : particles / capacity + 2u * reserve + 10u;
 
-        graphFlow::ChunkPool<TDevice> pool{device, numChunks, capacity};
+        graphFlow::ChunkPool<TDevice> pool{device, static_cast<std::uint32_t>(chunks), capacity};
         auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
         auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
         {
@@ -99,7 +108,8 @@ namespace
             pool,
             policy,
             capped,
-            128u};
+            128u,
+            batchChunks};
         graphFlow::particle::SinkStage<TDevice> sink{device, pool, result, 128u};
 
         std::vector<int> route(TPolicy::maxBins, 2);
@@ -117,9 +127,116 @@ namespace
             route,
             graphFlow::particle::hooksOf<TDevice>(transform));
         runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<TDevice>(sink));
-        runner.setSource(source, particles);
+        runner.setSource(source, particles, liveParticles);
+        runner.setBatchChunks(batchChunks);
         runner.setStallTimeout(std::chrono::milliseconds{30'000});
-        runner.run();
+        graphFlow::SchedulerStats const stats = runner.run();
+        if(statsOut != nullptr)
+            *statsOut = stats;
+
+        std::vector<std::uint32_t> host(static_cast<std::size_t>(particles), 0u);
+        {
+            auto queue = device.makeQueue(alpaka::queueKind::blocking);
+            alpaka::onHost::memcpy(queue, host, result);
+        }
+        return host;
+    }
+
+    /** Split one source chunk into `TSplitPolicy::maxBins` chunks, then feed a hash partition.
+     *
+     * The split makes the join's full Q-ready prefix visible in one completion, so the test
+     * exercises a Q-chunk hash batch rather than a sequence of single-chunk batches.
+     */
+    template<typename TDevice, typename TSplitPolicy, typename TJoinPolicy>
+    std::vector<std::uint32_t> runSplitHashPipeline(
+        TDevice device,
+        std::uint64_t particles,
+        std::uint32_t capacity,
+        TSplitPolicy splitPolicy,
+        TJoinPolicy joinPolicy,
+        std::uint32_t batchChunks,
+        std::uint32_t liveParticles,
+        std::uint32_t numChunks,
+        graphFlow::SchedulerStats* statsOut,
+        std::uint32_t* joinMaxBatchOut)
+    {
+        graphFlow::ChunkPool<TDevice> pool{device, numChunks, capacity};
+        auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
+        auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+        {
+            auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
+            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEADBEEFu});
+            alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
+        }
+
+        graphFlow::particle::GenerateStage<TDevice> generate{device, pool, 0u, 128u};
+        graphFlow::particle::TransformStage<TDevice, TSplitPolicy, graphFlow::DenseBinTable> split{
+            device,
+            pool,
+            splitPolicy,
+            capped,
+            128u,
+            batchChunks};
+        graphFlow::particle::TransformStage<TDevice, TJoinPolicy, graphFlow::HashBinTable<128u>> join{
+            device,
+            pool,
+            joinPolicy,
+            capped,
+            128u,
+            batchChunks};
+        graphFlow::particle::SinkStage<TDevice> sink{device, pool, result, 128u};
+
+        // The stage's fixed bound is one full Q-chunk batch with the partition maxBins. The hash
+        // table entry count and the tile width do not enter it.
+        CHECK(
+            split.reserveBound()
+            == graphFlow::outputChunkBound(
+                std::uint64_t{capacity} * batchChunks,
+                capacity,
+                TSplitPolicy::maxBins));
+        CHECK(
+            join.reserveBound()
+            == graphFlow::outputChunkBound(
+                std::uint64_t{capacity} * batchChunks,
+                capacity,
+                TJoinPolicy::maxBins));
+
+        // Node ids: source=0, split=1, join=2, sink=3.
+        std::vector<int> splitRoute(TSplitPolicy::maxBins, 2);
+        std::vector<int> joinRoute(TJoinPolicy::maxBins, 3);
+        graphFlow::GraphRunner<TDevice> runner{device, pool};
+        auto const source = runner.addNode(
+            "generate",
+            graphFlow::NodeRole::source,
+            1u,
+            {1},
+            graphFlow::particle::hooksOf<TDevice>(generate));
+        runner.addNode(
+            "split",
+            graphFlow::NodeRole::transform,
+            TSplitPolicy::maxBins,
+            splitRoute,
+            graphFlow::particle::hooksOf<TDevice>(split));
+        runner.addNode(
+            "join",
+            graphFlow::NodeRole::transform,
+            TJoinPolicy::maxBins,
+            joinRoute,
+            graphFlow::particle::hooksOf<TDevice>(join));
+        runner.addNode(
+            "sink",
+            graphFlow::NodeRole::sink,
+            1u,
+            {},
+            graphFlow::particle::hooksOf<TDevice>(sink));
+        runner.setSource(source, particles, liveParticles);
+        runner.setBatchChunks(batchChunks);
+        runner.setStallTimeout(std::chrono::milliseconds{30'000});
+        graphFlow::SchedulerStats const stats = runner.run();
+        if(statsOut != nullptr)
+            *statsOut = stats;
+        if(joinMaxBatchOut != nullptr)
+            *joinMaxBatchOut = join.maxBatchChunks();
 
         std::vector<std::uint32_t> host(static_cast<std::size_t>(particles), 0u);
         {
@@ -394,4 +511,80 @@ TEST_CASE("invalid classifier results abort the hash batch", "[integration][hash
     CHECK_THROWS_AS(runner.run(), graphFlow::BatchError);
     CHECK(pool.freeCount() == pool.numChunks());
     CHECK(pool.peakLive() <= pool.numChunks());
+}
+
+TEST_CASE("hash reserve uses maxBins above the dense limit for Q=1/2/8", "[integration][hash][reserve]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    // C=512 and one source chunk: the split emits eight ready 64-particle chunks, so the join's
+    // Q=8 batch carries 512 particles. Every id is a distinct bin below 65536, so that batch
+    // needs exactly 512 output chunks. B=65536 is far above Config::denseBinLimit, the
+    // 256-entry shared hash table, the 128-wide tile, and Q. Using any of those as the credit
+    // under-reserves the batch; the correct maxBins bound is the full batch particle count.
+    constexpr std::uint32_t capacity = 512u;
+    constexpr std::uint32_t splitBins = 8u;
+    constexpr std::uint32_t joinBins = 65536u;
+    constexpr std::uint64_t particles = 512u;
+    constexpr std::uint32_t liveParticles = 512u;
+    std::uint64_t const splitReserve
+        = graphFlow::outputChunkBound(capacity, capacity, splitBins);
+    std::uint64_t const joinReserve
+        = graphFlow::outputChunkBound(capacity, capacity, joinBins);
+    std::uint32_t const poolChunks
+        = static_cast<std::uint32_t>(liveParticles + splitReserve + joinReserve);
+
+    for(std::uint32_t const batchChunks : {1u, 2u, 8u})
+    {
+        CAPTURE(batchChunks);
+        graphFlow::SchedulerStats stats{};
+        std::uint32_t joinMaxBatch = 0u;
+        std::vector<std::uint32_t> const hash
+            = runSplitHashPipeline<Device, ModPolicy<splitBins>, ModPolicy<joinBins>>(
+                device,
+                particles,
+                capacity,
+                ModPolicy<splitBins>{},
+                ModPolicy<joinBins>{},
+                batchChunks,
+                liveParticles,
+                poolChunks,
+                &stats,
+                &joinMaxBatch);
+
+        CHECK(hash == expectedBins<joinBins>(particles));
+        // The join really saw a full Q-chunk prefix, so the tight-credit path is exercised.
+        CHECK(joinMaxBatch == batchChunks);
+        CHECK(stats.poolChunks == poolChunks);
+        CHECK(stats.peakReservedChunks <= poolChunks);
+        CHECK(stats.peakReservedChunks >= (particles / splitBins) * batchChunks);
+    }
+}
+
+TEST_CASE("hash partial batches reserve the accepted prefix only", "[integration][hash][reserve]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    constexpr std::uint32_t capacity = 64u;
+    constexpr std::uint32_t maxBins = 4096u;
+    constexpr std::uint64_t particles = 1000u; // 15 full chunks plus a 40-particle tail
+    constexpr std::uint32_t liveParticles = 1000u;
+    std::uint64_t const reserve = graphFlow::outputChunkBound(capacity, capacity, maxBins);
+    std::uint32_t const poolChunks = static_cast<std::uint32_t>(liveParticles + reserve);
+
+    graphFlow::SchedulerStats stats{};
+    std::vector<std::uint32_t> const hash
+        = runPipeline<ALPAKA_TYPEOF(device), ModPolicy<maxBins>, graphFlow::HashBinTable<128u>>(
+            device,
+            particles,
+            capacity,
+            ModPolicy<maxBins>{},
+            8u,
+            liveParticles,
+            poolChunks,
+            &stats);
+
+    CHECK(hash == expectedBins<maxBins>(particles));
+    CHECK(stats.poolChunks == poolChunks);
+    CHECK(stats.peakReservedChunks <= poolChunks);
 }

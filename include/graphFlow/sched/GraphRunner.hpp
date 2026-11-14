@@ -160,11 +160,16 @@ namespace graphFlow
         {
         }
 
-        /** Register a node. `route[bin]` is the destination node index for that bin. */
+        /** Register a node. `route[bin]` is the destination node index for that bin.
+         *
+         * `maxBins` is the node's partition width: the classifier `maxBins` for a partition node
+         * and the route table size. The adaptive output credit is derived from exactly this
+         * width, never from the hash table entry count, the tile width, or the batch size Q.
+         */
         std::uint32_t addNode(
             std::string name,
             NodeRole role,
-            std::uint32_t bins,
+            std::uint32_t maxBins,
             std::vector<int> route,
             Hooks hooks)
         {
@@ -173,7 +178,7 @@ namespace graphFlow
                 if(!route.empty())
                     throw std::invalid_argument{"graphFlow: a sink node has no routes"};
             }
-            else if(route.size() != bins)
+            else if(route.size() != maxBins)
             {
                 throw std::invalid_argument{"graphFlow: route table size must equal the bin count"};
             }
@@ -185,7 +190,7 @@ namespace graphFlow
             auto node = std::make_unique<Node>(
                 std::move(name),
                 role,
-                bins,
+                maxBins,
                 std::move(route),
                 std::move(hooks),
                 m_device.makeQueue(alpaka::queueKind::nonBlocking),
@@ -435,7 +440,7 @@ namespace graphFlow
                                 particles += node.ready[i].fill;
                             while(wanted != 0u)
                             {
-                                std::uint32_t const bound = checkedReserveBound(particles, node.bins);
+                                std::uint32_t const bound = checkedReserveBound(particles, node.maxBins);
                                 if(availableChunks() >= bound)
                                 {
                                     reserve = bound;
@@ -624,7 +629,7 @@ namespace graphFlow
                 std::uint32_t nodeId)
                 : name{std::move(nodeName)}
                 , role{nodeRole}
-                , bins{nodeBins}
+                , maxBins{nodeBins}
                 , route{std::move(nodeRoute)}
                 , hooks{std::move(nodeHooks)}
                 , queue{std::move(nodeQueue)}
@@ -635,7 +640,7 @@ namespace graphFlow
 
             std::string name;
             NodeRole role;
-            std::uint32_t bins;
+            std::uint32_t maxBins;
             std::vector<int> route;
             Hooks hooks;
             Queue queue;
@@ -654,17 +659,19 @@ namespace graphFlow
         /** Adaptive output-chunk reserve of a transform batch with `particles` input particles.
          *
          * Host planning never acquires more than `outputChunkBound(sum(fill), C, B)`, so reserving
-         * exactly this amount is sufficient for the batch. The single-chunk pool bound `K*R` stays
-         * in place; a batch that does not fit shrinks its chunk prefix rather than the pool.
+         * exactly this amount is sufficient for the batch. `B` is the node's partition `maxBins`,
+         * also for a hash partition. The single-chunk pool bound `K*R` stays in place; a batch
+         * that does not fit shrinks its chunk prefix rather than the pool.
          */
         [[nodiscard]] std::uint32_t checkedReserveBound(
             std::uint64_t particles,
-            std::uint32_t bins) const
+            std::uint32_t maxBins) const
         {
-            std::uint64_t const bound = outputChunkBound(particles, m_storage.chunkCapacity(), bins);
-            if(bound > std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error{"graphFlow: transform batch output reserve exceeds 32 bits"};
-            return static_cast<std::uint32_t>(bound);
+            return checkedOutputChunkBound(
+                particles,
+                m_storage.chunkCapacity(),
+                maxBins,
+                "graphFlow: transform batch output reserve");
         }
 
         /** Enqueue the node completion event, with an optional injected failure for tests. */

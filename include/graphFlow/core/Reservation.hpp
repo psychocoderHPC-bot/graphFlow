@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace graphFlow
 {
@@ -49,5 +50,26 @@ namespace graphFlow
             throw std::overflow_error{"outputChunkBound: chunk count overflow"};
         std::uint64_t const bound = perChunk + bins - 1u;
         return bound < n ? bound : n;
+    }
+
+    /** Output-chunk credit of one transform batch, narrowed to the 32-bit chunk index.
+     *
+     * `maxBins` is the partition width, i.e. the classifier's `maxBins` for a partition node.
+     * This is the same input for the dense and the hash path: the hash table entry count, the
+     * tile width and the batch size `Q` never enter the output credit. `Q` only affects the
+     * particle count through `n = sum(fill over the accepted prefix)`. Callers that pass a
+     * smaller width (the route count, a tile width, or the table entries) can under-reserve a
+     * hash batch whose particles spread over more bins.
+     */
+    inline std::uint32_t checkedOutputChunkBound(
+        std::uint64_t n,
+        std::uint64_t capacity,
+        std::uint64_t maxBins,
+        std::string const& context)
+    {
+        std::uint64_t const bound = outputChunkBound(n, capacity, maxBins);
+        if(bound > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{context + ": output-chunk credit exceeds 32 bits"};
+        return static_cast<std::uint32_t>(bound);
     }
 } // namespace graphFlow

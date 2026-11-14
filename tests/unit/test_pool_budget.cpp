@@ -11,6 +11,7 @@
 #include "graphFlow/core/DevicePolicy.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
 #include "graphFlow/core/Reservation.hpp"
+#include "graphFlow/graph/BinTable.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -407,4 +408,77 @@ TEST_CASE("device policy honors the configured slot size", "[pool][budget][polic
     CHECK_NOTHROW(exact.validate());
     exact.poolPayloadBudgetBytes -= 1u;
     CHECK_THROWS_AS(exact.validate(), std::invalid_argument);
+}
+
+TEST_CASE("hash output credits use maxBins and the pool budget rejects an under-sized cap", "[pool][budget][hash]")
+{
+    using namespace graphFlow;
+
+    // A hash partition may declare more bins than the dense shared table supports. Its output
+    // credit is still outputChunkBound(C, C, maxBins): the hash table entry count, the tile
+    // width, and Q do not enter it.
+    constexpr std::uint32_t capacity = 64u;
+    constexpr std::uint32_t maxBins = Config::denseBinLimit + 1u;
+    constexpr std::uint64_t transformNodes = 3u;
+    std::uint64_t const perTransform = checkedOutputChunkBound(capacity, capacity, maxBins, "test");
+    CHECK(perTransform == capacity);
+    CHECK(perTransform != HashBinTable<128u>::entries);
+    CHECK(outputChunkBound(capacity, capacity, maxBins) == perTransform);
+
+    std::uint64_t const reserve = transformNodes * perTransform;
+    std::uint64_t const liveParticles = 256u;
+    std::uint64_t const chunks = liveParticles + reserve;
+    std::uint64_t const budget = payloadBudgetWithReserve(
+        requiredPayloadBytes(liveParticles, capacity),
+        capacity,
+        reserve);
+
+    CHECK_NOTHROW(validatePayloadBudget(chunks, capacity, budget));
+    CHECK_THROWS_AS(validatePayloadBudget(chunks, capacity, budget - 1u), std::invalid_argument);
+    CHECK_THROWS_WITH(
+        validatePayloadBudget(chunks, capacity, budget - 1u, "graphFlow::test"),
+        Catch::Matchers::ContainsSubstring("exceeding the payload budget"));
+
+    // The relaxed Config maxBins check accepts the hash partition width and keeps the pool check.
+    Config config;
+    config.chunkCapacity = capacity;
+    config.numChunks = static_cast<std::uint32_t>(chunks);
+    config.maxBins = maxBins;
+    config.poolPayloadBudgetBytes = budget;
+    CHECK_NOTHROW(config.validate());
+    config.poolPayloadBudgetBytes -= 1u;
+    CHECK_THROWS_AS(config.validate(), std::invalid_argument);
+
+    // A credit that does not fit the 32-bit chunk index is rejected instead of wrapping.
+    std::uint64_t const over32 = std::uint64_t{std::numeric_limits<std::uint32_t>::max()} + 10u;
+    CHECK_THROWS_AS(checkedOutputChunkBound(over32, 1u, 1u, "test"), std::overflow_error);
+}
+
+TEST_CASE("hash transform reserve does not grow with Q", "[pool][budget][hash]")
+{
+    using namespace graphFlow;
+
+    constexpr std::uint32_t capacity = 128u;
+    constexpr std::uint32_t maxBins = 65536u;
+    std::uint64_t const perTransform = checkedOutputChunkBound(capacity, capacity, maxBins, "test");
+    CHECK(perTransform == capacity);
+
+    // Q only changes the runtime prefix bound of one batch. The pool reserve per node stays
+    // outputChunkBound(C, C, maxBins), so the derived pool size is Q-independent.
+    for(std::uint32_t const batchChunks : {1u, 2u, 8u})
+    {
+        CAPTURE(batchChunks);
+        std::uint64_t const fullBatch = std::uint64_t{capacity} * batchChunks;
+        CHECK(checkedOutputChunkBound(fullBatch, capacity, maxBins, "test") == fullBatch);
+        CHECK(perTransform == capacity);
+    }
+
+    std::uint64_t const liveParticles = 1024u;
+    std::uint64_t const reserve = 3u * perTransform;
+    std::uint64_t const chunks = liveParticles + reserve;
+    std::uint64_t const budget = payloadBudgetWithReserve(
+        requiredPayloadBytes(liveParticles, capacity),
+        capacity,
+        reserve);
+    CHECK_NOTHROW(validatePayloadBudget(chunks, capacity, budget));
 }
