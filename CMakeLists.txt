@@ -353,6 +353,61 @@ if(GRAPHFLOW_BUILD_TESTS)
             LABELS "example;cli;cpu;smoke;long"
     )
 
+    # Cross-backend exact-equality cases. Every backend compiled into this build
+    # runs the same seed/N/C/P/Q and the driver compares the sorted histogram rows
+    # and the count sum exactly. A CPU-only build checks the CPU run against
+    # itself; a CUDA or HIP build adds the device backend. A compiled backend with
+    # no usable device fails the case instead of being skipped. The GPU cases are
+    # registered only for compiled backends, so a compile-only hosted job makes no
+    # runtime claim.
+    set(GRAPHFLOW_CROSS_BACKEND_BACKENDS cpu)
+    if(GRAPHFLOW_ENABLE_CUDA)
+        list(APPEND GRAPHFLOW_CROSS_BACKEND_BACKENDS cuda)
+    endif()
+    if(GRAPHFLOW_ENABLE_HIP)
+        list(APPEND GRAPHFLOW_CROSS_BACKEND_BACKENDS hip)
+    endif()
+    set(GRAPHFLOW_CROSS_BACKEND_LABELS "example;cli;cross-backend;long")
+    foreach(backend IN LISTS GRAPHFLOW_CROSS_BACKEND_BACKENDS)
+        list(APPEND GRAPHFLOW_CROSS_BACKEND_LABELS "${backend}")
+    endforeach()
+    # Comma-separated so the backend list survives add_test's argument handling.
+    string(REPLACE ";" "," GRAPHFLOW_CROSS_BACKEND_BACKENDS_CSV "${GRAPHFLOW_CROSS_BACKEND_BACKENDS}")
+    set(GRAPHFLOW_CROSS_BACKEND_PARTICLES 1000000)
+    set(GRAPHFLOW_CROSS_BACKEND_CHUNK_SIZE 128)
+    set(GRAPHFLOW_CROSS_BACKEND_LIVE_PARTICLES 1024)
+    set(GRAPHFLOW_CROSS_BACKEND_RUN_TIMEOUT 900)
+    set(GRAPHFLOW_CROSS_BACKEND_TEST_TIMEOUT 1900)
+
+    function(graphflow_add_cross_backend_test batch_chunks)
+        set(test_name "example.particle_feedback.cross_backend.Q${batch_chunks}")
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DBINARY=${GRAPHFLOW_EXAMPLE_CLI_BINARY}"
+                "-DBACKENDS=${GRAPHFLOW_CROSS_BACKEND_BACKENDS_CSV}"
+                "-DPARTICLES=${GRAPHFLOW_CROSS_BACKEND_PARTICLES}"
+                "-DCHUNK_SIZE=${GRAPHFLOW_CROSS_BACKEND_CHUNK_SIZE}"
+                "-DLIVE_PARTICLES=${GRAPHFLOW_CROSS_BACKEND_LIVE_PARTICLES}"
+                "-DBATCH_CHUNKS=${batch_chunks}"
+                "-DSEED=${GRAPHFLOW_EXAMPLE_CLI_SEED}"
+                "-DMAX_VISITS=${GRAPHFLOW_EXAMPLE_CLI_MAX_VISITS}"
+                "-DTIMEOUT=${GRAPHFLOW_CROSS_BACKEND_RUN_TIMEOUT}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_cross_backend.cmake"
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                TIMEOUT ${GRAPHFLOW_CROSS_BACKEND_TEST_TIMEOUT}
+                LABELS "${GRAPHFLOW_CROSS_BACKEND_LABELS}"
+        )
+    endfunction()
+
+    foreach(batch_chunks IN ITEMS 1 2 8)
+        graphflow_add_cross_backend_test(${batch_chunks})
+    endforeach()
+
     add_test(
         NAME example.photon_public_api
         COMMAND
