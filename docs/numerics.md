@@ -155,5 +155,9 @@ The historical pre-T5/T7 CPU and CUDA `N=1e6` runs with seed 42, `C=8192`, and
 `P=65536` produced identical histograms by direct row diff. That check was not
 repeated on the integrated revision, where the pair is rejected by the payload
 budget. HIP execution is validated on `hal` (AMD Radeon RX 7900 XTX, `gfx1100`,
-ROCm 7.2) for the typed Flow and particle/photon example cases, but no
-cross-backend HIP histogram-equality run is recorded.
+ROCm 7.2) for the typed Flow and particle/photon example cases. The measured
+cross-backend equality run on `hal` (the automated `Q1`/`Q2`/`Q8` cases,
+`N=1e6`, `C=128`, `P=1024`, seed 42) passed 3/3: each run compared the CUDA and
+HIP outputs against the CPU reference with the same seed, `N`, `C`, `P`, and
+`Q`, the sorted `weight,count` rows were identical, and every count sum
+equaled `N`.
