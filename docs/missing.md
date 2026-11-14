@@ -7,19 +7,22 @@ This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state, not on the intended final state.
 
-Current state at integrated main
-`61c877a1f6f9afde716dfe028ad193d97ec7c772` (RNG API change):
+Current state at the sm_70 ICE workaround
+`00b6fe0290a7ff4cf8e980eed1c3ba8f7ddefafa` on integrated main
+`c85bbeeac2b3770a7aacc383daf78dd7f488a32b` (RNG API merge):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
-  Current `rosi_v100` results: CPU CTest **193/193 passed** at the RNG API
-  change (OMP=ON Release, pedantic);
-  CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. CUDA V100
-  `sm_70` is **blocked** by an nvcc 12.6.85 ICE at
-  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed. The
+  Current `rosi_v100` results at the sm_70 ICE workaround: CPU CTest
+  **193/193 passed** (OMP=ON Release, pedantic) and CUDA CTest **245/245
+  passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
+  concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
+  the RNG main is preserved.
+  CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The
   previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
   `sm_80`, are **historical validation on a shared host** (`hal` reports
-  `sharing=unknown`) and are **not the final current validation**.
+  `sharing=unknown`) and are **not the final current validation**. CUDA
+  13.4/`sm_80`, fwk394, and H100 were not re-run in this validation.
 - The public API is implemented: `Flow<TPayload, TDevice, TStorage>` with
   source/partition/transform/sink handles, named ports, `configure(Tuning)`,
   typed failure `Status`, and `run()`.
@@ -31,7 +34,7 @@ Current state at integrated main
   HIP execution is blocked and no HIP execution is claimed.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
   `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 193/193 with
-  OMP=ON at the RNG API change. The previous multi-region pathology is not observed on `rosi_v100`.
+  OMP=ON at the sm_70 ICE workaround. The previous multi-region pathology is not observed on `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
   no final H100 claim is made. H100 remains blocked/preliminary.
@@ -48,9 +51,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 193/193 at the RNG API change (OMP=ON
-  Release), and the `rosi_v100`
-  CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE. Open
+  `rosi_v100` CPU CTest passes 193/193 and the V100 `sm_70` CUDA CTest
+  passes 245/245 with the explicit concept-parameter workaround. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -137,8 +139,8 @@ resource or decision is missing.
   removed; floating-point draws use `UniformReal` and integer decisions use the
   engine output. The independent scalar oracles use the same mapping without
   the production header. Fixed-seed particle and photon baselines changed once
-  at this commit. V100 CUDA remains blocked by the nvcc 12.6 ICE, so no new CUDA
-  count is claimed.
+  at this commit. V100 CUDA `sm_70` passes 245/245 with the explicit
+  concept-parameter workaround on the RNG main.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
   `N=0,1,17,127,128,4097` crossed with `C=1,31,127,128` (24 cases per backend)
@@ -271,8 +273,9 @@ resource or decision is missing.
   H100 run is preliminary CUDA evidence only: its gateway sharing flag is
   unknown and the recorded run observed external load while the client was
   stale, so no final H100 claim is made.
-- **CPU OMP backend:** CPU execution with the OpenMP backend is blocked and
-  not claimed; only the serial CPU backend has a recorded run.
+- **CPU OMP backend:** CPU execution with the OpenMP backend works on
+  `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the CPU CTest
+  passes 193/193 with OMP=ON Release.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
   `P=65536` (about 12.9 GB). Decide between a slot-based pool, a smaller default
   `P`, or a memory-budget cap.
@@ -303,8 +306,8 @@ These are not missing work; the plan excludes them from v1:
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
   gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 193/193
-  (OMP=ON); the `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc
-  12.6.85 ICE.
+  (OMP=ON) and the CUDA V100 `sm_70` CTest passes 245/245 with the explicit
+  concept-parameter workaround.
 - [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
   HIP remains blocked by the missing AMD runtime device.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
