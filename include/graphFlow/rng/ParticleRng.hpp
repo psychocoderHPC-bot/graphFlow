@@ -12,151 +12,159 @@
 
 namespace graphFlow::rng
 {
-    /** Number of purpose draws reserved per visit by the particle mapping.
+    /** Philox engine handed to an opting-in flow functor.
      *
-     * The value is the default for `decisionOffset()`, `checkedDecisionOffset()` and `draw()`. It
-     * keeps the existing particle-feedback mapping `4 * (1 + 3 * visit + purpose)` unchanged.
-     * Applications with a different number of draws per visit pass their own value, for example
-     * `photonPurposesPerVisit`.
+     * The engine is constructed by graphFlow for one logical `(id, event, purpose)` position.
+     * Users draw floating-point values through `alpaka::rand::distribution::UniformReal` or
+     * `NormalReal`; integer decisions use the engine's unsigned `operator()`. Functors never see a
+     * seed, an offset, or a purpose count.
      */
-    inline constexpr std::uint32_t purposesPerVisit = 3u;
+    using Engine = alpaka::rand::engine::Philox4x32x10;
 
-    /** Purpose indices used to derive the draw position of a particle decision.
+    /** Bit budget of the packed stream position.
      *
-     * The mapping is part of the reproducibility contract: it must not depend on the chunk, tile,
-     * thread, backend or scheduling order.
-     */
-    inline constexpr std::uint32_t purposeProperty = 0u;
-    inline constexpr std::uint32_t purposeFilter = 0u;
-    inline constexpr std::uint32_t purposeProcessA = 1u;
-    inline constexpr std::uint32_t purposeProcessB = 2u;
-
-    /** Photon purposes: four independent draws per completed scatter count. */
-    inline constexpr std::uint32_t purposeFlight = 0u;
-    inline constexpr std::uint32_t purposeCollisionKind = 1u;
-    inline constexpr std::uint32_t purposeCosine = 2u;
-    inline constexpr std::uint32_t purposeAzimuth = 3u;
-
-    /** Number of photon draws per visit. */
-    inline constexpr std::uint32_t photonPurposesPerVisit = 4u;
-
-    /** Philox offset of one decision.
+     * A stream key is a bijective packing of three fields plus the run seed:
+     *  - `streamIdBits` low bits hold the global logical id,
+     *  - `streamEventBits` bits hold the logical event (particle visit or photon scatter count),
+     *  - `streamPurposeBits` bits hold an internal graphFlow stage purpose.
      *
-     * Offset 0 is the property draw. With the default `purposesPerVisit == 3`, Filter, A and B use
-     * `4 * (1 + 3 * visit + purpose)`, so every decision owns a disjoint block of four 32 bit
-     * outputs. A visit with `purposesPerVisit` draws uses
-     * `4 * (1 + purposesPerVisit * visit + purpose)`, which likewise reserves one four-word block
-     * per `(visit, purpose)` position. All arithmetic is performed in 64 bit.
+     * The limits are checked by `checkedStreamKey()` and asserted in `makeEngine()`. Ids must be
+     * unique within one run. Particle and photon ids live in separate examples; a graph that mixes
+     * domains must allocate disjoint id ranges so the domains cannot share an engine.
      */
-    constexpr std::uint64_t decisionOffset(
-        std::uint64_t visit,
-        std::uint32_t purpose,
-        std::uint32_t purposesPerVisitValue = purposesPerVisit)
+    inline constexpr std::uint32_t streamIdBits = 32u;
+    inline constexpr std::uint32_t streamEventBits = 16u;
+    inline constexpr std::uint32_t streamPurposeBits = 16u;
+
+    static_assert(streamIdBits + streamEventBits + streamPurposeBits == 64u);
+
+    inline constexpr std::uint64_t maxStreamId = (std::uint64_t{1u} << streamIdBits) - 1u;
+    inline constexpr std::uint64_t maxStreamEvent = (std::uint64_t{1u} << streamEventBits) - 1u;
+    inline constexpr std::uint32_t maxStreamPurpose = (std::uint32_t{1u} << streamPurposeBits) - 1u;
+
+    /** Internal purpose of graph node `nodeKey`.
+     *
+     * Flow assigns `2 * nodeKey + 0` to the node functor and `2 * nodeKey + 1` to an optional
+     * partition updater. Registration order is part of the reproducibility contract; users never
+     * choose a purpose.
+     */
+    constexpr std::uint32_t streamPurposeForNode(std::uint64_t nodeKey, std::uint32_t subPurpose = 0u)
     {
-        return 4ull
-            * (1ull + static_cast<std::uint64_t>(purposesPerVisitValue) * visit
-               + static_cast<std::uint64_t>(purpose));
+        return static_cast<std::uint32_t>((nodeKey << 1u) | (subPurpose & 1u));
     }
 
-    /** Checked 64 bit draw offset.
-     *
-     * Host-side counterpart of `decisionOffset()`. A purpose outside the configured visit or a
-     * result that exceeds the 64 bit range raises instead of wrapping. Device code uses
-     * `decisionOffset()` because it cannot propagate host exceptions; both share the same formula.
-     */
-    constexpr std::uint64_t checkedDecisionOffset(
-        std::uint64_t visit,
-        std::uint32_t purpose,
-        std::uint32_t purposesPerVisitValue = purposesPerVisit)
+    /** Packed `(id, event, purpose)` position without the run seed. */
+    constexpr std::uint64_t packedStreamPosition(std::uint64_t globalId, std::uint64_t event, std::uint32_t purpose)
     {
-        if(purposesPerVisitValue == 0u)
-            throw std::invalid_argument{"graphFlow::rng: purposesPerVisit must be non-zero"};
-        if(purpose >= purposesPerVisitValue)
-            throw std::invalid_argument{"graphFlow::rng: purpose must be below purposesPerVisit"};
-
-        constexpr std::uint64_t maxOffset = std::numeric_limits<std::uint64_t>::max();
-        // Check the scaled visit term before forming it, then check the final block count.
-        if(visit > (maxOffset - 1u - purpose) / purposesPerVisitValue)
-            throw std::overflow_error{"graphFlow::rng: draw offset overflows 64 bits"};
-        std::uint64_t const block = 1u + static_cast<std::uint64_t>(purposesPerVisitValue) * visit + purpose;
-        if(block > maxOffset / 4u)
-            throw std::overflow_error{"graphFlow::rng: draw offset overflows 64 bits"};
-        return 4u * block;
+        return (globalId & maxStreamId) | ((event & maxStreamEvent) << streamIdBits)
+               | (static_cast<std::uint64_t>(purpose & maxStreamPurpose) << (streamIdBits + streamEventBits));
     }
 
-    /** Compile-time purpose checked offset.
+    /** Bijective 64 bit multiply/xor mixer (SplitMix64 finalizer).
      *
-     * `T_purpose` must be below `T_purposesPerVisit`; the static assertion makes an invalid purpose
-     * a compilation error instead of a runtime range failure.
+     * Each step is invertible: two odd multiplications and three xor-shift permutations. The
+     * composition is therefore a bijection on `uint64_t`, which keeps a packed position and its
+     * engine key one-to-one for a fixed run seed.
      */
-    template<std::uint32_t T_purpose, std::uint32_t T_purposesPerVisit = purposesPerVisit>
-    constexpr std::uint64_t checkedDecisionOffset(std::uint64_t visit)
+    constexpr std::uint64_t mixStreamKey(std::uint64_t value)
     {
-        static_assert(T_purpose < T_purposesPerVisit, "purpose must be below purposesPerVisit");
-        return checkedDecisionOffset(visit, T_purpose, T_purposesPerVisit);
-    }
-
-    /** Draw the 32 bit output at an absolute offset of a particle's subsequence.
-     *
-     * Verified pinned behaviour: the constructor offset of the single-value `Philox4x32x10` is not
-     * equivalent to advancing a fresh engine. `PhiloxSingle` computes the within-block position in
-     * `skip()`, then `advanceState()` resets it to zero, and `skip4()` derives its carry words from
-     * `counter[0] < temp[1]` / `counter[0] < temp[2]` instead of the corresponding counter words.
-     * For a nonzero subsequence this makes even `skip4(0)` change counter word 3
-     * (`include/alpaka/rand/engine/philox/PhiloxSingle.hpp:84-99`,
-     * `PhiloxBaseCommon.hpp:63-90`). `tests/unit/test_philox.cpp` records the observation.
-     *
-     * To keep the documented contract "offset counts individual 32 bit outputs" this helper
-     * constructs at offset zero and advances the public engine `offset` times. Draw positions stay
-     * key based and independent of chunks, tiles, threads and scheduling order.
-     */
-    ALPAKA_FN_ACC inline std::uint32_t drawAt(
-        std::uint64_t seed,
-        std::uint64_t particleId,
-        std::uint64_t offset)
-    {
-        alpaka::rand::engine::Philox4x32x10 engine(seed, particleId, 0u);
-        std::uint32_t value = engine();
-        for(std::uint64_t i = 0u; i < offset; ++i)
-            value = engine();
+        value ^= value >> 30u;
+        value *= 0xBF58'476D'1CE4'E5B9ull;
+        value ^= value >> 27u;
+        value *= 0x94D0'49BB'1331'11EBull;
+        value ^= value >> 31u;
         return value;
     }
 
-    /** Property draw of a fresh particle: offset 0 of the particle subsequence. */
-    ALPAKA_FN_ACC inline std::uint32_t propertyDraw(std::uint64_t seed, std::uint64_t particleId)
+    /** Engine key of one logical stream position.
+     *
+     * `packed -> mix(packed ^ mix(baseSeed))` is a bijection of the packed position for a fixed
+     * base seed, so distinct positions cannot alias within a run. The engine is then constructed
+     * with subsequence and offset zero: the pinned alpaka constructor-offset defect is never
+     * exercised, and no event-indexed advance loop is used.
+     */
+    constexpr std::uint64_t streamKey(
+        std::uint64_t baseSeed,
+        std::uint64_t globalId,
+        std::uint64_t event,
+        std::uint32_t purpose)
     {
-        return drawAt(seed, particleId, 0u);
+        std::uint64_t const packed = packedStreamPosition(globalId, event, purpose);
+        return mixStreamKey(packed ^ mixStreamKey(baseSeed));
     }
 
-    /** One key-based Philox draw for a `(seed, id, visit, purpose)` position.
+    /** Host-side stream-key check.
      *
-     * `subsequence` is the particle id, `offset` counts individual 32 bit outputs. The engine is
-     * constructed per draw, which is exactly the equivalence `Philox4x32x10(seed, id, offset)()`.
-     * `purposesPerVisitValue` defaults to the three-purpose particle mapping; a four-purpose caller
-     * passes `photonPurposesPerVisit`.
+     * Rejects a position outside the documented bit budget instead of masking it into an
+     * overlapping stream. Device code uses `makeEngine()` and relies on the asserted precondition.
      */
-    ALPAKA_FN_ACC inline std::uint32_t draw(
-        std::uint64_t seed,
-        std::uint64_t particleId,
-        std::uint32_t visit,
-        std::uint32_t purpose,
-        std::uint32_t purposesPerVisitValue = purposesPerVisit)
+    constexpr std::uint64_t checkedStreamKey(
+        std::uint64_t baseSeed,
+        std::uint64_t globalId,
+        std::uint64_t event,
+        std::uint32_t purpose)
     {
-        return drawAt(seed, particleId, decisionOffset(visit, purpose, purposesPerVisitValue));
+        if(globalId > maxStreamId)
+            throw std::overflow_error{"graphFlow::rng: global id exceeds the 32 bit stream-id range"};
+        if(event > maxStreamEvent)
+            throw std::overflow_error{"graphFlow::rng: event exceeds the 16 bit stream-event range"};
+        if(purpose > maxStreamPurpose)
+            throw std::overflow_error{"graphFlow::rng: purpose exceeds the 16 bit stream-purpose range"};
+        return streamKey(baseSeed, globalId, event, purpose);
     }
 
-    /** Compile-time purpose draw.
-     *
-     * The purpose is a template argument so `purpose < purposesPerVisit` is enforced by a static
-     * assertion. The value is identical to the runtime `draw()` overload.
-     */
-    template<std::uint32_t T_purpose, std::uint32_t T_purposesPerVisit = purposesPerVisit>
-    ALPAKA_FN_ACC inline std::uint32_t draw(
-        std::uint64_t seed,
-        std::uint64_t particleId,
-        std::uint32_t visit)
+    /** Initialise the engine of one logical `(id, event, purpose)` position. */
+    ALPAKA_FN_ACC inline Engine makeEngine(
+        std::uint64_t baseSeed,
+        std::uint64_t globalId,
+        std::uint64_t event,
+        std::uint32_t purpose)
     {
-        static_assert(T_purpose < T_purposesPerVisit, "purpose must be below purposesPerVisit");
-        return draw(seed, particleId, visit, T_purpose, T_purposesPerVisit);
+        ALPAKA_ASSERT_ACC(globalId <= maxStreamId);
+        ALPAKA_ASSERT_ACC(event <= maxStreamEvent);
+        ALPAKA_ASSERT_ACC(purpose <= maxStreamPurpose);
+        // Subsequence and offset stay zero. The constructor offset of the pinned Philox engine is
+        // not equivalent to advancing a fresh engine, so the key carries the whole position.
+        return Engine{streamKey(baseSeed, globalId, event, purpose), 0u, 0u};
+    }
+
+    /** Payload stream fields, customisable through specialisation.
+     *
+     * The defaults read `id` and either `visit` (particle) or `scatterCount` (photon). A payload
+     * without those fields owns one shared `(0, 0)` position; a custom payload type can specialise
+     * this trait to provide stable logical fields.
+     */
+    template<typename TPayload>
+    struct StreamTraits
+    {
+        static ALPAKA_FN_ACC std::uint64_t id(TPayload const& payload) noexcept
+        {
+            if constexpr(requires { payload.id; })
+                return static_cast<std::uint64_t>(payload.id);
+            else
+                return 0u;
+        }
+
+        static ALPAKA_FN_ACC std::uint64_t event(TPayload const& payload) noexcept
+        {
+            if constexpr(requires { payload.visit; })
+                return static_cast<std::uint64_t>(payload.visit);
+            else if constexpr(requires { payload.scatterCount; })
+                return static_cast<std::uint64_t>(payload.scatterCount);
+            else
+                return 0u;
+        }
+    };
+
+    template<typename TPayload>
+    ALPAKA_FN_ACC std::uint64_t streamId(TPayload const& payload) noexcept
+    {
+        return StreamTraits<TPayload>::id(payload);
+    }
+
+    template<typename TPayload>
+    ALPAKA_FN_ACC std::uint64_t streamEvent(TPayload const& payload) noexcept
+    {
+        return StreamTraits<TPayload>::event(payload);
     }
 } // namespace graphFlow::rng

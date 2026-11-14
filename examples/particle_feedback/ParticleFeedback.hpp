@@ -44,6 +44,10 @@ namespace graphFlow::particle
     template<typename TDevice>
     FeedbackResult runParticleFeedback(TDevice device, Parameters const& parameters, graphFlow::Tuning tuning)
     {
+        if(parameters.numParticles != 0u && parameters.numParticles - 1u > graphFlow::rng::maxStreamId)
+            throw std::overflow_error{"graphFlow::particle: particle count exceeds the RNG stream-id range"};
+        if(parameters.maxVisits > graphFlow::rng::maxStreamEvent)
+            throw std::overflow_error{"graphFlow::particle: max visits exceeds the RNG stream-event range"};
         // Index by particle id; the sentinel detects a particle that never reached a sink.
         std::uint64_t const resultSize = parameters.numParticles == 0u ? 1u : parameters.numParticles;
         auto weights = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
@@ -55,16 +59,10 @@ namespace graphFlow::particle
         }
 
         graphFlow::Flow<graphFlow::Particle, TDevice> flow{device};
-        auto source = flow.source("generate", GenerateParticles{parameters.seed});
-        auto filter = flow.partition("filter", FilterByProperty{parameters.seed});
-        auto processA = flow.partition(
-            "process A",
-            SelectOutcome{parameters.seed, rng::purposeProcessA, parameters.maxVisits},
-            UpdateWeight{1000u});
-        auto processB = flow.partition(
-            "process B",
-            SelectOutcome{parameters.seed, rng::purposeProcessB, parameters.maxVisits},
-            UpdateWeight{1u});
+        auto source = flow.source("generate", GenerateParticles{});
+        auto filter = flow.partition("filter", FilterByProperty{});
+        auto processA = flow.partition("process A", SelectOutcome{parameters.maxVisits}, UpdateWeight{1000u});
+        auto processB = flow.partition("process B", SelectOutcome{parameters.maxVisits}, UpdateWeight{1u});
         auto sink = flow.sink("record weight", RecordWeight<decltype(weights.getView())>{weights.getView()});
         auto capped = flow.sink(
             "record capped weight",

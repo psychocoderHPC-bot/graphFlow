@@ -60,38 +60,29 @@ namespace
         }
     };
 
-    /** Four-purpose photon mapping compiled for the device. */
-    struct PhotonPurposeDrawKernel
+    /** Keyed engine and UniformReal conversion compiled for the device. */
+    struct EngineDrawKernel
     {
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
             std::uint32_t* output,
             std::uint64_t seed,
             std::uint64_t id,
-            std::uint32_t visit) const
+            std::uint32_t event,
+            std::uint32_t purposes) const
         {
-            for(auto [i] :
-                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{1u}))
+            for(auto [i] : alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{1u}))
             {
                 (void) i;
-                output[0] = graphFlow::rng::draw<
-                    graphFlow::rng::purposeFlight,
-                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
-                output[1] = graphFlow::rng::draw<
-                    graphFlow::rng::purposeCollisionKind,
-                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
-                output[2] = graphFlow::rng::draw<
-                    graphFlow::rng::purposeCosine,
-                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
-                output[3] = graphFlow::rng::draw<
-                    graphFlow::rng::purposeAzimuth,
-                    graphFlow::rng::photonPurposesPerVisit>(seed, id, visit);
-                output[4] = graphFlow::rng::draw(
-                    seed,
-                    id,
-                    visit,
-                    graphFlow::rng::purposeAzimuth,
-                    graphFlow::rng::photonPurposesPerVisit);
+                for(std::uint32_t purpose = 0u; purpose < purposes; ++purpose)
+                {
+                    graphFlow::rng::Engine engine = graphFlow::rng::makeEngine(seed, id, event, purpose);
+                    output[2u * purpose] = engine();
+                    graphFlow::rng::Engine distributionEngine = graphFlow::rng::makeEngine(seed, id, event, purpose);
+                    double const uniform = alpaka::rand::distribution::UniformReal<double>{}(distributionEngine);
+                    output[2u * purpose + 1u]
+                        = static_cast<std::uint32_t>(static_cast<std::uint64_t>(uniform * 4294967296.0));
+                }
             }
         }
     };
@@ -202,7 +193,7 @@ TEST_CASE("CUDA frame launch rejects a tile wider than maxThreadsPerBlock", "[cu
         std::invalid_argument);
 }
 
-TEST_CASE("CUDA four-purpose photon draws match the host mapping", "[cuda][rng]")
+TEST_CASE("CUDA keyed engines match the host stream mapping", "[cuda][rng]")
 {
     auto selector = alpaka::onHost::makeDeviceSelector(alpaka::api::Cuda{}, alpaka::deviceKind::nvidiaGpu);
     if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
@@ -211,26 +202,30 @@ TEST_CASE("CUDA four-purpose photon draws match the host mapping", "[cuda][rng]"
 
     constexpr std::uint64_t seed = 42u;
     constexpr std::uint64_t id = 7u;
-    constexpr std::uint32_t visit = 2u;
-    constexpr std::uint32_t count = 5u;
+    constexpr std::uint32_t event = 2u;
+    constexpr std::uint32_t purposes = 5u;
+    constexpr std::uint32_t count = 2u * purposes;
     constexpr std::uint32_t sentinel = 0xDEAD'BEEFu;
 
     std::array<std::uint32_t, count> expected{};
-    for(std::uint32_t purpose = 0u; purpose < graphFlow::rng::photonPurposesPerVisit; ++purpose)
-        expected[purpose]
-            = graphFlow::rng::draw(seed, id, visit, purpose, graphFlow::rng::photonPurposesPerVisit);
-    expected[4] = expected[graphFlow::rng::purposeAzimuth];
+    for(std::uint32_t purpose = 0u; purpose < purposes; ++purpose)
+    {
+        graphFlow::rng::Engine engine = graphFlow::rng::makeEngine(seed, id, event, purpose);
+        expected[2u * purpose] = engine();
+        graphFlow::rng::Engine distributionEngine = graphFlow::rng::makeEngine(seed, id, event, purpose);
+        double const uniform = alpaka::rand::distribution::UniformReal<double>{}(distributionEngine);
+        expected[2u * purpose + 1u] = static_cast<std::uint32_t>(static_cast<std::uint64_t>(uniform * 4294967296.0));
+    }
 
     auto outputDevice = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{count}});
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     alpaka::onHost::fill(queue, outputDevice, sentinel);
     queue.enqueue(
         alpaka::onHost::FrameSpec{std::uint32_t{1u}, std::uint32_t{1u}},
-        alpaka::KernelBundle{PhotonPurposeDrawKernel{}, outputDevice.data(), seed, id, visit});
+        alpaka::KernelBundle{EngineDrawKernel{}, outputDevice.data(), seed, id, event, purposes});
 
     std::array<std::uint32_t, count> host{};
     alpaka::onHost::memcpy(queue, host, outputDevice);
     CHECK(host == expected);
-    CHECK(
-        std::none_of(host.begin(), host.end(), [](std::uint32_t value) { return value == sentinel; }));
+    CHECK(std::none_of(host.begin(), host.end(), [](std::uint32_t value) { return value == sentinel; }));
 }

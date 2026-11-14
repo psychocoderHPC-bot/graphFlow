@@ -6,7 +6,6 @@
 
 #include "PhotonFunctors.hpp"
 #include "PhotonTypes.hpp"
-
 #include "graphFlow/graphFlow.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -28,10 +27,7 @@ namespace graphFlow::photon
      * pool chunk.
      */
     template<typename TDevice>
-    ScatteringResult runPhotonScattering(
-        TDevice device,
-        Parameters const& parameters,
-        graphFlow::Tuning tuning)
+    ScatteringResult runPhotonScattering(TDevice device, Parameters const& parameters, graphFlow::Tuning tuning)
     {
         validateParameters(parameters);
 
@@ -39,11 +35,9 @@ namespace graphFlow::photon
         auto records = alpaka::onHost::alloc<TerminalRecord>(device, alpaka::Vec{resultSize});
         auto visits = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
 
-        std::uint64_t const traceIds = parameters.trace.enabled
-                                           ? std::min<std::uint64_t>(
-                                                 parameters.numPhotons,
-                                                 parameters.trace.maxPhotons)
-                                           : 0u;
+        std::uint64_t const traceIds
+            = parameters.trace.enabled ? std::min<std::uint64_t>(parameters.numPhotons, parameters.trace.maxPhotons)
+                                       : 0u;
         std::uint64_t const traceSlots = traceIds == 0u ? 1u : traceIds;
         std::uint32_t const traceVertices = parameters.trace.enabled ? parameters.trace.maxVertices : 1u;
         std::uint64_t const traceVertexSlots = traceSlots * traceVertices;
@@ -78,14 +72,9 @@ namespace graphFlow::photon
 
         graphFlow::Flow<Photon, TDevice> flow{device};
         auto source = flow.source("generate", GeneratePhotonT<Trace>{trace});
-        auto flight = flow.transform(
-            "propose flight",
-            ProposeFlight{slab, parameters.seed, parameters.maxScatters});
-        auto route = flow.partition(
-            "advance and route",
-            ClassifyEvent{},
-            AdvanceToEvent{slab});
-        auto scatter = flow.transform("scatter", ScatterT<Trace>{parameters.mode, parameters.seed, trace});
+        auto flight = flow.transform("propose flight", ProposeFlight{slab, parameters.maxScatters});
+        auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
+        auto scatter = flow.transform("scatter", ScatterT<Trace>{parameters.mode, trace});
         using RecordView = decltype(records.getView());
         using VisitView = decltype(visits.getView());
         auto terminal = flow.sink(
@@ -153,10 +142,7 @@ namespace graphFlow::photon
         }
         result.histograms.reserve(histogram.size());
         for(auto const& [key, count] : histogram)
-            result.histograms.push_back(OutcomeHistogramRow{
-                static_cast<Event>(key.first),
-                key.second,
-                count});
+            result.histograms.push_back(OutcomeHistogramRow{static_cast<Event>(key.first), key.second, count});
 
         if(parameters.trace.enabled)
         {
@@ -170,8 +156,7 @@ namespace graphFlow::photon
                 trace.truncated = hostTraceFlags[static_cast<std::size_t>(id)] != 0u;
                 trace.vertices.assign(
                     hostTraceBuffer.begin() + static_cast<std::ptrdiff_t>(id * traceVertices),
-                    hostTraceBuffer.begin()
-                        + static_cast<std::ptrdiff_t>(id * traceVertices + count));
+                    hostTraceBuffer.begin() + static_cast<std::ptrdiff_t>(id * traceVertices + count));
                 if(trace.truncated)
                     ++result.traceTruncated;
                 result.traces.push_back(std::move(trace));

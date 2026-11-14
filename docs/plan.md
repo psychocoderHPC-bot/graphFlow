@@ -74,7 +74,7 @@ Every accelerator helper, kernel primitive, and test fixture must be checked aga
 | Shared memory | `onAcc/Acc.hpp:132-200`; `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads`. | Per-tile dense or hash table; runtime size via dynamic shared memory. |
 | Warp and intrinsics | `onAcc/warp.hpp:32-131`; `ballot`, `any`, `all`, `activemask`, `shfl*`, `getSize`; `intrinsic.hpp:17-46`; `popcount`, `ffs`, `clz`. | Ballot/popcount only where measured; no `shfl` for control decisions. |
 | In-kernel scan/sort | **Absent.** `onHost/algo/scan.hpp`, `reduce.hpp`, `transform.hpp` enqueue kernels; they are not in-kernel collectives. | Dense/hash tables avoid a scan. Any future scan is project code. |
-| RNG | `rand/engine/philox/philox.hpp:31-75`; `Philox4x32x10(seed, subsequence, offset)`. The constructor `offset` path is **broken** in the pinned tree: `skip4` uses wrong carry operands and the remainder is discarded. Construct at offset 0 and advance by a draw index instead. | Key-based Philox for the particle example. |
+| RNG | `rand/engine/philox/philox.hpp:31-75`; `rand/distribution/UniformReal.hpp`, `NormalReal.hpp`. The constructor `offset` path is **broken** in the pinned tree: `skip4` uses wrong carry operands and the remainder is discarded. graphFlow packs `(id, event, purpose)` into the engine key and constructs at subsequence and offset zero. | Key-based engines and alpaka distributions for both examples. |
 | Device properties | `onHost/DeviceProperties.hpp:43-56`; `multiProcessorCount`, `warpSize`, `sharedMemPerBlockBytes`, `maxThreadsPerBlock`, `maxBlocksPerGrid`. No occupancy API. | Chunk-size heuristic; no single-wave assumption. |
 | Graph/DAG/scheduler | **Absent** in alpaka3. | Project-owned. |
 | Views | `mem/MdSpan.hpp:228-236`; `mem/View.hpp:201-291`; `getExtents`, `getPitches`, `getSubView`. | Non-owning typed payload views. |
@@ -318,7 +318,7 @@ Use the public `alpaka::rand::engine::Philox4x32x10`.
 
 - Constructor: `Philox4x32x10(seed, subsequence = particleId, offset)`.
 - The pinned `Philox4x32x10` constructor `offset` path is **broken**. `skip4` compares the wrong carry operands, and `offset % 4` is discarded, so `Philox4x32x10(seed, id, k)` is not equivalent to advancing a fresh engine `k` times. Do not pass the stream index as the constructor offset.
-- Use a **draw index** `d = 0` for the property draw and `d = 4 * (1 + 3*visit + purposeIndex)` for Filter, A, and B, with purpose indices 0 through 2. Construct the engine at offset 0 and advance it `d` times. This is portable, self-consistent, and uses only the public engine.
+- Initialise one engine per logical `(id, event, purpose)` from a bijective packed key and construct it at subsequence and offset zero. Flow injects the engine into opting-in functors; the particle property, Filter, A, and B use distinct stage purposes. Floating-point draws use the alpaka distributions. This is portable, self-consistent, and uses only the public engine.
 - Record the upstream defect with its minimal reproduction in `docs/alpaka-api-map.md` and report it upstream. Verify the workaround with a host probe and on CPU, CUDA, and HIP.
 - Draw positions must not depend on chunk, tile, thread, or scheduling order. The advance cost is small for the bounded per-visit indices in this example; measure it before using larger offsets.
 - Do not implement SplitMix or another graph-local RNG. The prior repository's SplitMix is not carried over.

@@ -7,6 +7,7 @@
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/Status.hpp"
+#include "graphFlow/rng/ParticleRng.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -48,6 +49,21 @@ namespace graphFlow
     namespace detail
     {
         template<typename TFunctor, typename... TArgs>
+        concept CallableWithAcceleratorAndEngineAndStatus = requires(
+            TFunctor const& functor,
+            AcceleratorProbe const& accelerator,
+            rng::Engine& engine,
+            Status& status,
+            TArgs... args) { functor(accelerator, engine, status, args...); };
+
+        template<typename TFunctor, typename... TArgs>
+        concept CallableWithAcceleratorAndEngine = requires(
+            TFunctor const& functor,
+            AcceleratorProbe const& accelerator,
+            rng::Engine& engine,
+            TArgs... args) { functor(accelerator, engine, args...); };
+
+        template<typename TFunctor, typename... TArgs>
         concept CallableWithAccelerator
             = requires(TFunctor const& functor, AcceleratorProbe const& accelerator, TArgs... args) {
                   functor(accelerator, args...);
@@ -72,7 +88,13 @@ namespace graphFlow
         template<typename TFunctor, typename... TArgs>
         constexpr auto functorResultIdentity()
         {
-            if constexpr(CallableWithAcceleratorAndStatus<TFunctor, TArgs...>)
+            if constexpr(CallableWithAcceleratorAndEngineAndStatus<TFunctor, TArgs...>)
+                return std::type_identity<
+                    std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, rng::Engine&, Status&, TArgs...>>{};
+            else if constexpr(CallableWithAcceleratorAndEngine<TFunctor, TArgs...>)
+                return std::type_identity<
+                    std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, rng::Engine&, TArgs...>>{};
+            else if constexpr(CallableWithAcceleratorAndStatus<TFunctor, TArgs...>)
                 return std::type_identity<
                     std::invoke_result_t<TFunctor const&, AcceleratorProbe const&, Status&, TArgs...>>{};
             else if constexpr(CallableWithAccelerator<TFunctor, TArgs...>)
@@ -89,7 +111,9 @@ namespace graphFlow
         /** A public functor may take the accelerator, a `Status&`, both, or neither. */
         template<typename TFunctor, typename... TArgs>
         concept OptionalContextInvocable
-            = CallableWithAcceleratorAndStatus<TFunctor, TArgs...> || CallableWithAccelerator<TFunctor, TArgs...>
+            = CallableWithAcceleratorAndEngineAndStatus<TFunctor, TArgs...>
+              || CallableWithAcceleratorAndEngine<TFunctor, TArgs...>
+              || CallableWithAcceleratorAndStatus<TFunctor, TArgs...> || CallableWithAccelerator<TFunctor, TArgs...>
               || CallableWithStatus<TFunctor, TArgs...> || std::invocable<TFunctor const&, TArgs...>;
     } // namespace detail
 

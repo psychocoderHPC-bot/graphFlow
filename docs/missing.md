@@ -8,11 +8,12 @@ This is the complete list of work still required to finish the plan in
 repository state, not on the intended final state.
 
 Current state at integrated main
-`ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T5):
+`61c877a1f6f9afde716dfe028ad193d97ec7c772` (RNG API change):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
-  Current `rosi_v100` results: CPU CTest **194/194 passed** (OMP=ON Release);
+  Current `rosi_v100` results: CPU CTest **193/193 passed** at the RNG API
+  change (OMP=ON Release, pedantic);
   CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. CUDA V100
   `sm_70` is **blocked** by an nvcc 12.6.85 ICE at
   `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed. The
@@ -29,8 +30,8 @@ Current state at integrated main
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
-  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 194/194 with
-  OMP=ON. The previous multi-region pathology is not observed on `rosi_v100`.
+  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 193/193 with
+  OMP=ON at the RNG API change. The previous multi-region pathology is not observed on `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
   no final H100 claim is made. H100 remains blocked/preliminary.
@@ -47,7 +48,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 194/194 (OMP=ON Release), and the `rosi_v100`
+  `rosi_v100` CPU CTest passes 193/193 at the RNG API change (OMP=ON
+  Release), and the `rosi_v100`
   CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
@@ -126,6 +128,17 @@ resource or decision is missing.
 
 ## 3. Example, RNG, and end-to-end tests
 
+- [x] **P0: RNG API ([issue #25](https://github.com/psychocoderHPC-bot/graphFlow/issues/25)).** `graphFlow::rng::Engine` and
+  `makeEngine(baseSeed, id, event, purpose)` construct a zero-offset
+  `Philox4x32x10` from a bijective packed key. Flow injects the initialized
+  engine into opting-in source, classifier, updater, transform, and sink
+  functors through `if constexpr`, so existing signatures keep working. The
+  public offset/purpose helpers and the photon `openUniform` conversion are
+  removed; floating-point draws use `UniformReal` and integer decisions use the
+  engine output. The independent scalar oracles use the same mapping without
+  the production header. Fixed-seed particle and photon baselines changed once
+  at this commit. V100 CUDA remains blocked by the nvcc 12.6 ICE, so no new CUDA
+  count is claimed.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
   `N=0,1,17,127,128,4097` crossed with `C=1,31,127,128` (24 cases per backend)
@@ -289,7 +302,7 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
-  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 194/194
+  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 193/193
   (OMP=ON); the `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc
   12.6.85 ICE.
 - [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
@@ -298,7 +311,7 @@ These are not missing work; the plan excludes them from v1:
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.
 - [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
-  histograms. The `rosi_v100` CPU CTest passes 194/194; the `rosi_v100`
+  histograms. The `rosi_v100` CPU CTest passes 193/193; the `rosi_v100`
   33-invocation baseline comparison is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
   `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times

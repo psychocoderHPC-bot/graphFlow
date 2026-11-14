@@ -35,6 +35,7 @@ namespace graphFlow::particle
     inline graphFlow::Tuning tuningOf(Parameters const& parameters)
     {
         graphFlow::Tuning tuning;
+        tuning.seed = parameters.seed;
         tuning.chunkCapacity = parameters.chunkSize;
         if(parameters.liveParticles != 0u)
             tuning.liveParticles = parameters.liveParticles;

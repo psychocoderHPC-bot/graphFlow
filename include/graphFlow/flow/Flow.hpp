@@ -100,14 +100,16 @@ namespace graphFlow
                 throw std::logic_error{"graphFlow: a Flow has exactly one source node"};
 
             auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
-            StageFactory makeStage =
-                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            StageFactory makeStage
+                = [functorPtr](TDevice const& device, TStorage& storage, Config const& config, std::uint32_t purpose)
+                -> std::unique_ptr<Stage>
             {
                 return std::make_unique<detail::SourceStage<TDevice, TStorage, TPayload, TFunctor>>(
                     device,
                     storage,
                     config,
-                    *functorPtr);
+                    *functorPtr,
+                    purpose);
             };
             auto const key
                 = appendNode(std::move(name), NodeRole::source, 1u, functorPtr, nullptr, std::move(makeStage));
@@ -125,16 +127,19 @@ namespace graphFlow
             constexpr std::uint32_t bins = static_cast<std::uint32_t>(TClassifier::maxBins);
             auto classifierPtr = std::make_shared<TClassifier>(std::move(classifier));
             auto updatePtr = std::make_shared<TUpdate>(std::move(update));
-            StageFactory makeStage
-                = [classifierPtr,
-                   updatePtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            StageFactory makeStage = [classifierPtr, updatePtr](
+                                         TDevice const& device,
+                                         TStorage& storage,
+                                         Config const& config,
+                                         std::uint32_t purpose) -> std::unique_ptr<Stage>
             {
                 return std::make_unique<detail::PartitionStage<TDevice, TStorage, TPayload, TClassifier, TUpdate>>(
                     device,
                     storage,
                     config,
                     *classifierPtr,
-                    *updatePtr);
+                    *updatePtr,
+                    purpose);
             };
             auto const key = appendNode(
                 std::move(name),
@@ -157,14 +162,16 @@ namespace graphFlow
         TransformHandle transform(std::string name, TFunctor functor)
         {
             auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
-            StageFactory makeStage =
-                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            StageFactory makeStage
+                = [functorPtr](TDevice const& device, TStorage& storage, Config const& config, std::uint32_t purpose)
+                -> std::unique_ptr<Stage>
             {
                 return std::make_unique<detail::TransformStage<TDevice, TStorage, TPayload, TFunctor>>(
                     device,
                     storage,
                     config,
-                    *functorPtr);
+                    *functorPtr,
+                    purpose);
             };
             auto const key
                 = appendNode(std::move(name), NodeRole::transform, 1u, functorPtr, nullptr, std::move(makeStage));
@@ -177,14 +184,16 @@ namespace graphFlow
         NodeHandle sink(std::string name, TFunctor functor)
         {
             auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
-            StageFactory makeStage =
-                [functorPtr](TDevice const& device, TStorage& storage, Config const& config) -> std::unique_ptr<Stage>
+            StageFactory makeStage
+                = [functorPtr](TDevice const& device, TStorage& storage, Config const& config, std::uint32_t purpose)
+                -> std::unique_ptr<Stage>
             {
                 return std::make_unique<detail::SinkStage<TDevice, TStorage, TPayload, TFunctor>>(
                     device,
                     storage,
                     config,
-                    *functorPtr);
+                    *functorPtr,
+                    purpose);
             };
             auto const key
                 = appendNode(std::move(name), NodeRole::sink, 0u, functorPtr, nullptr, std::move(makeStage));
@@ -225,15 +234,22 @@ namespace graphFlow
         Stats run(NodeHandle const& source, std::uint64_t itemCount)
         {
             validateForRun(source);
+            if(itemCount != 0u && itemCount - 1u > rng::maxStreamId)
+                throw std::overflow_error{"graphFlow: item count exceeds the 32 bit RNG stream-id range"};
 
             Config const config = resolveConfig(itemCount);
 
             auto storage = std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
             std::vector<std::unique_ptr<Stage>> stages;
             stages.reserve(m_nodes.size());
-            for(NodeRecord const& node : m_nodes)
+            for(std::size_t key = 0u; key < m_nodes.size(); ++key)
             {
-                std::unique_ptr<Stage> stage = node.makeStage(m_device, *storage, config);
+                NodeRecord const& node = m_nodes[key];
+                std::unique_ptr<Stage> stage = node.makeStage(
+                    m_device,
+                    *storage,
+                    config,
+                    rng::streamPurposeForNode(static_cast<std::uint64_t>(key)));
                 if(!stage)
                     throw std::logic_error{"graphFlow: a registered node has no typed execution stage"};
                 stages.push_back(std::move(stage));
@@ -283,7 +299,8 @@ namespace graphFlow
         static constexpr NodeId invalidRoute = std::numeric_limits<NodeId>::max();
 
         using Stage = detail::StageBase<TDevice, TStorage>;
-        using StageFactory = std::function<std::unique_ptr<Stage>(TDevice const&, TStorage&, Config const&)>;
+        using StageFactory
+            = std::function<std::unique_ptr<Stage>(TDevice const&, TStorage&, Config const&, std::uint32_t)>;
 
         struct NodeRecord
         {
@@ -314,6 +331,8 @@ namespace graphFlow
             ensureOwner();
             if(m_nodes.size() >= static_cast<std::size_t>(std::numeric_limits<NodeId>::max()))
                 throw std::overflow_error{"graphFlow: graph node count exceeds the 32-bit node id range"};
+            if(rng::streamPurposeForNode(static_cast<std::uint64_t>(m_nodes.size()), 1u) > rng::maxStreamPurpose)
+                throw std::overflow_error{"graphFlow: graph node count exceeds the RNG stream-purpose range"};
 
             std::vector<NodeId> routes;
             if(role != NodeRole::sink)
@@ -472,6 +491,7 @@ namespace graphFlow
             Config config;
             config.numParticles = itemCount;
             config.maxBins = bins;
+            config.seed = m_tuning.seed;
             config.batchChunks = m_tuning.batchChunks.value_or(1u);
             config.frameCap = m_tuning.frameCap.value_or(defaultFrameCap);
             config.chunkCapacity = m_tuning.chunkCapacity.value_or(config.chunkCapacity);

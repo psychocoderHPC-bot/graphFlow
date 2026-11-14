@@ -15,12 +15,14 @@ namespace graphFlow
     /** Source kernel: materialise `fill` fresh particles into one chunk.
      *
      * The particle id is `firstId + i`, independent of the chunk index, the tile, the thread and
-     * the scheduling order. `property` is the Philox draw at offset 0; `weight` and `visit` start at
-     * zero. The kernel writes every field it owns, so the chunk needs no host-side initialisation.
+     * the scheduling order. `property` is the first output of the source engine; `weight` and
+     * `visit` start at zero. The kernel writes every field it owns, so the chunk needs no host-side
+     * initialisation.
      */
     struct GenerateKernel
     {
         std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -38,7 +40,8 @@ namespace graphFlow
                 std::uint32_t const slot = base + i;
                 std::uint64_t const id = firstId + i;
                 ids[slot] = id;
-                properties[slot] = rng::propertyDraw(seed, id);
+                rng::Engine engine = rng::makeEngine(seed, id, 0u, purpose);
+                properties[slot] = engine();
                 weights[slot] = 0u;
                 visits[slot] = 0u;
             }

@@ -4,10 +4,44 @@
 # Numerics
 
 The particle example is integer-only. The photon example is floating-point.
-Random draws come from the public `alpaka::rand::engine::Philox4x32x10`
-(RNG4); there is no project RNG algorithm. The draw position is key-based: it
-depends only on seed, item id, visit, and purpose, so batching and scatter
-order do not change the draws.
+Random draws use the public `alpaka::rand::engine::Philox4x32x10`; graphFlow
+does not implement an RNG algorithm. graphFlow builds one initialized engine
+per logical `(id, event, purpose)` position and passes it to an opting-in
+functor. The functor never receives a seed, an offset, or a purpose count.
+
+## Stream initialization
+
+The root seed comes from `--seed` and is stored in `Tuning::seed`. graphFlow
+derives every item stream from that seed and a packed logical position:
+
+```text
+packed = id[31:0] | event[15:0] << 32 | purpose[15:0] << 48
+key    = mix64(packed ^ mix64(baseSeed))
+engine = Philox4x32x10(key, subsequence = 0, offset = 0)
+```
+
+`mix64` is the SplitMix64 finalizer: three xor-shift permutations and two odd
+64-bit multiplications. Every step is invertible, so `packed -> key` is a
+bijection for a fixed base seed. The engine is always constructed with
+subsequence and offset zero. That avoids the pinned constructor-offset defect
+below and needs no `O(event)` advance loop.
+
+`id` is the logical item index (particle id or photon id) and must be unique
+within a run. `event` is the particle visit or the photon scatter count.
+`purpose` is internal: Flow assigns `2 * nodeKey` to a node functor and
+`2 * nodeKey + 1` to an optional partition updater. Registration order is part
+of the reproducibility contract; users do not choose purposes.
+
+Streams are disjoint when `(id, event, purpose)` differs. They do not depend on
+chunk, tile, thread, batch, backend, or scheduling order, so a change to `Q` or
+`C` cannot change a draw. Reclassified, capped, or retried items keep their
+`(id, event)` position and a different stage purpose, so they cannot advance
+another item's stream.
+
+Limits are explicit: 32 bits for the id, 16 bits for the event, and 16 bits for
+the purpose. `checkedStreamKey()` rejects an out-of-range position on the host;
+`makeEngine()` asserts the same precondition on the device. The particle and
+photon examples validate their visit/scatter caps against the event range.
 
 ## Philox constructor-offset defect
 
@@ -18,57 +52,53 @@ constructor offset path:
   `advanceState()` resets the position to zero.
 - `skip4()` derives carry words from `counter[0] < temp[1]` and
   `counter[0] < temp[2]` instead of the corresponding counter words.
-- The remainder `offset % 4` is discarded.
+- With a nonzero subsequence, even `skip4(0)` changes counter word 3.
 
-As a result, `Philox4x32x10(seed, subsequence, offset)` is not equivalent to
-advancing a fresh engine by `offset` draws. With a nonzero subsequence even
-`skip4(0)` changes counter word 3, so a multiple-of-four offset is not safe
-either.
+graphFlow therefore never passes a nonzero subsequence or offset. The packed
+key carries the complete logical position and the engine starts at its first
+output. `tests/unit/test_philox.cpp` pins the keyed construction, the uniqueness
+of packed keys, the limits, and the zero-offset equivalence.
 
-The project workaround is `graphFlow::rng::drawAt` in
-`include/graphFlow/rng/ParticleRng.hpp`:
+## Stream positions and draw order
 
-1. Construct `Philox4x32x10(seed, particleId, 0)`.
-2. Call the engine once for the first output.
-3. Call it `offset` more times.
-4. Return the last value.
-
-The draw position is key-based. It depends only on `(seed, particleId, offset)`
-and not on chunk, tile, thread, batch, backend, or scheduling order. The public
-engine stays the only RNG implementation. The workaround is pinned by
-`tests/unit/test_philox.cpp`.
-
-## Draw offsets
-
-The particle mapping reserves `purposesPerVisit = 3` draws per visit; the
-photon mapping reserves four independent draws per completed scatter count.
-
-| Draw | Offset |
+| Draw | Stream position |
 | --- | --- |
-| Property (particle) | `0` |
-| Filter at visit `v` | `4 * (1 + 3*v + 0)` |
-| Process A at visit `v` | `4 * (1 + 3*v + 1)` |
-| Process B at visit `v` | `4 * (1 + 3*v + 2)` |
-| Photon flight, kind, cosine, azimuth | `4 * (1 + 4*visit + purpose)` for purposes 0 through 3 |
+| Particle property | `(id, event 0, source purpose)` |
+| Filter at visit `v` | `(id, v, filter purpose)` |
+| Process A at visit `v` | `(id, v, A purpose)` |
+| Process B at visit `v` | `(id, v, B purpose)` |
+| Photon flight and collision kind | `(id, scatterCount, flight purpose)`, two consecutive draws |
+| Photon cosine and azimuth | `(id, scatterCount, scatter purpose)`, two consecutive draws |
 
-Each decision owns a block of four 32-bit outputs. The property draw uses offset
-zero and the decision blocks start at offset four, so the ranges never overlap.
-`graphFlow::rng::decisionOffset(visit, purpose, purposesPerVisit)` implements
-the mapping.
+The particle property and the Filter decision are separate engines, so they
+cannot alias even though both are the first draw of their stream. Photon flight
+uses `UniformReal<double, interval::CO>`; the exponential sample uses `1 - U`
+so `log` receives a positive value. The collision kind uses a second `[0, 1)`
+draw from the same propose-stage engine. Isotropic scattering maps a `[0, 1)`
+cosine draw to `2U - 1` and uses a second `[0, 1)` draw for the azimuth. No
+matrix is shared between items or stages.
 
-`tests/reference/ScalarModel.hpp` does not include the production RNG header. It
-constructs the engine at offset zero, advances locally, and applies the same
-formula. `tests/unit/test_philox.cpp` pins literal draws for
-`(seed=42, id=7, visit, purpose)`, so a shared offset mistake cannot hide behind
-the oracle.
+`tests/reference/ScalarModel.hpp` and `tests/reference/ScalarTransport.hpp` do
+not include the production RNG header. They re-implement the packing and mixer
+and construct their own zero-offset engines. `tests/unit/test_philox.cpp` pins
+literal keyed outputs for `(seed=42, id=7, event, purpose)`, so a shared mapping
+mistake cannot hide behind the oracle.
+
+## Baseline change
+
+The engine-based streams replace the old `4 * (1 + 3 * visit + purpose)`
+Philox offset map and the photon midpoint word conversion. Fixed-seed particle
+weights, photon outcomes, and histograms therefore change once. The new
+baselines are the values produced at the RNG API change; tests compare against
+the independent oracle and no longer pin the old offset literals.
 
 ## Integer decisions
 
 ```text
-Generate: property = draw(seed, id, 0)
-Filter:   draw(seed, id, visit, Filter) >= property ? bin 1 : bin 0
-A:        draw(seed, id, visit, A) >= 0x80000000 ? weight += 1000, visit += 1, feedback
-B:        draw(seed, id, visit, B) >= 0x80000000 ? weight += 1,    visit += 1, feedback
+Generate: property = engine(id, 0, source)()
+Filter:   engine(id, visit, filter)() >= property ? bin 1 : bin 0
+A:        engine(id, visit, A)() >= 0x80000000 ? weight += 1000, visit += 1, feedback
+B:        engine(id, visit, B)() >= 0x80000000 ? weight += 1,    visit += 1, feedback
 ```
 
 Every comparison is on `uint32_t`. There are no floating-point thresholds and

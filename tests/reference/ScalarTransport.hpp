@@ -17,11 +17,44 @@ namespace graphFlow::test
     /** Independent scalar photon-transport oracle.
      *
      * The oracle deliberately does not include the example headers or `graphFlow/rng`. It
-     * re-implements the four-purpose offset formula, the open-interval uniform and the entire
-     * transport loop as a plain host loop with its own Philox wrapper.
+     * re-implements the packed `(id, event, purpose)` key, constructs its own zero-offset engines,
+     * and runs the entire transport loop as a plain host loop. Floating-point draws use the alpaka
+     * distributions; there is no local word-to-float conversion.
      */
     namespace scalarTransport
     {
+        using Engine = alpaka::rand::engine::Philox4x32x10;
+
+        /** Internal Flow purposes: node 1 is the flight transform, node 3 the scatter transform. */
+        inline constexpr std::uint32_t purposeFlight = 2u;
+        inline constexpr std::uint32_t purposeScatter = 6u;
+
+        inline constexpr std::uint64_t idMask = 0xFFFF'FFFFull;
+        inline constexpr std::uint64_t eventMask = 0xFFFFull;
+        inline constexpr std::uint32_t purposeMask = 0xFFFFu;
+
+        inline constexpr std::uint64_t mix(std::uint64_t value)
+        {
+            value ^= value >> 30u;
+            value *= 0xBF58'476D'1CE4'E5B9ull;
+            value ^= value >> 27u;
+            value *= 0x94D0'49BB'1331'11EBull;
+            value ^= value >> 31u;
+            return value;
+        }
+
+        inline constexpr std::uint64_t packed(std::uint64_t id, std::uint64_t event, std::uint32_t purpose)
+        {
+            return (id & idMask) | ((event & eventMask) << 32u)
+                   | (static_cast<std::uint64_t>(purpose & purposeMask) << 48u);
+        }
+
+        inline Engine engineFor(std::uint64_t seed, std::uint64_t id, std::uint32_t event, std::uint32_t purpose)
+        {
+            std::uint64_t const key = mix(packed(id, event, purpose) ^ mix(seed));
+            return Engine{key, 0u, 0u};
+        }
+
         enum ScalarEvent : std::uint32_t
         {
             scatter = 0u,
@@ -30,41 +63,6 @@ namespace graphFlow::test
             absorbed = 3u,
             capped = 4u
         };
-
-        inline constexpr std::uint32_t purposeFlight = 0u;
-        inline constexpr std::uint32_t purposeCollisionKind = 1u;
-        inline constexpr std::uint32_t purposeCosine = 2u;
-        inline constexpr std::uint32_t purposeAzimuth = 3u;
-        inline constexpr std::uint32_t purposesPerVisit = 4u;
-
-        inline std::uint64_t decisionOffset(std::uint32_t visit, std::uint32_t purpose)
-        {
-            return 4ull
-                * (1ull + static_cast<std::uint64_t>(purposesPerVisit) * visit + purpose);
-        }
-
-        inline std::uint32_t drawAt(std::uint64_t seed, std::uint64_t id, std::uint64_t offset)
-        {
-            alpaka::rand::engine::Philox4x32x10 engine(seed, id, 0u);
-            std::uint32_t value = engine();
-            for(std::uint64_t i = 0u; i < offset; ++i)
-                value = engine();
-            return value;
-        }
-
-        inline std::uint32_t draw(
-            std::uint64_t seed,
-            std::uint64_t id,
-            std::uint32_t visit,
-            std::uint32_t purpose)
-        {
-            return drawAt(seed, id, decisionOffset(visit, purpose));
-        }
-
-        inline double openUniform(std::uint32_t word)
-        {
-            return (static_cast<double>(word) + 0.5) * (1.0 / 4294967296.0);
-        }
 
         struct ScalarTerminal
         {
@@ -146,77 +144,46 @@ namespace graphFlow::test
                         x += faceDistance * ux;
                         y += faceDistance * uy;
                         z = faceEvent == transmitted ? thickness : 0.0;
-                        terminal = ScalarTerminal{
-                            faceEvent,
-                            scatterCount,
-                            x,
-                            y,
-                            z,
-                            ux,
-                            uy,
-                            uz};
+                        terminal = ScalarTerminal{faceEvent, scatterCount, x, y, z, ux, uy, uz};
                         break;
                     }
 
-                    double const flightWord
-                        = openUniform(draw(seed, id, scatterCount, purposeFlight));
-                    double const sampledDistance = -std::log(flightWord) / total;
+                    Engine flightEngine = engineFor(seed, id, scatterCount, purposeFlight);
+                    double const flightUniform = 1.0 - alpaka::rand::distribution::UniformReal<double>{}(flightEngine);
+                    double const kindUniform = alpaka::rand::distribution::UniformReal<double>{}(flightEngine);
+                    if(flightUniform <= 0.0)
+                        throw std::runtime_error{"scalar transport: non-positive flight uniform"};
+                    double const sampledDistance = -std::log(flightUniform) / total;
                     if(faceReachable && faceDistance <= sampledDistance)
                     {
                         x += faceDistance * ux;
                         y += faceDistance * uy;
                         z = faceEvent == transmitted ? thickness : 0.0;
-                        terminal = ScalarTerminal{
-                            faceEvent,
-                            scatterCount,
-                            x,
-                            y,
-                            z,
-                            ux,
-                            uy,
-                            uz};
+                        terminal = ScalarTerminal{faceEvent, scatterCount, x, y, z, ux, uy, uz};
                         break;
                     }
 
-                    double const kindWord
-                        = openUniform(draw(seed, id, scatterCount, purposeCollisionKind));
-                    bool const scatters = kindWord < sigmaS / total;
+                    bool const scatters = kindUniform < sigmaS / total;
                     x += sampledDistance * ux;
                     y += sampledDistance * uy;
                     z += sampledDistance * uz;
                     if(!scatters)
                     {
-                        terminal = ScalarTerminal{
-                            absorbed,
-                            scatterCount,
-                            x,
-                            y,
-                            z,
-                            ux,
-                            uy,
-                            uz};
+                        terminal = ScalarTerminal{absorbed, scatterCount, x, y, z, ux, uy, uz};
                         break;
                     }
                     if(scatterCount >= maxScatters)
                     {
-                        terminal = ScalarTerminal{
-                            capped,
-                            scatterCount,
-                            x,
-                            y,
-                            z,
-                            ux,
-                            uy,
-                            uz};
+                        terminal = ScalarTerminal{capped, scatterCount, x, y, z, ux, uy, uz};
                         break;
                     }
 
                     if(isotropic)
                     {
-                        double const mu
-                            = 2.0 * openUniform(draw(seed, id, scatterCount, purposeCosine)) - 1.0;
+                        Engine scatterEngine = engineFor(seed, id, scatterCount, purposeScatter);
+                        double const mu = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(scatterEngine) -1.0;
                         double const phi = 2.0 * 3.141592653589793238462643383279502884
-                                           * openUniform(draw(seed, id, scatterCount, purposeAzimuth));
+                                           * alpaka::rand::distribution::UniformReal<double>{}(scatterEngine);
                         double const transverse = std::sqrt(std::max(0.0, 1.0 - mu * mu));
                         ux = transverse * std::cos(phi);
                         uy = transverse * std::sin(phi);

@@ -40,7 +40,8 @@ device-run evidence for the full particle path.
 | Shared memory | `declareSharedVar`, `declareSharedMdArray`, `getDynSharedMem`, `syncBlockThreads` | `onAcc/Acc.hpp:132-200`, `mem/MdSpanArray.hpp:45-218` | `onAcc::declareSharedMdArray<uint32_t, uniqueId()>(acc, CVec<uint32_t, B>{})`, `onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(acc, CVec<uint32_t, 2*T>{})`, `onAcc::declareSharedVar<uint32_t, uniqueId()>(acc)`, `onAcc::syncBlockThreads(acc)` | CPU tests; CUDA example dense path; HIP compiles | `declareSharedMdArray` is used with `uint32_t` and with the trivially copyable `HashBinEntry` struct. The hash table is a compile-time-sized array (`2*T`, optionally `4*T`) and is reinitialised by the block. Dynamic shared memory is available but not used for this fixed size; the dense path keeps its three `B`-word tables. |
 | Warp and intrinsics | `warp::ballot`, `any`, `all`, `activemask`, `shfl`, `getSize`; `popcount`, `ffs`, `clz` | `onAcc/warp.hpp:32-131`, `onAcc/intrinsic.hpp:17-46` | **Not used** | n/a | The dense and hash paths need no ballot, shuffle, or warp-level scan. No control decision uses `shfl`, and nothing hardcodes a warp size. A future small-dense-bin optimization must use `warp::getSize(acc)` and the ballot return type instead of assuming 32. |
 | Hash table | `atomicCas`, `atomicAdd`, `scope::Block`, `scope::Device`, `declareSharedMdArray` | `graphFlow/graph/BinTable.hpp`, `HashClassifyKernel.hpp`, `HashScatterKernel.hpp`; alpaka `onAcc/atomic.hpp:25-190`, `onAcc/Acc.hpp:132-200` | `HashBinTable<T, factor>` with `nextPowerOfTwo(factor*T)` entries; `atomicCas` insert, `atomicAdd` count, linear probing, per-entry `base`/`localRank` | CPU integration tests; CUDA/HIP compile only for the hash path | No alpaka hash container exists. The project table avoids a sort or scan. The default factor is 2 (`2*T` entries); the factor is a measurement knob. A full table is a hard batch error. The example uses the dense path, so no accelerator hash execution is recorded. |
-| RNG | `Philox4x32x10`, `PhiloxSingle`, `skip`, `advanceState` | `rand/engine/philox/philox.hpp:31-75`, `PhiloxSingle.hpp:60-140`, `PhiloxBaseCommon.hpp:55-90` | `alpaka::rand::engine::Philox4x32x10(seed, subsequence, offset)` and `operator()` | CPU tests; CUDA example; HIP compiles | `graphFlow::rng::drawAt` constructs at offset zero and advances, because the constructor offset is not equivalent to advancing (see below). No project RNG algorithm. |
+| RNG engine | `Philox4x32x10`, `operator()` | `rand/engine/philox/philox.hpp:31-75`, `PhiloxSingle.hpp:60-140`, `PhiloxBaseCommon.hpp:55-90` | `alpaka::rand::engine::Philox4x32x10(key, 0, 0)` and `operator()` | CPU tests; CUDA example; HIP compiles | `graphFlow::rng::makeEngine` packs `(id, event, purpose)` into the engine key and never passes a nonzero subsequence or offset, avoiding the pinned constructor-offset defect. No project RNG algorithm. |
+| RNG distributions | `UniformReal`, `NormalReal`, `interval::CO` | `rand/distribution/UniformReal.hpp`, `NormalReal.hpp`, `interval.hpp` | `alpaka::rand::distribution::UniformReal<double>{}(engine)`; integer decisions use `engine()` | CPU tests; CUDA example; HIP compiles | Photon flight and angular draws use the alpaka distributions. The exponential sample maps the `[0, 1)` draw with `1 - U` instead of a local word-to-float conversion. `NormalReal` keeps Box-Muller state, so each use owns a local object. |
 | Device properties and policy | `multiProcessorCount`, `warpSize`, `sharedMemPerBlockBytes`, `maxThreadsPerBlock`, `maxBlocksPerGrid`, `globalMemCapacityBytes` | `onHost/DeviceProperties.hpp:36-81` | `DeviceProperties` fields; `graphFlow::makeDevicePolicy`; CLI resolution in `examples/particle_feedback/Cli.hpp` | CPU unit tests; CUDA/HIP compile | The policy derives `C`, `P`, and `T` from the device, caps the payload budget, and preserves explicit overrides. Project code is needed because alpaka exposes the properties but no chunk, working-set, or occupancy policy; the wave estimate uses `targetBlocksPerSm` as a knob. The CLI wires policy defaults and overrides into the example. |
 | Host element-wise algorithms | `transform`, `concurrent`, `LinearizedIdxGenerator` | `onHost/algo/transform.hpp`, `onHost/algo/concurrent.hpp`, `mem/LinearizedIdxGenerator.hpp` | **Evaluated, not used** for Generate, Sink, classify, and scatter | n/a | `transform` writes one output per launch. `concurrent` can write several SoA outputs, but Generate also needs a per-lane key-based Philox draw, and the typed stage already shares one `FrameSpec` launch with the batch descriptor mapping. Sink is an id-indexed gather, not an element-wise map. Classify and scatter need per-block shared memory, block/device atomics, and uniform block barriers, so an element-wise algorithm cannot express them. The typed kernels stay. |
 | In-kernel scan/sort | `scan`, `reduce`, `sort` | `onHost/algo/scan.hpp`, `onHost/algo/reduce.hpp` | **Not used** | n/a | These enqueue kernels; they are not in-kernel collectives. The dense path and the large-bin hash path need no in-kernel scan and no sort: the hash path groups by linear probing with `atomicCas` and reserves contiguous ranges with `atomicAdd`. Any future device-side stable grouping is project code. |
@@ -57,7 +58,7 @@ device-run evidence for the full particle path.
 | `Batch`, `batchChunks`, `TileDescriptor`, adaptive prefix | alpaka3 has no multi-chunk batch scheduler or compact tile descriptor. The project flattens a batch into one descriptor list and one classify/scatter pair. |
 | `PoolBudget`, `payloadBytesPerSlot`, `validatePayloadBudget` | alpaka3 has no pool or working-set budget policy. The project checks `S*C*payloadBytesPerSlot` before allocation. |
 | `QueueProbe` / `probeQueueIndependence` | alpaka does not promise independent queues. The probe records the platform verdict; correctness never depends on it. |
-| `rng::decisionOffset`, `drawAt` | Encodes the particle-id to Philox-offset mapping and normalises the pinned constructor-offset behaviour. |
+| `rng::Engine`, `makeEngine`, `StreamTraits`, `checkedStreamKey` | Encodes the logical `(id, event, purpose)` stream mapping, the packed-key limits, and the zero-offset engine construction that avoids the pinned constructor-offset defect. |
 | `DenseBinTable`, `HashBinTable`, `HashBinEntry`, `hashInsert`, `hashFind` | Compile-time bin-table policy and the open-addressing helpers used by the large-bin path. |
 | `ClassifyKernel`, `ScatterKernel`, `HashClassifyKernel`, `HashScatterKernel`, `GenerateKernel`, `SinkKernel` | Typed kernels for the graph; they use only alpaka primitives for launch, indexing, atomics, and shared memory. |
 | `DevicePolicy`, `makeDevicePolicy`, `payloadFitsBudget`, CLI resolution | Device-aware `C`/`P`/`T` and memory-budget policy. alpaka exposes the properties but no chunk or working-set policy. |
@@ -70,10 +71,11 @@ device-run evidence for the full particle path.
    `skip4()` compares `counter[0]` against `temp[1]` and `temp[2]` instead of the
    corresponding words. With a nonzero subsequence, `skip4(0)` changes counter
    word 3, so `Philox4x32x10(seed, id, k)()` differs from advancing a fresh
-   engine even when `k` is a multiple of four. `graphFlow::rng::drawAt` composes
-   the public engine instead: construct at offset 0 and call it `offset + 1`
-   times. `tests/unit/test_philox.cpp` pins both the wrapper contract and the
-   observed pinned behaviour.
+   engine even when `k` is a multiple of four. `graphFlow::rng::makeEngine`
+   therefore puts the complete packed position in the key and constructs with
+   subsequence and offset zero. `tests/unit/test_philox.cpp` pins the keyed
+   construction, the packed-key bijection, the limits, and the zero-offset
+   equivalence.
 2. **Frame launch and tile-per-descriptor mapping.** Every launch uses
    `FrameSpec{numFrames, frameExtent}` from `launchPolicy`. On CUDA/HIP
    `numFrames` is the block count and `frameExtent` is `T`; on `api::Host` the
@@ -98,13 +100,13 @@ device-run evidence for the full particle path.
    only serialize and change timing. The probe runs on CPU in
    `tests/unit/test_backend.cpp`; the CUDA example runs it on the A30 and reports
    distinct queues with no observed overlap.
-5. **Philox workaround is verified in both directions.** The production wrapper
-   (`rng::drawAt`) and the scalar oracle (`tests/reference/ScalarModel.hpp`,
-   which does not include the production RNG header) each construct
-   `Philox4x32x10(seed, id, 0)` and advance locally.
-   `tests/unit/test_philox.cpp` pins literal draws for
-   `(seed=42, id=7, visit, purpose)` and compares both implementations, so an
-   offset-mapping defect cannot be shared.
+5. **Key-based streams are verified in both directions.** The production
+   wrapper (`rng::makeEngine`) and the scalar oracles
+   (`tests/reference/ScalarModel.hpp`, `tests/reference/ScalarTransport.hpp`,
+   which do not include the production RNG header) each construct a zero-offset
+   engine from the packed position. `tests/unit/test_philox.cpp` pins literal
+   keyed outputs and compares both implementations, so a mapping defect cannot
+   be shared.
 6. **Bounded pool.** The pool is `S = P + K*R(C)`, not the plan's
    `ceil(P/C) + K*R`. Source admission is gated by the `P`-particle budget and
    caps each source fill at `P - live`, so the number of data-carrying chunks
