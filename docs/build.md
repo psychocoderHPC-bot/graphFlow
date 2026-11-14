@@ -117,7 +117,7 @@ The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
 the particle and photon CLI/output cases for the HIP backend. It passes
-245/245 with 35 HIP cases, measured on `b972eaa` and recorded in
+245/245 with 43 HIP cases, measured on `b972eaa` and recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`.
 
 ```sh
@@ -241,7 +241,7 @@ CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
 The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
-**245/245** with 35 HIP cases, measured on `b972eaa`. The `sm_75` CUDA build still fails with the
+**245/245** with 43 HIP cases, measured on `b972eaa`. The `sm_75` CUDA build still fails with the
 CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`). Format
 and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, the
 `format` job checks clang-format, and the `sanitizers` job runs ASAN+UBSAN over

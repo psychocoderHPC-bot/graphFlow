@@ -31,7 +31,7 @@ results:
 | CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **254/254 passed** |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **247/247 passed** (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
-| HIP CTest on `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm 7.2, Release) | **245/245 passed**; 35 HIP cases, measured on `b972eaa` |
+| HIP CTest on `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm 7.2, Release) | **245/245 passed**; 43 HIP cases, measured on `b972eaa` |
 | CPU OpenMP on `rosi_v100` (passive, `GOMP_SPINCOUNT=0`) | Works; no hangs. `N=1e5`, `C=128`/`P=1024`, `Q=1`: OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s. `N=1e6` OMP=2 Q1 23.71 s, Q8 4.46 s. All sums exact. |
 
 The V100 `sm_70` build is unblocked by the explicit concept-parameter
@@ -89,7 +89,7 @@ historical (pre the final CPU case set).
 | Configuration | Result |
 | --- | --- |
 | HIP CTest (`ROCR_VISIBLE_DEVICES=0`, Release) on `b972eaa` | **245/245 passed** (100%, `ctest.log`) |
-| HIP-tagged cases (ctest `hip` label) | **35**: 8 typed Flow, 24 particle CLI, 3 photon CLI; plus 3 photon output cases |
+| HIP cases | **43**: 8 typed Flow, 24 particle CLI, 10 photon CLI, 1 photon output |
 | `rocprof` v3, particle feedback example | 4,901 GPU kernel dispatches |
 | `rocprof` v3, typed Flow case | passed, 38,266 assertions |
 
@@ -134,7 +134,7 @@ on V100 `sm_70` (CUDA 12.6.85 Release). The `Debug` build was not re-run on
 `rosi_v100` after the seven hash cases, so the measured `Debug` totals are the
 pre-hash **195/195** CPU and **247/247** CUDA, with 202/202 and 254/254 the
 expected (not-yet-re-run) `Debug` totals. HIP on `hal` (RX 7900 XTX
-`gfx1100`, ROCm 7.2) passed **245/245** with 35 HIP cases, measured on
+`gfx1100`, ROCm 7.2) passed **245/245** with 43 HIP cases, measured on
 `b972eaa`. The explicit concept-parameter workaround unblocks the nvcc 12.6.85
 name-hiding ICE; the RNG main is unchanged. The historical CTest totals below
 are from the previous platforms.
@@ -147,7 +147,7 @@ are from the previous platforms.
 | `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **247/247 passed** (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
 | Historical CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the integrated main (T5) |
 | Historical CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the integrated main (T5) |
-| HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **245/245 passed**; 35 HIP cases (measured on `b972eaa`) |
+| HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **245/245 passed**; 43 HIP cases (measured on `b972eaa`) |
 | Historical HIP compile-only gate (`gfx90a`) | compiled; no AMD device was visible at that revision, so no execution was recorded |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 

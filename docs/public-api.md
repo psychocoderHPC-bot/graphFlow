@@ -161,7 +161,7 @@ seed, offset, or purpose.
 The contract is exercised on CPU, CUDA, and HIP. The HIP build on `hal`
 (AMD Radeon RX 7900 XTX, `gfx1100`, ROCm 7.2) runs 8 typed Flow cases through
 the public `Flow` API, plus the particle and photon example CLI/output cases:
-245/245 CTest with 35 HIP cases, measured on `b972eaa` and recorded in
+245/245 CTest with 43 HIP cases, measured on `b972eaa` and recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`. The typed cases cover the feedback
 matrix,
 partial tails, bounded pools, empty and single runs, the generic POD chain,
@@ -170,7 +170,7 @@ launch, and Q=8 feedback termination. `rocprof` confirms the device kernels.
 
 The public `Flow` API is the dense path; the shared-memory hash path is
 low-level and not a public-API change. The tree-wide format and SPDX sweep
-(T14b) remains open.
+(T14b) has landed and is enforced by the hosted `format` job.
 
 GitHub-hosted HIP builds are compile-only because those runners have no AMD
 GPU, so they are not a runtime result. `hal` reports `sharing=unknown`; the HIP

@@ -30,8 +30,8 @@ path described in [public API contract](docs/public-api.md). CPU, CUDA, and HIP
 execution are validated on real devices. HIP runs on `hal` with an AMD Radeon
 RX 7900 XTX (`gfx1100`) and ROCm 7.2, on `b972eaa3bd778b81f2dca505d3662df710792bd9`
 (HIP runtime merge, PR #35) with `amdclang++` (Clang 22.0.0): **245/245 CTest
-passed** (210 non-HIP cases plus 35 HIP-tagged cases: 8 typed Flow, 24 particle
-CLI, and 3 photon CLI, plus 3 photon output cases), the measured run recorded in
+passed** (202 CPU cases plus 43 HIP cases: 8 typed Flow, 24 particle CLI,
+10 photon CLI, and 1 photon output), the measured run recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`. The earlier HIP runtime total of
 238/238 at `58bb514def3f3c956126ab7c34d0de74a45f679e` is historical.
 GitHub-hosted HIP builds remain compile-only because those runners have no AMD
@@ -89,7 +89,7 @@ and no H100 or fwk394 result is updated here. The CUDA build fails its
 `[cuda]` tests when no NVIDIA GPU is visible. The HIP build adds eight typed
 Flow cases and the particle and photon CLI/output matrix for the HIP backend;
 those cases fail when no AMD GPU is visible. On `hal` with the RX 7900 XTX
-(`gfx1100`, ROCm 7.2), the HIP build passed 245/245 with 35 HIP cases on
+(`gfx1100`, ROCm 7.2), the HIP build passed 245/245 with 43 HIP cases on
 `b972eaa`; the earlier 238/238 at `58bb514` is historical.
 
 The public API is implemented and documented in
@@ -463,7 +463,7 @@ The full design is in [architecture](docs/architecture.md).
   `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
   the host backend uses a unit frame extent.
 - HIP execution is validated on one AMD device: `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2), 245/245 CTest with 35 HIP cases on
+  7900 XTX (`gfx1100`, ROCm 7.2), 245/245 CTest with 43 HIP cases on
   `b972eaa`. Other AMD
   architectures and the hash path are not run on HIP. `hal` reports
   `sharing=unknown`, so there is no HIP performance claim. GitHub-hosted HIP
@@ -484,9 +484,13 @@ The full design is in [architecture](docs/architecture.md).
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
   multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
-   202/202 with OMP=ON in Release and Debug.
-- CUDA V100 `sm_70` on `rosi_v100` passes 254/254 (CUDA 12.6.85 Release and
-  Debug) with the explicit concept-parameter workaround.
+   202/202 with OMP=ON in Release; the `Debug` build was not re-run after the
+   seven hash cases, so the measured `Debug` total is the pre-hash 195/195 and
+   202/202 is the expected (not-yet-re-run) `Debug` total.
+- CUDA V100 `sm_70` on `rosi_v100` passes 254/254 (CUDA 12.6.85 Release) with
+  the explicit concept-parameter workaround; the `Debug` build was not re-run
+  after the seven hash cases, so the measured `Debug` total is the pre-hash
+  247/247 and 254/254 is the expected (not-yet-re-run) `Debug` total.
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both
   builds.

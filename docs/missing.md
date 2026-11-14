@@ -42,7 +42,7 @@ below are the final main values:
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
-  245/245 CTest with 35 HIP cases, measured on `b972eaa`. GitHub-hosted HIP
+  245/245 CTest with 43 HIP cases, measured on `b972eaa`. GitHub-hosted HIP
   remains compile-only
   because those runners have no AMD GPU; the `gfx90a` compile-only gate is
   historical.
@@ -224,7 +224,7 @@ resource or decision is missing.
   GPU and fails when no GPU is visible rather than skipping.
  - [x] **P0: HIP execution gate.** Done at
    `b972eaa3bd778b81f2dca505d3662df710792bd9` on `hal` with an AMD Radeon RX
-   7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 35 HIP cases, plus
+   7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 43 HIP cases, plus
    particle and photon CLI/output cases, measured and recorded in
    `/home/agent/final-hip-b972eaa/ctest.log`. `rocprof` confirms the device
    kernels.
@@ -279,7 +279,7 @@ resource or decision is missing.
 
 - **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
   7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 245/245 with
-  35 HIP cases on `b972eaa`. Other AMD architectures and the AMD `N=1e8`
+  43 HIP cases on `b972eaa`. Other AMD architectures and the AMD `N=1e8`
   acceptance remain
   open; GitHub-hosted HIP stays compile-only.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
@@ -287,11 +287,11 @@ resource or decision is missing.
   is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
   TSAN run.
 - **CI status:** hosted CI is green on final main: CPU 202/202 (Release and
-  Debug) and ASAN+UBSAN Debug 202/202 on the CPU suite; CUDA and HIP jobs are
-  compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. TSAN stays
-  a local/manual check. The CUDA or HIP runtime gate still needs a device host
-  with a known sharing and label configuration; no self-hosted runner is
-  provisioned.
+  Debug) and ASAN+UBSAN Debug 202/202 on the CPU suite; `format` (clang-format
+  20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs are compile-only; no
+  self-hosted runner, SYCL job, or GitLab pipeline. TSAN stays a local/manual
+  check. The CUDA or HIP runtime gate still needs a device host with a known
+  sharing and label configuration; no self-hosted runner is provisioned.
 - **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
   and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
   host with a known sharing and label configuration; no self-hosted runner is
@@ -333,7 +333,7 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
-  XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 35 HIP cases, measured on
+  XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 43 HIP cases, measured on
   `b972eaa`. `rosi_v100` CPU CTest passes 202/202 (OMP=ON Release) and the
   CUDA V100 `sm_70` CTest passes 254/254 (Release) with the explicit
   concept-parameter workaround.

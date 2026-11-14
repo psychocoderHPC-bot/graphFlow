@@ -27,9 +27,9 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The HIP CTest run passes 245/245 with 35 HIP-tagged cases: 8 typed
-Flow cases, 24 particle CLI cases, and 3 photon CLI cases, plus 3 photon output
-cases, measured on `b972eaa` and recorded in
+ROCm 7.2. The HIP CTest run passes 245/245 with 43 HIP cases: 8 typed Flow
+cases, 24 particle CLI cases, 10 photon CLI cases, and 1 photon output case,
+measured on `b972eaa` and recorded in
 `/home/agent/final-hip-b972eaa/ctest.log`. `rocprof` v3 confirms the device
 kernels. GitHub-hosted HIP remains
 compile-only because its runners have no AMD GPU, so no HIP runtime claim is
@@ -177,7 +177,7 @@ is the dense path; the shared-memory hash path is low-level (exercised by the
   workaround; the `Debug` build was not re-run after the seven hash cases
   (measured `Debug` 195/195 CPU, 247/247 CUDA pre-hash; 202/202 and 254/254
   expected but not re-run). The HIP CTest on `hal` (RX 7900 XTX `gfx1100`,
-  ROCm 7.2) passes 245/245 with 35 HIP cases, measured on `b972eaa`.
+  ROCm 7.2) passes 245/245 with 43 HIP cases, measured on `b972eaa`.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - Release builds do not detect corrupted photon payload state per event. Host
