@@ -7,8 +7,11 @@ This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state, not on the intended final state.
 
-Current state at the sm_70 ICE workaround
-`00b6fe0290a7ff4cf8e980eed1c3ba8f7ddefafa` on integrated main
+Current HIP runtime validation is at
+`58bb514def3f3c956126ab7c34d0de74a45f679e` on base
+`25fa0927a4e042f229d43229734f50dce8277954`. The `rosi_v100` CPU/CUDA counts
+below remain at the sm_70 ICE workaround
+`00b6fe0290a7ff4cf8e980eed1c3ba8f7ddefafa` on the earlier main
 `c85bbeeac2b3770a7aacc383daf78dd7f488a32b` (RNG API merge):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
@@ -34,8 +37,10 @@ Current state at the sm_70 ICE workaround
   typed Flow execution), T5 (batching, payload budget, photon scattering),
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
-- HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
-  HIP execution is blocked and no HIP execution is claimed.
+- HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
+  238/238 CTest with 43 HIP cases. GitHub-hosted HIP remains compile-only
+  because those runners have no AMD GPU; the `gfx90a` compile-only gate is
+  historical.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
   `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 195/195 with
   OMP=ON at the sm_70 ICE workaround. The previous multi-region pathology is not observed on `rosi_v100`.
@@ -152,12 +157,12 @@ resource or decision is missing.
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
   `N=0,1,17,127,128,4097` crossed with `C=1,31,127,128` (24 cases per backend)
   with finite timeouts and a failure when the requested backend did not run.
-  A CUDA build adds the same 24 cases for CUDA; HIP cases remain unavailable
-  without an AMD runtime device.
+  A CUDA or HIP build adds the same 24 cases for that backend; the HIP cases
+  run on `hal` with a real AMD GPU.
 - [ ] **P0: automate CPU/CUDA/HIP histogram equality.** The manual `N=1e6`
   CPU/CUDA diff is empty. Make it a test that compares sorted histogram rows for
-  the same `(N, seed, C)` on every compiled backend; add HIP when an AMD device
-  is available.
+  the same `(N, seed, C)` on every compiled backend; HIP is now available on
+  `hal` for the same comparison.
 - [x] **P1: device-dependent default `C`/`P`.** Done (policy PR #11): the
   device-aware policy derives `C`/`P`/`T`, auto-clamps `P` to the usable-memory
   budget, and rejects an explicit over-budget `P`. The example prints the
@@ -181,8 +186,8 @@ resource or decision is missing.
   - TSAN on a host where the runtime mapping check passes;
   - CUDA on a self-hosted A30 runner with `CMAKE_CUDA_ARCHITECTURES=80`,
     environment scrub, and no skipped GPU tests;
-  - HIP compile-only on the current host and HIP execution on an AMD runner when
-    available;
+  - HIP compile-only on GitHub-hosted runners and HIP execution on the AMD
+    `hal` runner;
   - format and `reuse lint` jobs;
   - finite timeouts and artifact upload for logs/JUnit.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
@@ -215,9 +220,13 @@ resource or decision is missing.
 - [x] **P0: CUDA-specific kernel test.** Done (T3):
   `tests/unit/test_cuda_kernel.cpp` runs a real kernel on the selected NVIDIA
   GPU and fails when no GPU is visible rather than skipping.
-- [ ] **P0: HIP execution gate. Blocked.** No AMD runtime device is visible on
-  hal; HIP is compile-only for `gfx90a`. Run the example and the relevant tests
-  on an AMD GPU. Record the GPU model, ROCm version, `gfx` target, and results.
+- [x] **P0: HIP execution gate.** Done at
+  `58bb514def3f3c956126ab7c34d0de74a45f679e` on `hal` with an AMD Radeon RX
+  7900 XTX (`gfx1100`) and ROCm 7.2: 238/238 CTest with 43 HIP cases, plus
+  particle and photon CLI/output cases. `rocprof` confirms the device kernels.
+  Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
+  `N=1e8` acceptance run, and no performance claim while `hal` reports
+  `sharing=unknown`.
 - [ ] **P0: exclusive or repeated acceptance run.** `hal` is shared
   (`sharing=unknown`). JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
   available and exclusive per operator, but its gateway sharing flag is unknown
@@ -264,9 +273,10 @@ resource or decision is missing.
 
 ## 7. Blockers and decisions
 
-- **AMD hardware:** no AMD GPU is visible through `computeMCP_targets`; HIP is
-  compile-only. A real AMD runner is required for the HIP runtime gate and the
-  AMD `N=1e8` acceptance.
+- **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
+  7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 238/238 with
+  43 HIP cases. Other AMD architectures and the AMD `N=1e8` acceptance remain
+  open; GitHub-hosted HIP stays compile-only.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
   is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
@@ -311,12 +321,12 @@ These are not missing work; the plan excludes them from v1:
 ## 9. Completion checklist
 
 - [ ] All P0 items above are implemented and covered by tests.
-- [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
-  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 195/195
-  (OMP=ON) and the CUDA V100 `sm_70` CTest passes 247/247 with the explicit
-  concept-parameter workaround.
-- [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
-  HIP remains blocked by the missing AMD runtime device.
+- [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
+  XTX `gfx1100`, ROCm 7.2) with 238/238 CTest and 43 HIP cases. `rosi_v100`
+  CPU CTest passes 195/195 (OMP=ON) and the CUDA V100 `sm_70` CTest passes
+  247/247 with the explicit concept-parameter workaround.
+- [x] The example CLI is registered in CTest for the full CPU, CUDA, and HIP
+  matrices; the HIP cases run on `hal` with a real AMD GPU.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.

@@ -21,16 +21,22 @@ Documentation:
 
 ## Status
 
-Integrated main: `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T1, T2, T3, T5,
-T7, T13, T14a). The public API is implemented: the typed `Flow<TPayload,
-TDevice, TStorage>` topology, execution, storage, and status path described in
-[public API contract](docs/public-api.md). CPU and CUDA execution are validated
-on the recorded integrated runs. HIP compiles the full tree for `gfx90a` with
-`amdclang++`, but no AMD device is visible, so HIP execution is not claimed.
-JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
-gateway sharing flag is unknown and the recorded run observed external load
-while the client was stale, so it provides only preliminary CUDA evidence and no
-final H100 claim.
+Current main: `25fa0927a4e042f229d43229734f50dce8277954`. The T5 photon
+scattering record is at `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T1, T2,
+T3, T5, T7, T13, T14a). The public API is implemented: the typed
+`Flow<TPayload, TDevice, TStorage>` topology, execution, storage, and status
+path described in [public API contract](docs/public-api.md). CPU, CUDA, and HIP
+execution are validated on real devices. HIP runs on `hal` with an AMD Radeon
+RX 7900 XTX (`gfx1100`) and ROCm 7.2: **238/238 CTest passed**, including **43
+HIP cases** (8 typed Flow cases plus the particle and photon CLI/output cases),
+with `rocprof` recording the GPU kernel dispatches. GitHub-hosted HIP builds
+remain compile-only because those runners have no AMD GPU; no HIP runtime claim
+is made for GitHub CI. `hal` reports `sharing=unknown`, so the HIP run is a
+correctness result, not a performance claim. JURECA `jrc0880.jureca` (4x H100
+PCIe 80GB, SM 9.0) is available, but its gateway sharing flag is unknown and the
+recorded run observed external load while the client was stale, so it provides
+only preliminary CUDA evidence and no final H100 claim. fwk394 and H100 were
+not re-run for the HIP validation.
 
 The runner has one non-blocking queue per node, one in-flight batch per node,
 device-derived `C`/`P`/`T`, up to `Q` ready input chunks per transform batch, a
@@ -73,7 +79,10 @@ fwk394 CPU 194/194 and hal CUDA 246/246, are **historical validation on a
 shared host** (`hal` reports `sharing=unknown`) and are **not the final
 current validation**. CUDA 13.4/`sm_80` was not re-run in this validation,
 and no H100 or fwk394 result is updated here. The CUDA build fails its
-`[cuda]` tests when no NVIDIA GPU is visible.
+`[cuda]` tests when no NVIDIA GPU is visible. The HIP build adds eight typed
+Flow cases and the particle and photon CLI/output matrix for the HIP backend;
+those cases fail when no AMD GPU is visible. On `hal` with the RX 7900 XTX
+(`gfx1100`, ROCm 7.2), the HIP build passed 238/238 with 43 HIP cases.
 
 The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
@@ -146,8 +155,8 @@ tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases
                         CUDA kernel
 tests/integration/     particle example, batching, dense and hash pipelines,
                         scripted fixture, pressure, failure paths, FrameSpec,
-                        generic DAG, typed Flow execution (CPU and CUDA),
-                        photon scattering (CPU and CUDA)
+                        generic DAG, typed Flow execution (CPU, CUDA and HIP),
+                        photon scattering (CPU, CUDA and HIP)
 tests/reference/       scalar oracle with its own Philox mapping
 docs/                  build, architecture, numerics, benchmarks, limitations,
                         API map, plan, acceptance
@@ -175,17 +184,25 @@ cmake --build ./build-cuda -j 14
 ctest --test-dir ./build-cuda --output-on-failure --no-tests=error
 ```
 
-HIP, compile-only for `gfx90a`:
+HIP, AMD Radeon RX 7900 XTX `gfx1100` (runtime; use `gfx90a` only for the
+historical compile-only gate):
 
 ```sh
 cmake -S . -B ./build-hip -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
   -DGRAPHFLOW_ENABLE_HIP=ON -DGRAPHFLOW_ENABLE_OPENMP=OFF \
   -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/amdclang++ \
-  -DCMAKE_HIP_ARCHITECTURES=gfx90a -DCMAKE_PREFIX_PATH=/opt/rocm \
+  -DCMAKE_HIP_ARCHITECTURES=gfx1100 -DCMAKE_PREFIX_PATH=/opt/rocm \
   -Dalpaka_DEP_OMP=OFF
 cmake --build ./build-hip -j 14
+ROCR_VISIBLE_DEVICES=0 ctest --test-dir ./build-hip \
+  --output-on-failure --no-tests=error
 ```
+
+GitHub-hosted runners have no AMD GPU, so a HIP build there is compile-only.
+The HIP runtime cases are registered for `GRAPHFLOW_ENABLE_HIP` and fail when
+no AMD device is visible; do not treat a compile-only GitHub run as a HIP
+runtime result.
 
 CUDA and HIP cannot be enabled in the same build. The CPU backend stays enabled
 in accelerator builds. Catch2 3.4.0 must be visible to `find_package`. The exact
@@ -308,11 +325,12 @@ terminal photon to `exits.csv` only for transmitted and reflected outcomes.
 Larger statistical diagnostics (`N=200000` forward and `N=100000` isotropic)
 are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
-`ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
-claimed runtime. CUDA execution was historically validated on `hal` with
-`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build passes 247/247 with the
-explicit concept-parameter workaround. CUDA 13.4/`sm_80` was not re-run in
-this validation.
+`ctest --test-dir <build> -L diagnostics` to opt in. HIP execution is validated
+on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2): the HIP photon CLI and
+output cases are part of the 43 HIP cases in the 238/238 CTest run. CUDA
+execution was historically validated on `hal` with `sm_80`; the `rosi_v100`
+CUDA V100 `sm_70` build passes 247/247 with the explicit concept-parameter
+workaround. CUDA 13.4/`sm_80` was not re-run in this validation.
 
 ## Semantics
 
@@ -432,9 +450,11 @@ The full design is in [architecture](docs/architecture.md).
 - The frame launch is implemented. `--frame-cap F` bounds the grid to
   `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
   the host backend uses a unit frame extent.
-- No AMD GPU is visible on hal. HIP is compile-only for `gfx90a`; HIP execution
-  is blocked until an AMD runtime device is available; no HIP runtime result is
-  claimed.
+- HIP execution is validated on one AMD device: `hal` with an AMD Radeon RX
+  7900 XTX (`gfx1100`, ROCm 7.2), 238/238 CTest with 43 HIP cases. Other AMD
+  architectures and the hash path are not run on HIP. `hal` reports
+  `sharing=unknown`, so there is no HIP performance claim. GitHub-hosted HIP
+  remains compile-only because its runners have no AMD GPU.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
   CUDA 13.4 compiled `sm_80` historically; nvcc 12.6.85 now builds V100
   `sm_70` with the explicit concept-parameter workaround.

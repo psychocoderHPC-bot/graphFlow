@@ -24,12 +24,18 @@ defaults to 8, and the host backend uses a unit frame extent. Blocks stride over
 the batch tile list, so several tiles may share a block and no kernel assumes
 one block per tile.
 
-## AMD execution is blocked
+## HIP execution is validated on one AMD device
 
-No AMD GPU is visible through the available compute targets. HIP compiles the
-full tree for `gfx90a` with `amdclang++` from ROCm under `/opt/rocm`, but the
-example and the tests do not run. HIP execution, HIP histogram equality, and an
-AMD `N=1e8` acceptance run remain open. The compile-only gate is not an AMD
+HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
+ROCm 7.2. The HIP CTest run passes 238/238 with 43 HIP cases: 8 typed Flow
+cases, 24 particle CLI cases, 10 photon CLI cases, and 1 photon output case.
+`rocprof` v3 confirms the device kernels. GitHub-hosted HIP remains
+compile-only because its runners have no AMD GPU, so no HIP runtime claim is
+made for GitHub CI.
+
+The HIP hash path, other AMD architectures, and an AMD `N=1e8` acceptance run
+remain unrecorded. `hal` reports `sharing=unknown`, so no HIP performance claim
+is made. The historical `gfx90a` compile-only gate is not an AMD runtime
 result.
 
 ## CPU OMP execution
@@ -76,7 +82,9 @@ rerun, CI, and the tree-wide format/SPDX sweep (T14b) remain open, and CUDA
 `hal` reports `sharing=unknown` and fwk394 is shared. The historical `N=1e8`
 result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
 wall times are shared-host baselines, not exclusive-allocation acceptance
-numbers. There is no variance study and no frozen regression target.
+numbers. There is no variance study and no frozen regression target. The HIP
+run on `hal` is a correctness result only; `hal` sharing is unknown and no HIP
+performance number is recorded.
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
 results: CPU CTest 195/195 and CUDA CTest 247/247 on V100 `sm_70` (OMP=ON and
@@ -119,18 +127,21 @@ used by the example.
 
 ## No CI runners
 
-There is no `.github/workflows` and no CI runner pool on main. The CUDA, HIP,
-and TSAN gates require self-hosted runners with known labels. The local
-commands in `docs/build.md` are documented entry points, not a CI run. PR #4
-is a draft; no runners are provisioned. The repository is public and has no
-branch-protection or CI badge configuration.
+There is no `.github/workflows` and no CI runner pool on main. The CUDA and
+TSAN gates need self-hosted runners with known labels. A GitHub-hosted HIP build
+is compile-only because those runners have no AMD GPU; a HIP runtime gate needs
+an AMD runner with a known label. The local commands in `docs/build.md` are
+documented entry points, not a CI run. PR #4 is a draft; no runners are
+provisioned. The repository is public and has no branch-protection or CI badge
+configuration.
 
 ## Accelerator test coverage is partial
 
 Most Catch2 cases construct the CPU device. The CUDA build adds
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
-GPU and fails when no GPU is visible. HIP has no runtime test. There is no
-automated CPU/CUDA/HIP histogram equality test.
+GPU and fails when no GPU is visible. The HIP build adds 8 typed Flow cases
+that fail when no AMD GPU is visible. No automated CPU/CUDA/HIP histogram
+equality test exists; the equality evidence is manual.
 
 ## Hash path evidence is CPU-only (low-level)
 
@@ -146,11 +157,14 @@ is the static 1024-bin limit, not a measured crossover.
   CLI cases per backend (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`)
   plus one `example.public_api` source-contract case. The photon example runs
   its CLI and output cases per backend. A CPU build registers 25 particle
-  example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract). The
-  historical integrated CTest totals are 194/194 CPU on fwk394 and 246/246
-  CUDA on hal. The `rosi_v100` CPU CTest passes 195/195 (OMP=ON Release and
-  Debug) and the CUDA CTest on V100 `sm_70` passes 247/247 in Release and
-  Debug with the explicit concept-parameter workaround.
+  example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
+  build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
+  typed Flow cases. The historical integrated CTest totals are 194/194 CPU on
+  fwk394 and 246/246 CUDA on hal. The `rosi_v100` CPU CTest passes 195/195
+  (OMP=ON Release and Debug) and the CUDA CTest on V100 `sm_70` passes 247/247
+  in Release and Debug with the explicit concept-parameter workaround. The HIP
+  CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passes 238/238 with 43 HIP
+  cases.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - Release builds do not detect corrupted photon payload state per event. Host

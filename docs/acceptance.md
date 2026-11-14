@@ -3,13 +3,20 @@
 
 # graphFlow acceptance record
 
-Current integrated main: T5 photon scattering at
+Current main is `25fa0927a4e042f229d43229734f50dce8277954` (merge of the
+debug-validation work). The T5 photon scattering record is at
 `ac89ab558c26b938038035b26ca5dbe6d7ce7727`, building on the typed Flow
 execution and particle example port at
 `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` and the earlier integrated
 revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
 T13, T14a). Their counts and the historical T13 performance table remain below
 as evidence.
+
+The HIP runtime validation in this record ran at
+`58bb514def3f3c956126ab7c34d0de74a45f679e` on base
+`25fa0927a4e042f229d43229734f50dce8277954`. It is the first record with HIP
+execution on a real AMD GPU; earlier HIP entries are compile-only and are
+labelled historical below.
 
 ## Validation platform
 
@@ -22,6 +29,7 @@ results:
 | CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **247/247 passed** |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **247/247 passed** |
+| HIP CTest on `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm 7.2, Release) | **238/238 passed**; 43 HIP cases |
 | CPU OpenMP on `rosi_v100` (passive, `GOMP_SPINCOUNT=0`) | Works; no hangs. `N=1e5`, `C=128`/`P=1024`, `Q=1`: OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s. `N=1e6` OMP=2 Q1 23.71 s, Q8 4.46 s. All sums exact. |
 
 The V100 `sm_70` build is unblocked by the explicit concept-parameter
@@ -52,7 +60,7 @@ recorded run observed external load while the client was stale, so no final
 H100 claim is made. H100 remains blocked/preliminary. Still open: the
 tree-wide format and SPDX sweep (T14b) is CPU-only work, and CI has no
 runners (PR #4 is a draft). This docs commit records the existing
-`rosi_v100` results; it adds no new build or test run.
+`rosi_v100` and HIP `hal` results; it adds no new build or test run.
 
 Environment for the historical recorded runs: fwk394 for the CPU host and hal
 for CUDA, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3,
@@ -62,6 +70,36 @@ throughput is a shared-host baseline. The `rosi_v100` CPU CTest and CPU
 OpenMP runs use OMP=ON Release with `GOMP_SPINCOUNT=0` (passive). The
 `rosi_v100` CUDA V100 `sm_70` build passes with nvcc 12.6.85 using the
 explicit concept-parameter workaround.
+
+## HIP runtime validation on hal
+
+The HIP runtime record is
+`58bb514def3f3c956126ab7c34d0de74a45f679e` on base
+`25fa0927a4e042f229d43229734f50dce8277954`. Platform: `hal`, AMD Radeon RX
+7900 XTX (`gfx1100`), ROCm 7.2.0, `amdclang++` (Clang 22.0.0), offload arch
+`gfx1100`, C++20 Release with `-Wall -Wextra -Wpedantic -Werror`, alpaka
+`eb677e8d7f70d79b35df25d9002f94ba669b6f44` (3.0.0).
+
+| Configuration | Result |
+| --- | --- |
+| HIP CTest (`ROCR_VISIBLE_DEVICES=0`, Release) | **238/238 passed** |
+| HIP cases | **43**: 8 typed Flow, 24 particle CLI, 10 photon CLI, 1 photon output |
+| `rocprof` v3, particle feedback example | 4,901 GPU kernel dispatches |
+| `rocprof` v3, typed Flow case | passed, 38,266 assertions |
+
+The eight typed Flow cases are the feedback matrix (`N=0,1,17,128,4097`
+crossed with `Q=1,2,8`), a partial tail chunk, a bounded pool, empty and single
+source/sink runs, the generic POD chain, one batch-wide transform launch, one
+classify plus one scatter partition launch, and Q=8 feedback termination. The
+particle and photon CLI/output cases run the real example binaries on the HIP
+backend. `rocprof` recorded device kernels from the `api::Hip` path, so the
+run is device execution rather than a host fallback.
+
+`hal` reports `sharing=unknown`, so this record makes no HIP performance
+claim. Other AMD architectures, an AMD `N=1e8` acceptance run, and the HIP hash
+path remain unrecorded. fwk394 and H100 were not re-run. GitHub-hosted HIP
+builds remain compile-only because those runners have no AMD GPU; no HIP
+runtime claim is made for GitHub CI.
 
 ## Builds
 
@@ -78,7 +116,8 @@ historical build records below are from the previous platforms.
 | `rosi_v100` CUDA Debug (V100 `sm_70`) | configure and build pass; CTest 247/247 |
 | Historical CPU Release on fwk394 | configure and build pass |
 | Historical CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
-| HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passes; no AMD runtime device on hal, execution blocked |
+| Historical HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passed; no AMD runtime device was visible, so execution was blocked at that revision |
+| HIP Release on hal (`gfx1100`, AMD Radeon RX 7900 XTX, ROCm 7.2) | configure, build, and CTest 238/238 pass |
 | ASAN+UBSAN Debug | not recorded for the integrated revision |
 | TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
 
@@ -86,9 +125,10 @@ historical build records below are from the previous platforms.
 
 Current `rosi_v100` CTest: CPU **195/195 passed** (OMP=ON Release and Debug)
 and CUDA **247/247 passed** on V100 `sm_70` (CUDA 12.6.85 Release and Debug).
-The explicit concept-parameter workaround unblocks the nvcc 12.6.85 name-hiding
-ICE; the RNG main is unchanged. The historical CTest totals below are from the
-previous platforms.
+HIP on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed **238/238** with 43 HIP
+cases. The explicit concept-parameter workaround unblocks the nvcc 12.6.85
+name-hiding ICE; the RNG main is unchanged. The historical CTest totals below
+are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
@@ -98,8 +138,9 @@ previous platforms.
 | `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **247/247 passed** |
 | Historical CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the integrated main (T5) |
 | Historical CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the integrated main (T5) |
+| HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **238/238 passed**; 43 HIP cases |
+| Historical HIP compile-only gate (`gfx90a`) | compiled; no AMD device was visible at that revision, so no execution was recorded |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
-| HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
 The historical integrated main totals (194/194 CPU, 246/246 CUDA) are recorded
 in the T5 section below. The T3b totals add twelve status/failure cases: the status/failure unit
@@ -171,8 +212,10 @@ the forward and isotropic samples and wrote `figure1_paths` through
 `figure4_detector` in PNG, SVG and PDF (12 files per sample). The forward
 sample had `transmitted=4097`, `reflected=0`, `absorbed=0`, `capped=0`.
 The isotropic sample had `transmitted=1946`, `reflected=1066`,
-`absorbed=1085`, `capped=0`, summing to 4097. HIP remains compile-only with no
-AMD runtime device. H100: the JURECA `jrc0880.jureca` run is preliminary CUDA
+`absorbed=1085`, `capped=0`, summing to 4097. At that historical revision HIP
+was compile-only because no AMD runtime device was visible; the current HIP
+runtime validation is recorded above. H100: the JURECA `jrc0880.jureca` run is
+preliminary CUDA
 evidence only (unknown gateway sharing flag; the recorded run observed
 external load while the client was stale), so no final H100 claim is made and
 H100 remains blocked/preliminary. The `rosi_v100` CPU OpenMP run (passive,
@@ -186,9 +229,10 @@ The additive graph API core was validated at
 `sm_80` Release**, both with `-Dalpaka_COMPILE_PEDANTIC=ON`. The change adds
 `NodeBase`, `RouteTable`, `Graph`, and `GraphBuilder` over the existing
 `GraphRunner` hooks without changing the example, T5 batching, FrameSpec
-launches, or policy semantics. No HIP runtime is claimed; the HIP gate remains
-compile-only. This section records the existing runs and claims no new build
-or test run.
+launches, or policy semantics. That historical record made no HIP runtime
+claim; the HIP gate was compile-only at that revision. The current HIP runtime
+validation is recorded above. This section records the existing runs and
+claims no new build or test run.
 
 ## Historical performance baseline
 
