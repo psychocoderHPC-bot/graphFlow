@@ -4,6 +4,7 @@
 
 #include "graphFlow/flow/Execution.hpp"
 #include "graphFlow/graphFlow.hpp"
+#include "integration/StallDiagnostics.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -549,4 +550,16 @@ TEST_CASE("CUDA typed flow feedback terminates with Q=8 and a bounded pool", "[c
     checkFeedbackOutcome(outcome, particles);
     CHECK(outcome.stats.poolChunks == numChunks);
     CHECK(outcome.stats.peakLiveChunks <= outcome.stats.poolChunks);
+}
+
+TEST_CASE("CUDA scheduler stall snapshot is aggregate and topology free", "[stall][cuda][diagnostics-check]")
+{
+    auto device = makeCudaDevice();
+    graphFlow::test::diagnostics::checkStallOutcome(graphFlow::test::diagnostics::runForcedStall(device));
+}
+
+TEST_CASE("CUDA completed-run scheduler stats satisfy the peak invariants", "[stats][cuda][diagnostics-check]")
+{
+    auto device = makeCudaDevice();
+    graphFlow::test::diagnostics::checkCompletedOutcome(graphFlow::test::diagnostics::runCompleted(device));
 }

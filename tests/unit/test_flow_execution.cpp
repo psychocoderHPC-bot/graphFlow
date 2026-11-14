@@ -5,6 +5,7 @@
 #include "TestDevice.hpp"
 #include "graphFlow/flow/Execution.hpp"
 #include "graphFlow/graphFlow.hpp"
+#include "integration/StallDiagnostics.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -425,4 +426,16 @@ TEST_CASE("one partition batch issues one classify and one scatter launch", "[un
     for(graphFlow::ChunkDescriptor const& output : outputs)
         storage.release(output.handle);
     storage.release(input.handle);
+}
+
+TEST_CASE("CPU scheduler stall snapshot is aggregate and topology free", "[stall][cpu][diagnostics-check]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::test::diagnostics::checkStallOutcome(graphFlow::test::diagnostics::runForcedStall(device));
+}
+
+TEST_CASE("CPU completed-run scheduler stats satisfy the peak invariants", "[stats][cpu][diagnostics-check]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::test::diagnostics::checkCompletedOutcome(graphFlow::test::diagnostics::runCompleted(device));
 }

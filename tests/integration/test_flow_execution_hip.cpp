@@ -4,6 +4,7 @@
 
 #include "graphFlow/flow/Execution.hpp"
 #include "graphFlow/graphFlow.hpp"
+#include "integration/StallDiagnostics.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -549,4 +550,16 @@ TEST_CASE("HIP typed flow feedback terminates with Q=8 and a bounded pool", "[hi
     checkFeedbackOutcome(outcome, particles);
     CHECK(outcome.stats.poolChunks == numChunks);
     CHECK(outcome.stats.peakLiveChunks <= outcome.stats.poolChunks);
+}
+
+TEST_CASE("HIP scheduler stall snapshot is aggregate and topology free", "[stall][hip][diagnostics-check]")
+{
+    auto device = makeHipDevice();
+    graphFlow::test::diagnostics::checkStallOutcome(graphFlow::test::diagnostics::runForcedStall(device));
+}
+
+TEST_CASE("HIP completed-run scheduler stats satisfy the peak invariants", "[stats][hip][diagnostics-check]")
+{
+    auto device = makeHipDevice();
+    graphFlow::test::diagnostics::checkCompletedOutcome(graphFlow::test::diagnostics::runCompleted(device));
 }

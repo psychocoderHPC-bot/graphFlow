@@ -81,6 +81,27 @@ if(photon_position EQUAL -1)
     )
 endif()
 
+string(FIND "${run_stdout}" "# scheduler " scheduler_position)
+if(scheduler_position EQUAL -1)
+    message(
+        FATAL_ERROR
+        "example_photon_cli.cmake: no '# scheduler' aggregate line for backend=${BACKEND}.\n"
+        "stdout:\n${run_stdout}\n"
+        "stderr:\n${run_stderr}"
+    )
+endif()
+foreach(token "peakReadyChunks=" "peakInflightChunks=" "peakEventSlotsInUse=" "sourceGenerated=" "chunkCapacity=")
+    string(FIND "${run_stdout}" "${token}" scheduler_token_position)
+    if(scheduler_token_position EQUAL -1)
+        message(
+            FATAL_ERROR
+            "example_photon_cli.cmake: '# scheduler' line misses '${token}' for backend=${BACKEND}.\n"
+            "stdout:\n${run_stdout}\n"
+            "stderr:\n${run_stderr}"
+        )
+    endif()
+endforeach()
+
 string(REPLACE "\r" "" run_stdout "${run_stdout}")
 string(REPLACE "\n" ";" output_lines "${run_stdout}")
 

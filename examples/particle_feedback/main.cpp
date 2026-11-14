@@ -46,6 +46,7 @@ namespace
                   << " seed=" << parameters.seed << " max-visits=" << parameters.maxVisits << '\n';
         std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
+        std::cout << "# scheduler " << graphFlow::formatSchedulerStats(result.stats) << '\n';
         std::cout << "# weight,count\n";
         printHistogram(result, parameters.numParticles);
         return EXIT_SUCCESS;

@@ -68,8 +68,12 @@ same chunk owned twice.
 Termination requires all of: the source is exhausted, every ready deque and
 in-flight slot is empty, and no output reservation remains. After the loop the
 runner drains every queue and checks that the pool is empty. A quiet period
-raises a stall error that reports generated, sunk, and live particles, free and
-reserved chunks, and per-node ready/in-flight depth.
+raises a `SchedulerStallError` with aggregate key=value counters: source
+particles/generated/sunk/live, chunk capacity, free, reserved, ready, in-flight
+and event-slot aggregates, and their peaks. The `what()` text never contains
+node names, node ids, or routes. Per-node ready/in-flight detail is built only
+when `Tuning::diagnostics` is enabled and is delivered through an optional
+detail callback and `SchedulerStallError::detail()`.
 
 ## Pool, batch reserve, and admission
 

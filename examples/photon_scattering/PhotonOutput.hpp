@@ -182,6 +182,7 @@ namespace graphFlow::photon::diagnostics
         keyNumber("pool_chunks", result.stats.poolChunks);
         keyNumber("peak_live_chunks", result.stats.peakLiveChunks);
         keyNumber("peak_reserved_chunks", result.stats.peakReservedChunks);
+        keyValue("scheduler_stats", graphFlow::formatSchedulerStats(result.stats));
         keyNumber("count_terminated", result.terminated);
         keyNumber("count_inconsistent", result.inconsistent);
         keyNumber("count_transmitted", result.eventCounts[static_cast<std::uint32_t>(Event::transmitted)]);
