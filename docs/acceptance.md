@@ -12,9 +12,12 @@ execution and particle example port at
 revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
 T13, T14a). The source-admission tests and the N=1e6 CPU smoke are on
 `gf/p1-admission-smoke` (`12871ad19ac1eea9d4bac5c15db9f59085f89a46`), not yet
-merged; the current CPU CTest there is **205/205** (202 plus two
-source-admission cases plus one N=1e6 smoke). The current final counts and the
-historical T13 performance table remain below as evidence.
+merged; the CPU CTest there is **205/205** (202 plus two source-admission cases
+plus one N=1e6 smoke). The aggregate scheduler stall diagnostics are on
+`gf/stall-diagnostics` (`53f0e1df409df29234dd51142d2b136d47ea68a7`), not yet
+merged; the current CPU CTest there is **207/207** (205 plus the two stall
+diagnostics cases). The current final counts and the historical T13 performance
+table remain below as evidence.
 
 The current HIP runtime record is the measured run on
 `b972eaa3bd778b81f2dca505d3662df710792bd9` (245/245, recorded in
@@ -28,11 +31,11 @@ labelled historical below.
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
 results (CPU at `2ad7d86` is the historical validated-main total; the current
-CPU CTest on this branch is **205/205**):
+CPU CTest on `gf/stall-diagnostics` is **207/207**):
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on `rosi_v100` (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 205/205 on `gf/p1-admission-smoke` |
+| CPU CTest on `rosi_v100` (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 207/207 on `gf/stall-diagnostics` (205 on `gf/p1-admission-smoke`) |
 | CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **254/254 passed** |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **247/247 passed** (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
@@ -121,7 +124,7 @@ historical build records below are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 202/202 at `2ad7d86` (historical); 205/205 on `gf/p1-admission-smoke` |
+| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 202/202 at `2ad7d86` (historical); 207/207 on `gf/stall-diagnostics` (205/205 on `gf/p1-admission-smoke`) |
 | `rosi_v100` CPU Debug (OMP=ON) | configure and build pass; CTest 195/195 (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | `rosi_v100` CUDA Release (V100 `sm_70`) | configure and build pass; CTest 254/254 |
 | `rosi_v100` CUDA Debug (V100 `sm_70`) | configure and build pass; CTest 247/247 (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
@@ -129,16 +132,20 @@ historical build records below are from the previous platforms.
 | Historical CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
 | Historical HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passed; no AMD runtime device was visible, so execution was blocked at that revision |
 | HIP Release on hal (`gfx1100`, AMD Radeon RX 7900 XTX, ROCm 7.2) | configure, build, and CTest 245/245 pass (measured on `b972eaa`, `ctest.log`) |
-| ASAN+UBSAN Debug (hosted CI) | the `sanitizers` job runs ASAN+UBSAN over the CPU CTest; 205/205 on this branch (202/202 historical at `2ad7d86`); the N=1e6 smoke runs in the suite without a skip |
+| ASAN+UBSAN Debug (hosted CI) | the `sanitizers` job runs ASAN+UBSAN over the CPU CTest; 207/207 on this branch (202/202 historical at `2ad7d86`); the N=1e6 smoke and the two stall diagnostics cases run in the suite without a skip |
 | TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
 
 ## Tests
 
-Current CPU CTest on `gf/p1-admission-smoke` is **205/205 passed** (202 at
-validated main `2ad7d86` plus two source-admission cases and the N=1e6 smoke,
-which runs in the ordinary CTest job without a skip). `rosi_v100` at
+Current CPU CTest on `gf/stall-diagnostics` is **207/207 passed** (202 at
+validated main `2ad7d86` plus two source-admission cases, the N=1e6 smoke, and
+the two stall diagnostics cases added on `gf/stall-diagnostics`, which run in
+the ordinary CTest job without a skip). `rosi_v100` at
 `2ad7d86` measured CPU **202/202 passed** and CUDA **254/254 passed** on V100
-`sm_70` (CUDA 12.6.85 Release). The `Debug` build was not re-run on
+`sm_70` (CUDA 12.6.85 Release). The two stall diagnostics cases register on
+every compiled backend, so the device totals rise by two as well: **256** for
+the CUDA `sm_70` suite and **247** for the HIP `gfx1100` suite; those device
+runs are not re-recorded here. The `Debug` build was not re-run on
 `rosi_v100` after the seven hash cases, so the measured `Debug` totals are the
 pre-hash **195/195** CPU and **247/247** CUDA, with 202/202 and 254/254 the
 expected (not-yet-re-run) `Debug` totals for the `2ad7d86` suite. HIP on `hal`
@@ -150,7 +157,7 @@ are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU CTest (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 205/205 on `gf/p1-admission-smoke` |
+| `rosi_v100` CPU CTest (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 207/207 on `gf/stall-diagnostics` (205 on `gf/p1-admission-smoke`) |
 | `rosi_v100` CPU CTest (OMP=ON Debug) | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | `rosi_v100` CUDA CTest (V100 `sm_70`, Release) | **254/254 passed** |
 | `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **247/247 passed** (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
@@ -159,6 +166,18 @@ are from the previous platforms.
 | HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **245/245 passed**; 43 HIP cases (measured on `b972eaa`) |
 | Historical HIP compile-only gate (`gfx90a`) | compiled; no AMD device was visible at that revision, so no execution was recorded |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
+
+The two stall diagnostics cases added on `gf/stall-diagnostics` are the
+`[stall]` and `[stats]` cases in `tests/unit/test_flow_execution.cpp`
+(`"CPU scheduler stall snapshot is aggregate and topology free"` and
+`"CPU completed-run scheduler stats satisfy the peak invariants"`). The first
+drives a forced no-progress stall and asserts the thrown
+`SchedulerStallError` reports only aggregate key=value counters, with node
+names, ids, and routes kept out of the message and limited to the opt-in detail
+callback. The second runs a completed source-to-sink graph and asserts the
+`SchedulerStats` peak invariants and that the on-demand `snapshot()` mirrors the
+completed-run peaks with no aggregate work left. The matching CUDA and HIP
+cases register in `tests/integration/test_flow_execution_{cuda,hip}.cpp`.
 
 The historical integrated main totals (194/194 CPU, 246/246 CUDA) are recorded
 in the T5 section below. The T3b totals add twelve status/failure cases: the status/failure unit
@@ -190,10 +209,11 @@ exit status are identical. The derived pool reserve changes from `P+6` to
 `P+8` because the A/B partitions now expose three named outcomes; that
 diagnostic is not a numeric result. These counts are historical. The
 `rosi_v100` CPU CTest passes 202/202 (OMP=ON Release) at `2ad7d86`
-(historical; 205/205 on `gf/p1-admission-smoke`) and the V100
+(historical; 207/207 on `gf/stall-diagnostics`, 205/205 on
+`gf/p1-admission-smoke`) and the V100
 `sm_70` CUDA CTest passes 254/254 in Release with the explicit
-concept-parameter workaround; the `rosi_v100` 33-invocation baseline comparison
-is not yet recorded.
+concept-parameter workaround (256 on `gf/stall-diagnostics`, not re-run); the
+`rosi_v100` 33-invocation baseline comparison is not yet recorded.
 
 ### T5 photon scattering output and diagnostics
 
@@ -211,7 +231,7 @@ provenance was passed explicitly with
 
 | Configuration | Command | Result |
 | --- | --- | --- |
-| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **202/202 passed** at `2ad7d86` (historical); 205/205 on `gf/p1-admission-smoke` |
+| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **202/202 passed** at `2ad7d86` (historical); 207/207 on `gf/stall-diagnostics` (205/205 on `gf/p1-admission-smoke`) |
 | `rosi_v100` CPU (OMP=ON Debug) | `ctest --output-on-failure` | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | `rosi_v100` CUDA (V100 `sm_70` Release) | `ctest --output-on-failure` | **254/254 passed** |
 | `rosi_v100` CUDA (V100 `sm_70` Debug) | `ctest --output-on-failure` | **247/247 passed** (measured, pre-hash-fix); expected 254/254 after the seven hash cases (not re-run) |
