@@ -27,6 +27,7 @@ namespace
     using graphFlow::photon::ClassifyEvent;
     using graphFlow::photon::Event;
     using graphFlow::photon::GeneratePhoton;
+    using graphFlow::photon::NoTrace;
     using graphFlow::photon::Parameters;
     using graphFlow::photon::Photon;
     using graphFlow::photon::ProposeFlight;
@@ -477,10 +478,10 @@ TEST_CASE("debug validation fails a corrupted photon batch before publication", 
     auto source = flow.source("corrupt", CorruptPhotonSource{});
     auto flight = flow.transform("propose flight", ProposeFlight{slab, 8u});
     auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
-    auto scatter = flow.transform("scatter", ScatterT<>{slab, ScatterMode::forward});
+    auto scatter = flow.transform("scatter", ScatterT<>{slab, ScatterMode::forward, NoTrace{}});
     auto terminal = flow.sink(
         "terminal",
-        RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView()});
+        RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView(), NoTrace{}});
     flow.connect(source, flight);
     flow.connect(flight, route);
     flow.connect(route.template out<Event::scatter>(), scatter);
