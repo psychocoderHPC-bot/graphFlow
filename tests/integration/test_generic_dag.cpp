@@ -151,8 +151,7 @@ namespace
             graphFlow::ChunkDescriptor const& chunk = batch.chunk();
             if(chunk.fill == 0u)
                 return;
-            graphFlow::LaunchPolicy const policy
-                = graphFlow::launchPolicy(m_device, chunk.fill, tileSize, frameCap);
+            graphFlow::LaunchPolicy const policy = graphFlow::launchPolicy(m_device, chunk.fill, tileSize, frameCap);
             queue.enqueue(
                 policy.frameSpec(),
                 alpaka::KernelBundle{
@@ -309,11 +308,7 @@ namespace
         using Batch = typename Base::Batch;
         using U32View = typename graphFlow::ChunkPool<TDevice>::U32View;
 
-        SinkNode(
-            TDevice device,
-            graphFlow::ChunkPool<TDevice>& pool,
-            U32View counts,
-            U32View finalVisits)
+        SinkNode(TDevice device, graphFlow::ChunkPool<TDevice>& pool, U32View counts, U32View finalVisits)
             : m_device{device}
             , m_pool{pool}
             , m_counts{std::move(counts)}
@@ -327,8 +322,7 @@ namespace
             m_sunk += chunk.fill;
             if(chunk.fill == 0u)
                 return;
-            graphFlow::LaunchPolicy const policy
-                = graphFlow::launchPolicy(m_device, chunk.fill, tileSize, frameCap);
+            graphFlow::LaunchPolicy const policy = graphFlow::launchPolicy(m_device, chunk.fill, tileSize, frameCap);
             queue.enqueue(
                 policy.frameSpec(),
                 alpaka::KernelBundle{
@@ -404,30 +398,11 @@ namespace
         SinkNode<TDevice> sink{device, pool, counts, finalVisits};
 
         graphFlow::GraphBuilder<TDevice> builder;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{1u}},
-            source);
-        builder.addNode(
-            graphFlow::NodeRole::transform,
-            "first",
-            1u,
-            graphFlow::RouteTable{{2u}},
-            first);
-        builder.addNode(
-            graphFlow::NodeRole::transform,
-            "second",
-            2u,
-            graphFlow::RouteTable{{3u, 1u}},
-            second);
-        builder.addNode(
-            graphFlow::NodeRole::sink,
-            "sink",
-            0u,
-            graphFlow::RouteTable{},
-            sink);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+        builder.addNode(graphFlow::NodeRole::transform, "first", 1u, graphFlow::RouteTable{{2u}}, first);
+        builder.addNode(graphFlow::NodeRole::transform, "second", 2u, graphFlow::RouteTable{{3u, 1u}}, second);
+        builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, numParticles, liveParticles);
         auto const graph = builder.build();
 
@@ -546,48 +521,26 @@ TEST_CASE("generic DAG rejects invalid routes and sources", "[integration][graph
 
     {
         graphFlow::GraphBuilder<Device> builder;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{5u}},
-            source);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{5u}}, source);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::invalid_argument); // route out of range
     }
     {
         graphFlow::GraphBuilder<Device> builder;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{1u}},
-            source);
-        builder.addNode(
-            graphFlow::NodeRole::transform,
-            "transform",
-            1u,
-            graphFlow::RouteTable{{0u}},
-            transform);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+        builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{0u}}, transform);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::invalid_argument); // route back to source
     }
     {
         graphFlow::GraphBuilder<Device> builder;
-        builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{1u}},
-            source);
-        auto const transformId = builder.addNode(
-            graphFlow::NodeRole::transform,
-            "transform",
-            1u,
-            graphFlow::RouteTable{{2u}},
-            transform);
+        builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+        auto const transformId
+            = builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{2u}}, transform);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         CHECK_THROWS_AS(builder.setSource(transformId, 0u), std::invalid_argument); // not a source
     }
@@ -621,8 +574,7 @@ TEST_CASE("generic DAG runs on a payload-slot storage", "[integration][graph][st
             alpaka::onHost::wait(queue);
         },
         [](Runner::Queue const&, Runner::Batch const&, std::uint32_t&) { return false; },
-        [](Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
-        { outputs = batch.chunks; },
+        [](Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs) { outputs = batch.chunks; },
         []() {}};
 
     Runner::Hooks sinkHooks{

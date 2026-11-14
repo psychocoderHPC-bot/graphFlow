@@ -71,14 +71,12 @@ namespace graphFlow
                 std::uint64_t iterations,
                 std::uint32_t count) const
             {
-                for(auto [idx] : alpaka::onAcc::makeIdxMap(
-                        acc,
-                        alpaka::onAcc::worker::threadsInGrid,
-                        alpaka::IdxRange{count}))
+                for(auto [idx] :
+                    alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{count}))
                 {
                     std::uint32_t value = static_cast<std::uint32_t>(idx) + 1u;
                     for(std::uint64_t i = 0u; i < iterations; ++i)
-                        value = value * 1664525u + 1013904223u;
+                        value = value * 1'664'525u + 1'013'904'223u;
                     out[idx] = value;
                 }
             }
@@ -92,11 +90,9 @@ namespace graphFlow
                 std::uint32_t* out,
                 std::uint32_t count) const
             {
-                for(auto [idx] : alpaka::onAcc::makeIdxMap(
-                        acc,
-                        alpaka::onAcc::worker::threadsInGrid,
-                        alpaka::IdxRange{count}))
-                    out[idx] = 0xA5A5A5A5u;
+                for(auto [idx] :
+                    alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{count}))
+                    out[idx] = 0xA5A5'A5A5u;
             }
         };
 
@@ -132,7 +128,7 @@ namespace graphFlow
     QueueProbeResult probeQueueIndependence(
         TDevice& device,
         std::uint64_t delayIterations = 20'000'000u,
-        std::chrono::milliseconds timeout = std::chrono::milliseconds{10'000},
+        std::chrono::milliseconds timeout = std::chrono::milliseconds{10000},
         std::uint32_t frameCap = defaultFrameCap)
     {
         if(delayIterations == 0u)

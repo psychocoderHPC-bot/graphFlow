@@ -32,21 +32,18 @@ namespace graphFlow
     public:
         RouteTable() = default;
 
-        explicit RouteTable(std::vector<NodeId> destinations)
-            : m_destinations{std::move(destinations)}
+        explicit RouteTable(std::vector<NodeId> destinations) : m_destinations{std::move(destinations)}
         {
             if(m_destinations.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
                 throw std::overflow_error{"graphFlow: route table exceeds 2^32 bins"};
         }
 
-        RouteTable(std::initializer_list<NodeId> destinations)
-            : RouteTable{std::vector<NodeId>{destinations}}
+        RouteTable(std::initializer_list<NodeId> destinations) : RouteTable{std::vector<NodeId>{destinations}}
         {
         }
 
         /** Construct a table and validate it against an explicit bin count. */
-        RouteTable(std::uint32_t bins, std::vector<NodeId> destinations)
-            : RouteTable{std::move(destinations)}
+        RouteTable(std::uint32_t bins, std::vector<NodeId> destinations) : RouteTable{std::move(destinations)}
         {
             validateBins(bins);
         }

@@ -410,7 +410,8 @@ GitHub Actions jobs on hosted `ubuntu-latest` runners and public containers:
 - `sanitizers`: ASAN/UBSAN on the host scheduler. TSAN stays local until a host passes the runtime mapping check.
 - `cuda-compile`: `sm_70`, compile only because the runner has no NVIDIA GPU.
 - `hip-compile`: `gfx90a`, compile only because the runner has no AMD GPU.
-- `reuse`: `reuse lint` 6.3.0. A format job is deferred until the tree-wide sweep (T14b) lands.
+- `reuse`: `reuse lint` 6.3.0.
+- `format`: `clang-format --dry-run --Werror` with clang-format 20.1.8 over the tracked `.cpp` and `.hpp` files in `include/`, `examples/`, and `tests/`.
 - `icpx-cpu`: manual `workflow_dispatch` only.
 
 GPU runtime gates need a device host and are not part of the hosted workflow. Keep the JUnit reports and environment diagnostics.

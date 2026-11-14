@@ -54,8 +54,9 @@ changes launch amortisation and buffer sizing, not the pool bound.
 
 The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 `.reuse/dep5`, and `LICENSES/MPL-2.0.txt`. CI runs on GitHub-hosted runners and
-public containers; see [CI](docs/ci.md). The tree-wide format and SPDX sweep
-remains open (T14b). See [known limitations](docs/known-limitations.md).
+public containers; see [CI](docs/ci.md). The tree-wide format sweep (T14b) has
+landed; the hosted `format` job enforces it with clang-format 20.1.8. See
+[known limitations](docs/known-limitations.md).
 
 `rosi_v100` is the exclusive validation platform. `rosi_v100` results at the
 sm_70 ICE workaround before the hash `maxBins` fix: CPU CTest **195/195
@@ -479,7 +480,6 @@ The full design is in [architecture](docs/architecture.md).
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both
   builds.
-- CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
 - CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
   compile-only there, and no self-hosted runner is provisioned.
 - The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun

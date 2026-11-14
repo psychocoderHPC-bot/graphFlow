@@ -8,7 +8,6 @@
 #include "PhotonScattering.hpp"
 #include "ScalarTransport.hpp"
 #include "TestDevice.hpp"
-
 #include "graphFlow/flow/Debug.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -62,9 +61,7 @@ namespace
         return std::exp(logP);
     }
 
-    void checkTerminalAccounting(
-        graphFlow::photon::ScatteringResult const& result,
-        std::uint64_t numPhotons)
+    void checkTerminalAccounting(graphFlow::photon::ScatteringResult const& result, std::uint64_t numPhotons)
     {
         REQUIRE(result.terminal.size() == static_cast<std::size_t>(numPhotons));
         REQUIRE(result.terminalVisits.size() == static_cast<std::size_t>(numPhotons));
@@ -140,11 +137,7 @@ namespace
                 maxScatters);
             if(!photon.proposal.valid)
                 status.set(graphFlow::StatusCode::invalid);
-            alpaka::onAcc::atomicAdd(
-                acc,
-                &flightCounts[0u],
-                std::uint32_t{1u},
-                alpaka::onAcc::scope::device);
+            alpaka::onAcc::atomicAdd(acc, &flightCounts[0u], std::uint32_t{1u}, alpaka::onAcc::scope::device);
         }
     };
 
@@ -226,9 +219,7 @@ namespace
         graphFlow::Flow<Photon, ALPAKA_TYPEOF(device)> flow{device};
         auto source = flow.source("generate", graphFlow::photon::GeneratePhotonT<Trace>{trace});
         using CountView = decltype(flights.getView());
-        auto flight = flow.transform(
-            "scripted flight",
-            ScriptedFlight<CountView>{slab, 3u, flights.getView()});
+        auto flight = flow.transform("scripted flight", ScriptedFlight<CountView>{slab, 3u, flights.getView()});
         auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
         auto scatter = flow.transform("scripted scatter", ScriptedScatter<Trace>{trace});
         using RecordView = decltype(records.getView());
@@ -401,8 +392,7 @@ TEST_CASE("photon debug validation rejects corrupted state", "[photon][debug]")
     double const vacuumTotal = graphFlow::photon::sigmaTotal(vacuum);
 
     Photon const nanPosition = makePhoton(std::numeric_limits<double>::quiet_NaN(), Vec3{0.0, 0.0, 1.0});
-    Photon const infDirection
-        = makePhoton(0.2, Vec3{0.0, 0.0, std::numeric_limits<double>::infinity()});
+    Photon const infDirection = makePhoton(0.2, Vec3{0.0, 0.0, std::numeric_limits<double>::infinity()});
     Photon const outside = makePhoton(1.5, Vec3{0.0, 0.0, 1.0});
 
     if constexpr(graphFlow::debug::checksEnabled)
@@ -417,10 +407,8 @@ TEST_CASE("photon debug validation rejects corrupted state", "[photon][debug]")
         CHECK_FALSE(resolveFlight(vacuum, vacuumTotal, outside, 0.0, 0.0, 8u).valid);
 
         Photon nanProposal = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-        nanProposal.proposal = graphFlow::photon::Proposal{
-            Event::transmitted,
-            std::numeric_limits<double>::quiet_NaN(),
-            true};
+        nanProposal.proposal
+            = graphFlow::photon::Proposal{Event::transmitted, std::numeric_limits<double>::quiet_NaN(), true};
         CHECK_FALSE(validateProposal(material, nanProposal));
         CHECK(applyEvent(material, Event::transmitted, nanProposal) == graphFlow::UpdateResult::invalid);
 
@@ -479,9 +467,8 @@ TEST_CASE("debug validation fails a corrupted photon batch before publication", 
     auto flight = flow.transform("propose flight", ProposeFlight{slab, 8u});
     auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
     auto scatter = flow.transform("scatter", ScatterT<>{slab, ScatterMode::forward, NoTrace{}});
-    auto terminal = flow.sink(
-        "terminal",
-        RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView(), NoTrace{}});
+    auto terminal
+        = flow.sink("terminal", RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView(), NoTrace{}});
     flow.connect(source, flight);
     flow.connect(flight, route);
     flow.connect(route.template out<Event::scatter>(), scatter);
@@ -574,6 +561,7 @@ TEST_CASE("photon graph matches the independent scalar transport", "[photon][sca
         double sigmaA;
         ScatterMode mode;
     };
+
     std::vector<Case> const cases{
         {257u, 1u, 1u, 0u, 1.0, 0.2, ScatterMode::forward},
         {257u, 128u, 8u, 42u, 1.0, 0.2, ScatterMode::forward},
@@ -726,13 +714,12 @@ TEST_CASE("isotropic photon scattering reproduces the uncollided fraction", "[ph
 
     double const expected = std::exp(-1.0);
     double const sigma = std::sqrt(expected * (1.0 - expected) / static_cast<double>(photons));
-    CHECK(static_cast<double>(uncollided) / static_cast<double>(photons)
-          == Catch::Approx(expected).margin(6.0 * sigma));
+    CHECK(
+        static_cast<double>(uncollided) / static_cast<double>(photons) == Catch::Approx(expected).margin(6.0 * sigma));
 
     for(auto const& record : result.terminal)
     {
-        double const norm = record.direction.x * record.direction.x
-                            + record.direction.y * record.direction.y
+        double const norm = record.direction.x * record.direction.x + record.direction.y * record.direction.y
                             + record.direction.z * record.direction.z;
         CHECK(norm == Catch::Approx(1.0).margin(1e-12));
     }
@@ -757,8 +744,8 @@ TEST_CASE("pure absorption and vacuum have closed-form transmission", "[photon][
     CHECK(countEvent(absorbed, Event::reflected) == 0u);
     CHECK(countEvent(absorbed, Event::capped) == 0u);
     CHECK(countEvent(absorbed, Event::transmitted) + countEvent(absorbed, Event::absorbed) == photons);
-    double const transmission = static_cast<double>(countEvent(absorbed, Event::transmitted))
-                                / static_cast<double>(photons);
+    double const transmission
+        = static_cast<double>(countEvent(absorbed, Event::transmitted)) / static_cast<double>(photons);
     double const expected = std::exp(-1.0);
     double const sigma = std::sqrt(expected * (1.0 - expected) / static_cast<double>(photons));
     CHECK(transmission == Catch::Approx(expected).margin(6.0 * sigma));
@@ -800,9 +787,10 @@ TEST_CASE("scatter cap emits a distinct non-physical outcome", "[photon][cap]")
     auto const result = graphFlow::photon::runPhotonScattering(device, parameters);
     checkTerminalAccounting(result, photons);
     CHECK(result.capped > 0u);
-    CHECK(countEvent(result, Event::transmitted) + countEvent(result, Event::reflected)
-              + countEvent(result, Event::absorbed)
-          == photons - result.capped);
+    CHECK(
+        countEvent(result, Event::transmitted) + countEvent(result, Event::reflected)
+            + countEvent(result, Event::absorbed)
+        == photons - result.capped);
     for(auto const& record : result.terminal)
     {
         if(record.event == Event::capped)
@@ -918,9 +906,7 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
     aliasArgv.reserve(aliasArgs.size());
     for(auto const& argument : aliasArgs)
         aliasArgv.push_back(argument.c_str());
-    auto const aliases = graphFlow::photon::cli::parseOptions(
-        static_cast<int>(aliasArgv.size()),
-        aliasArgv.data());
+    auto const aliases = graphFlow::photon::cli::parseOptions(static_cast<int>(aliasArgv.size()), aliasArgv.data());
     CHECK(aliases.numPhotons == 5u);
     CHECK(aliases.thickness == Catch::Approx(2.0));
     CHECK(aliases.sigmaS == Catch::Approx(0.3));
@@ -940,31 +926,21 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
 
     graphFlow::photon::cli::Options negativeSigma = valid;
     negativeSigma.sigmaS = -1.0;
-    CHECK_THROWS_AS(
-        graphFlow::photon::cli::resolveOptions(negativeSigma, properties),
-        std::invalid_argument);
+    CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(negativeSigma, properties), std::invalid_argument);
 
     graphFlow::photon::cli::Options negativeAbsorption = valid;
     negativeAbsorption.sigmaA = -1.0;
-    CHECK_THROWS_AS(
-        graphFlow::photon::cli::resolveOptions(negativeAbsorption, properties),
-        std::invalid_argument);
+    CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(negativeAbsorption, properties), std::invalid_argument);
 
     graphFlow::photon::cli::Options zeroThickness = valid;
     zeroThickness.thickness = 0.0;
-    CHECK_THROWS_AS(
-        graphFlow::photon::cli::resolveOptions(zeroThickness, properties),
-        std::invalid_argument);
+    CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(zeroThickness, properties), std::invalid_argument);
 
     graphFlow::photon::cli::Options unknownMode = valid;
     unknownMode.mode = "ballistic";
-    CHECK_THROWS_AS(
-        graphFlow::photon::cli::resolveOptions(unknownMode, properties),
-        std::invalid_argument);
+    CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(unknownMode, properties), std::invalid_argument);
 
     graphFlow::photon::cli::Options zeroBudget = valid;
     zeroBudget.poolPayloadBudgetBytes = 0u;
-    CHECK_THROWS_AS(
-        graphFlow::photon::cli::resolveOptions(zeroBudget, properties),
-        std::invalid_argument);
+    CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(zeroBudget, properties), std::invalid_argument);
 }

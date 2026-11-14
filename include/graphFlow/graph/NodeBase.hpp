@@ -72,8 +72,7 @@ namespace graphFlow
             [&node](Queue const& queue, Batch const& batch) { node.submit(queue, batch); },
             [&node](Queue const& queue, Batch const& batch, std::uint32_t& allocated)
             { return node.poll(queue, batch, allocated); },
-            [&node](Batch const& batch, std::vector<ChunkDescriptor>& outputs)
-            { node.complete(batch, outputs); },
+            [&node](Batch const& batch, std::vector<ChunkDescriptor>& outputs) { node.complete(batch, outputs); },
             [&node]() { node.retire(); }};
     }
 } // namespace graphFlow

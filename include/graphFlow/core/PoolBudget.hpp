@@ -113,10 +113,9 @@ namespace graphFlow
         std::uint64_t const required = requiredPayloadBytes(numChunks, chunkCapacity, slotBytes);
         if(required > budgetBytes)
             throw std::invalid_argument{
-                context + ": " + std::to_string(numChunks) + " chunks x " + std::to_string(chunkCapacity)
-                + " slots x " + std::to_string(slotBytes) + " bytes requires "
-                + std::to_string(required) + " bytes, exceeding the payload budget of "
-                + std::to_string(budgetBytes) + " bytes"};
+                context + ": " + std::to_string(numChunks) + " chunks x " + std::to_string(chunkCapacity) + " slots x "
+                + std::to_string(slotBytes) + " bytes requires " + std::to_string(required)
+                + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes) + " bytes"};
     }
 
     /** Particle-budget overload; `slotBytes` defaults to the particle SoA slot size. */
@@ -136,11 +135,6 @@ namespace graphFlow
         std::uint64_t budgetBytes,
         std::uint64_t slotBytes)
     {
-        validatePayloadBudget(
-            numChunks,
-            chunkCapacity,
-            budgetBytes,
-            "graphFlow::validatePayloadBudget",
-            slotBytes);
+        validatePayloadBudget(numChunks, chunkCapacity, budgetBytes, "graphFlow::validatePayloadBudget", slotBytes);
     }
 } // namespace graphFlow

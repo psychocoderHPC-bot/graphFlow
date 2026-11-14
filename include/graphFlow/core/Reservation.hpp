@@ -32,10 +32,7 @@ namespace graphFlow
      *
      * All arithmetic is performed in 64 bit and every overflow is reported as an exception.
      */
-    inline constexpr std::uint64_t outputChunkBound(
-        std::uint64_t n,
-        std::uint64_t capacity,
-        std::uint64_t maxBins)
+    inline constexpr std::uint64_t outputChunkBound(std::uint64_t n, std::uint64_t capacity, std::uint64_t maxBins)
     {
         if(n == 0u)
             return 0u;

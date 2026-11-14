@@ -44,15 +44,15 @@ namespace graphFlow
     struct Config
     {
         std::uint32_t chunkCapacity = 128u; // C
-        std::uint32_t numChunks = 0u;       // S = P + K*R, zero means "derive"
-        std::uint32_t liveParticles = 0u;   // P, zero means "derive from N and C"
-        std::uint32_t tileSize = 128u;      // T
-        std::uint32_t maxBins = 64u;        // B upper bound
+        std::uint32_t numChunks = 0u; // S = P + K*R, zero means "derive"
+        std::uint32_t liveParticles = 0u; // P, zero means "derive from N and C"
+        std::uint32_t tileSize = 128u; // T
+        std::uint32_t maxBins = 64u; // B upper bound
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint64_t numParticles = 0u; // N
         std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
-        std::uint32_t frameCap = 8u;    // blocks per multiprocessor cap of the frame launch
+        std::uint32_t frameCap = 8u; // blocks per multiprocessor cap of the frame launch
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
 

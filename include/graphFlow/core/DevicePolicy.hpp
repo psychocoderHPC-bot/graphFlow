@@ -86,20 +86,20 @@ namespace graphFlow
     {
         std::optional<std::uint32_t> chunkCapacity; // C
         std::optional<std::uint32_t> liveParticles; // P
-        std::optional<std::uint32_t> tileSize;      // T
+        std::optional<std::uint32_t> tileSize; // T
     };
 
     /** Result of the device-aware chunk policy. */
     struct DevicePolicy
     {
-        std::uint32_t chunkCapacity = 0u;     // C
-        std::uint32_t liveParticles = 0u;     // P
-        bool liveParticlesExplicit = false;   // P came from an override, not the default
-        std::uint32_t tileSize = 0u;          // T
-        std::uint32_t waves = 0u;             // wave target used for the estimate
+        std::uint32_t chunkCapacity = 0u; // C
+        std::uint32_t liveParticles = 0u; // P
+        bool liveParticlesExplicit = false; // P came from an override, not the default
+        std::uint32_t tileSize = 0u; // T
+        std::uint32_t waves = 0u; // wave target used for the estimate
         std::uint32_t targetBlocksPerSm = 0u; // blocks per multiprocessor used for the estimate
         std::uint64_t memoryBudgetBytes = 0u; // resolved payload budget
-        std::string description;              // short human-readable summary
+        std::string description; // short human-readable summary
         std::uint64_t slotBytes = payloadBytesPerSlot; // payload bytes per storage slot
     };
 
@@ -249,8 +249,7 @@ namespace graphFlow
         if(config.hostBudgetBytes == 0u)
             throw std::invalid_argument{"graphFlow::DevicePolicy: hostBudgetBytes must be non-zero"};
         if(config.acceleratorBudgetCapBytes == 0u)
-            throw std::invalid_argument{
-                "graphFlow::DevicePolicy: acceleratorBudgetCapBytes must be non-zero"};
+            throw std::invalid_argument{"graphFlow::DevicePolicy: acceleratorBudgetCapBytes must be non-zero"};
         if(config.slotBytes == 0u)
             throw std::invalid_argument{"graphFlow::DevicePolicy: slotBytes must be non-zero"};
 
@@ -259,13 +258,11 @@ namespace graphFlow
         if(threadLimit == 0u)
             throw std::invalid_argument{"graphFlow::DevicePolicy: device reports maxThreadsPerBlock == 0"};
         if(threadLimit < warpSize)
-            throw std::invalid_argument{
-                "graphFlow::DevicePolicy: maxThreadsPerBlock is smaller than the warp size"};
+            throw std::invalid_argument{"graphFlow::DevicePolicy: maxThreadsPerBlock is smaller than the warp size"};
         if(properties.maxBlocksPerGrid == 0u)
             throw std::invalid_argument{"graphFlow::DevicePolicy: device reports maxBlocksPerGrid == 0"};
         if(overrides.liveParticles
-           && (*overrides.liveParticles == 0u
-               || std::uint64_t{*overrides.liveParticles} > numParticles))
+           && (*overrides.liveParticles == 0u || std::uint64_t{*overrides.liveParticles} > numParticles))
             throw std::invalid_argument{
                 "graphFlow::DevicePolicy: liveParticles must be non-zero and not exceed numParticles"};
 
@@ -276,8 +273,7 @@ namespace graphFlow
             if(*overrides.tileSize == 0u)
                 throw std::invalid_argument{"graphFlow::DevicePolicy: tileSize must be non-zero"};
             if(std::uint64_t{*overrides.tileSize} > threadLimit)
-                throw std::invalid_argument{
-                    "graphFlow::DevicePolicy: tileSize exceeds maxThreadsPerBlock"};
+                throw std::invalid_argument{"graphFlow::DevicePolicy: tileSize exceeds maxThreadsPerBlock"};
             tile = *overrides.tileSize;
         }
         else
@@ -301,14 +297,12 @@ namespace graphFlow
 
         // --- Launch and wave bounds for the chunk capacity C.
         std::uint64_t const gridCapacity = std::uint64_t{properties.maxBlocksPerGrid} * tile;
-        std::uint64_t const launchCapacity
-            = std::min<std::uint64_t>(config.maxChunkCapacity, gridCapacity);
+        std::uint64_t const launchCapacity = std::min<std::uint64_t>(config.maxChunkCapacity, gridCapacity);
         if(!overrides.chunkCapacity && launchCapacity < tile)
             throw std::invalid_argument{
                 "graphFlow::DevicePolicy: maxChunkCapacity and maxBlocksPerGrid cannot hold one tile"};
 
-        std::uint64_t const sms
-            = properties.multiProcessorCount == 0u ? 1u : properties.multiProcessorCount;
+        std::uint64_t const sms = properties.multiProcessorCount == 0u ? 1u : properties.multiProcessorCount;
         std::uint64_t const waveCapacity = detail::saturatedProduct(
             detail::saturatedProduct(
                 detail::saturatedProduct(std::uint64_t{config.waves}, sms),
@@ -353,8 +347,7 @@ namespace graphFlow
             {
                 // An explicit P is kept; shrink the derived C so that P*C fits the budget. The
                 // final P clamp below covers the explicit-C path.
-                std::uint64_t const liveBytes
-                    = detail::saturatedProduct(*overrides.liveParticles, config.slotBytes);
+                std::uint64_t const liveBytes = detail::saturatedProduct(*overrides.liveParticles, config.slotBytes);
                 std::uint64_t const byBudget = budgetBytes / liveBytes;
                 if(byBudget < candidate)
                 {
@@ -399,8 +392,8 @@ namespace graphFlow
             std::uint64_t const live = std::min<std::uint64_t>(
                 numParticles,
                 detail::saturatedProduct(config.liveParticlesPerChunk, chunkCapacity));
-            liveParticles = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(live, std::numeric_limits<std::uint32_t>::max()));
+            liveParticles
+                = static_cast<std::uint32_t>(std::min<std::uint64_t>(live, std::numeric_limits<std::uint32_t>::max()));
         }
 
         if(liveParticles != 0u)
@@ -412,19 +405,14 @@ namespace graphFlow
                 // Last resort: the launch C cannot hold one particle. Reduce the derived C to
                 // the largest tile multiple that still does, then clamp again.
                 std::uint64_t const maxSlots = budgetBytes / config.slotBytes;
-                std::uint64_t const shrunk = detail::roundDownToMultiple(
-                    std::min<std::uint64_t>(chunkCapacity, maxSlots),
-                    tile);
+                std::uint64_t const shrunk
+                    = detail::roundDownToMultiple(std::min<std::uint64_t>(chunkCapacity, maxSlots), tile);
                 if(shrunk < tile)
                     throw std::invalid_argument{
                         "graphFlow::DevicePolicy: the payload memory budget cannot hold one tile of the chunk"};
                 chunkCapacity = static_cast<std::uint32_t>(shrunk);
                 capacityCap = "memory";
-                maxLive = detail::largestLiveParticlesForBudget(
-                    chunkCapacity,
-                    budgetBytes,
-                    tile,
-                    config.slotBytes);
+                maxLive = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile, config.slotBytes);
             }
             if(maxLive == 0u)
                 throw std::invalid_argument{
@@ -433,9 +421,8 @@ namespace graphFlow
             {
                 if(std::uint64_t{liveParticles} > maxLive)
                     throw std::invalid_argument{
-                        "graphFlow::DevicePolicy: explicit liveParticles "
-                        + std::to_string(liveParticles) + " with chunkCapacity "
-                        + std::to_string(chunkCapacity) + " requires "
+                        "graphFlow::DevicePolicy: explicit liveParticles " + std::to_string(liveParticles)
+                        + " with chunkCapacity " + std::to_string(chunkCapacity) + " requires "
                         + std::to_string(requiredPayloadBytes(liveParticles, chunkCapacity, config.slotBytes))
                         + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes)
                         + " bytes; the largest feasible P is " + std::to_string(maxLive)};
@@ -461,13 +448,11 @@ namespace graphFlow
         policy.targetBlocksPerSm = config.targetBlocksPerSm;
         policy.memoryBudgetBytes = budgetBytes;
         policy.slotBytes = config.slotBytes;
-        policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P="
-                             + std::to_string(liveParticles) + " T=" + std::to_string(tile)
-                             + " waves=" + std::to_string(config.waves) + " blocksPerSm="
-                             + std::to_string(config.targetBlocksPerSm) + " budget="
-                             + std::to_string(budgetBytes) + "B warp="
-                             + std::to_string(properties.warpSize) + " sms="
-                             + std::to_string(properties.multiProcessorCount) + " cap=" + capacityCap;
+        policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P=" + std::to_string(liveParticles)
+                             + " T=" + std::to_string(tile) + " waves=" + std::to_string(config.waves)
+                             + " blocksPerSm=" + std::to_string(config.targetBlocksPerSm) + " budget="
+                             + std::to_string(budgetBytes) + "B warp=" + std::to_string(properties.warpSize)
+                             + " sms=" + std::to_string(properties.multiProcessorCount) + " cap=" + capacityCap;
         return policy;
     }
 

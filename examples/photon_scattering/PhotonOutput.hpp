@@ -12,9 +12,9 @@
 #include <fstream>
 #include <iomanip>
 #include <ostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <stdexcept>
 
 namespace graphFlow::photon::diagnostics
 {
@@ -110,8 +110,7 @@ namespace graphFlow::photon::diagnostics
 
         outcomesFile << "event,count\n";
         for(Event const event : {Event::transmitted, Event::reflected, Event::absorbed, Event::capped})
-            outcomesFile << outcomeName(event) << ',' << result.eventCounts[static_cast<std::uint32_t>(event)]
-                         << '\n';
+            outcomesFile << outcomeName(event) << ',' << result.eventCounts[static_cast<std::uint32_t>(event)] << '\n';
 
         histogramFile << "event,scatter_count,count\n";
         for(auto const& row : result.histograms)
@@ -128,8 +127,8 @@ namespace graphFlow::photon::diagnostics
             exitsFile << id << ',' << outcomeName(record.event) << ',' << record.scatterCount << ','
                       << record.position.x << ',' << record.position.y << ',' << record.position.z << ','
                       << record.direction.x << ',' << record.direction.y << ',' << record.direction.z << ','
-                      << record.direction.z << ',' << phi << ',' << record.position.x << ','
-                      << record.position.y << '\n';
+                      << record.direction.z << ',' << phi << ',' << record.position.x << ',' << record.position.y
+                      << '\n';
         }
 
         tracesFile << "id,step,kind,scatter_count,x,y,z,ux,uy,uz\n";
@@ -141,10 +140,9 @@ namespace graphFlow::photon::diagnostics
             for(std::size_t step = 0u; step < trace.vertices.size(); ++step)
             {
                 TraceVertex const& vertex = trace.vertices[step];
-                tracesFile << trace.id << ',' << step << ',' << traceName(vertex.kind) << ','
-                           << vertex.scatterCount << ',' << vertex.position.x << ',' << vertex.position.y << ','
-                           << vertex.position.z << ',' << vertex.direction.x << ',' << vertex.direction.y << ','
-                           << vertex.direction.z << '\n';
+                tracesFile << trace.id << ',' << step << ',' << traceName(vertex.kind) << ',' << vertex.scatterCount
+                           << ',' << vertex.position.x << ',' << vertex.position.y << ',' << vertex.position.z << ','
+                           << vertex.direction.x << ',' << vertex.direction.y << ',' << vertex.direction.z << '\n';
             }
         }
 

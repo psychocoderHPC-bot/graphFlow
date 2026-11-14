@@ -22,7 +22,7 @@ namespace graphFlow
     struct DenseBinPlan
     {
         std::vector<std::uint32_t> binBase; // size B
-        std::vector<std::uint32_t> fills;   // size R
+        std::vector<std::uint32_t> fills; // size R
         std::uint32_t numOutputChunks = 0u; // R
 
         [[nodiscard]] std::uint32_t tableWords() const

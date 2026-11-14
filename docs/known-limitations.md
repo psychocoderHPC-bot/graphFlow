@@ -74,8 +74,8 @@ hook adapters keep `GraphRunner::Queue` and `Batch` out of non-template
 `std::function` construction, the other nvcc 12.6.85 frontend crash. With the
 workaround the `rosi_v100` V100 `sm_70` CTest passes 247/247 and the CPU CTest
 passes 195/195 in Release and Debug; the RNG main is preserved. The hash-path
-rerun, CI, and the tree-wide format/SPDX sweep (T14b) remain open, and CUDA
-13.4/`sm_80`, fwk394, and H100 were not re-run in this validation.
+rerun remains open, and CUDA 13.4/`sm_80`, fwk394, and H100 were not re-run in
+this validation.
 
 ## Throughput is a shared-host baseline
 

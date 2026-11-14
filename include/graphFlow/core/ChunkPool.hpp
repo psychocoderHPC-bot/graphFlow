@@ -32,10 +32,10 @@ namespace graphFlow
     class ChunkPool
     {
     public:
-        using IdView
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolIdValue>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
-        using U32View
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using IdView = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<PoolIdValue>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using U32View = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         ChunkPool(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
             : m_numChunks{numChunks}
@@ -220,9 +220,7 @@ namespace graphFlow
 
     private:
         /** Validated total slot count; kernels address slots with a 32-bit index. */
-        [[nodiscard]] static std::uint64_t checkedSlotCount(
-            std::uint32_t numChunks,
-            std::uint32_t chunkCapacity)
+        [[nodiscard]] static std::uint64_t checkedSlotCount(std::uint32_t numChunks, std::uint32_t chunkCapacity)
         {
             if(numChunks == 0u)
                 throw std::invalid_argument{"graphFlow::ChunkPool: numChunks must be non-zero"};

@@ -112,11 +112,7 @@ namespace graphFlow
                 alpaka::onAcc::scope::block);
             if(old == hashEmptyKey || old == bin)
             {
-                alpaka::onAcc::atomicAdd(
-                    acc,
-                    &table[slot].count,
-                    std::uint32_t{1u},
-                    alpaka::onAcc::scope::block);
+                alpaka::onAcc::atomicAdd(acc, &table[slot].count, std::uint32_t{1u}, alpaka::onAcc::scope::block);
                 return true;
             }
             slot = (slot + 1u) & TBinTable::mask;

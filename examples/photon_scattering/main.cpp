@@ -5,7 +5,6 @@
 #include "PhotonCli.hpp"
 #include "PhotonOutput.hpp"
 #include "PhotonScattering.hpp"
-
 #include "graphFlow/core/Backend.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -54,17 +53,13 @@ namespace
     void printResult(graphFlow::photon::ScatteringResult const& result)
     {
         std::cout << "# event,count\n";
-        std::cout << "transmitted," << result.eventCounts[static_cast<std::uint32_t>(
-                                             graphFlow::photon::Event::transmitted)]
+        std::cout << "transmitted,"
+                  << result.eventCounts[static_cast<std::uint32_t>(graphFlow::photon::Event::transmitted)] << '\n';
+        std::cout << "reflected,"
+                  << result.eventCounts[static_cast<std::uint32_t>(graphFlow::photon::Event::reflected)] << '\n';
+        std::cout << "absorbed," << result.eventCounts[static_cast<std::uint32_t>(graphFlow::photon::Event::absorbed)]
                   << '\n';
-        std::cout << "reflected," << result.eventCounts[static_cast<std::uint32_t>(
-                                           graphFlow::photon::Event::reflected)]
-                  << '\n';
-        std::cout << "absorbed," << result.eventCounts[static_cast<std::uint32_t>(
-                                          graphFlow::photon::Event::absorbed)]
-                  << '\n';
-        std::cout << "capped," << result.eventCounts[static_cast<std::uint32_t>(
-                                        graphFlow::photon::Event::capped)]
+        std::cout << "capped," << result.eventCounts[static_cast<std::uint32_t>(graphFlow::photon::Event::capped)]
                   << '\n';
         std::cout << "# outcome,scatter-count,count\n";
         for(auto const& row : result.histograms)
@@ -88,21 +83,15 @@ namespace
 
         std::cout << "# graphFlow_photon_scattering backend=" << graphFlow::backendName(backend)
                   << " device=" << parameters.deviceIndex << " device-name=" << deviceName
-                  << " photons=" << parameters.numPhotons
-                  << " thickness=" << parameters.thickness
-                  << " sigma-s=" << parameters.sigmaS
-                  << " sigma-a=" << parameters.sigmaA
+                  << " photons=" << parameters.numPhotons << " thickness=" << parameters.thickness
+                  << " sigma-s=" << parameters.sigmaS << " sigma-a=" << parameters.sigmaA
                   << " mode=" << (parameters.mode == graphFlow::photon::ScatterMode::forward ? "forward" : "isotropic")
-                  << " max-scatters=" << parameters.maxScatters
-                  << " seed=" << parameters.seed
-                  << " chunk-size=" << parameters.chunkSize
-                  << " live-particles=" << result.liveParticles
-                  << " tile-size=" << parameters.tileSize
-                  << " batch-chunks=" << parameters.batchChunks
+                  << " max-scatters=" << parameters.maxScatters << " seed=" << parameters.seed
+                  << " chunk-size=" << parameters.chunkSize << " live-particles=" << result.liveParticles
+                  << " tile-size=" << parameters.tileSize << " batch-chunks=" << parameters.batchChunks
                   << " frame-cap=" << parameters.frameCap << '\n';
         std::cout << "# units length=1 coefficient=1/length\n";
-        std::cout << "# pool-chunks=" << result.stats.poolChunks
-                  << " peak-live-chunks=" << result.stats.peakLiveChunks
+        std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
         printResult(result);
 
@@ -122,11 +111,7 @@ namespace
             metadata.multiProcessorCount = properties.multiProcessorCount;
             metadata.warpSize = properties.warpSize;
             metadata.globalMemBytes = properties.globalMemCapacityBytes;
-            graphFlow::photon::diagnostics::writeRunOutputs(
-                *outputDirectory,
-                result,
-                parameters,
-                metadata);
+            graphFlow::photon::diagnostics::writeRunOutputs(*outputDirectory, result, parameters, metadata);
             std::cout << "# output-dir=" << *outputDirectory << '\n';
         }
         return EXIT_SUCCESS;
@@ -183,16 +168,9 @@ int main(int argc, char** argv)
                 graphFlow::photon::cli::ResolvedOptions const resolved
                     = graphFlow::photon::cli::resolveOptions(options, device.getDeviceProperties());
                 std::cout << "# selected-backend=" << graphFlow::backendName(selected)
-                          << " selected-device=" << options.deviceIndex
-                          << " device-name=" << deviceName << '\n';
+                          << " selected-device=" << options.deviceIndex << " device-name=" << deviceName << '\n';
                 std::cout << "# policy " << resolved.policy.description << '\n';
-                return run(
-                    resolved,
-                    selected,
-                    device,
-                    deviceName,
-                    commandLine,
-                    options.outputDirectory);
+                return run(resolved, selected, device, deviceName, commandLine, options.outputDirectory);
             });
     }
     catch(graphFlow::BackendUnavailable const& error)

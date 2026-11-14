@@ -22,9 +22,8 @@ namespace graphFlow::test
     {
         using Runner = graphFlow::GraphRunner<TDevice, TStorage>;
         return THooks{
-            [base = hooks, fn](
-                typename Runner::Queue const& queue,
-                typename Runner::Batch const& batch) mutable { fn(base.launch, queue, batch); },
+            [base = hooks, fn](typename Runner::Queue const& queue, typename Runner::Batch const& batch) mutable
+            { fn(base.launch, queue, batch); },
             hooks.advance,
             hooks.finish,
             hooks.abort};
@@ -37,19 +36,15 @@ namespace graphFlow::test
         return THooks{
             hooks.launch,
             hooks.advance,
-            [base = hooks, fn](
-                typename Runner::Batch const& batch,
-                std::vector<graphFlow::ChunkDescriptor>& outputs) mutable { fn(base.finish, batch, outputs); },
+            [base = hooks,
+             fn](typename Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs) mutable
+            { fn(base.finish, batch, outputs); },
             hooks.abort};
     }
 
     template<typename TDevice, typename TStorage, typename THooks, typename TFn>
     THooks wrapAbort(THooks hooks, TFn fn)
     {
-        return THooks{
-            hooks.launch,
-            hooks.advance,
-            hooks.finish,
-            [base = hooks, fn]() mutable { fn(base.abort); }};
+        return THooks{hooks.launch, hooks.advance, hooks.finish, [base = hooks, fn]() mutable { fn(base.abort); }};
     }
 } // namespace graphFlow::test
