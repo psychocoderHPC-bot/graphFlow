@@ -62,6 +62,41 @@ exit status are identical. The derived pool reserve changes from `P+6` to
 `P+8` because the A/B partitions now expose three named outcomes; that
 diagnostic is not a numeric result.
 
+### T5 photon scattering output and diagnostics
+
+The photon-scattering rework was tested at implementation commit
+`7e3a9c9121afaaebcbf149ac7e5d18b4b933e295` on base
+`449c1ec1ffcd1c72f780c688cf113c82b70bf130`. The environment is the one above:
+fwk394 CPU with g++ 13.3, hal CUDA with an NVIDIA A30 (`sm_80`), CUDA 13.4,
+CMake 3.28.3, Ninja 1.11.1, alpaka
+`eb677e8d7f70d79b35df25d9002f94ba669b6f44`, C++20 Release, with
+`-Dalpaka_COMPILE_PEDANTIC=ON` (`-Werror` confirmed in both build caches).
+The remote source trees were uploaded as archives without `.git`, so the
+provenance was passed explicitly with
+`-DGRAPHFLOW_GIT_COMMIT=7e3a9c9121afaaebcbf149ac7e5d18b4b933e295` and
+`-DGRAPHFLOW_ALPAKA_PIN=eb677e8d7f70d79b35df25d9002f94ba669b6f44`.
+
+| Configuration | Command | Result |
+| --- | --- | --- |
+| CPU fwk394 | `cmake --build photon-rework-build-cpu -j 16` then `ctest --output-on-failure -j 8` | 194/194 passed |
+| CUDA hal A30 | `cmake --build photon-rework-build-cuda -j 16` then `ctest --output-on-failure -j 4` | 246/246 passed |
+| CPU diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
+| CUDA diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
+| Label registration | `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` then `ctest -N -L diagnostics` | 2 tests registered; default configure registers 0 |
+
+The rework adds `--output-dir` CSV output, bounded deterministic traces,
+`tools/plot_photon_scattering.py`, output/trace tests, and the opt-in
+diagnostics label. A CPU sample with the final binary wrote
+`metadata.csv`, `outcomes.csv`, `scatter_histogram.csv`, `exits.csv`,
+`traces.csv` and `trace_summary.csv`; metadata reported the tested commit,
+alpaka pin, `sm_80`, and the expected parameters. The plotting script ran on
+the forward and isotropic samples and wrote `figure1_paths` through
+`figure4_detector` in PNG, SVG and PDF (12 files per sample). The forward
+sample had `transmitted=4097`, `reflected=0`, `absorbed=0`, `capped=0`.
+The isotropic sample had `transmitted=1946`, `reflected=1066`,
+`absorbed=1085`, `capped=0`, summing to 4097. HIP remains compile-only with no
+AMD runtime device; no H100 run is claimed.
+
 ### PR-A generic graph API core
 
 The additive graph API core was validated at

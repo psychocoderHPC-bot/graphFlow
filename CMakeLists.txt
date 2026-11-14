@@ -15,7 +15,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(GRAPHFLOW_GIT_COMMIT "unknown" CACHE STRING "graphFlow commit written to photon metadata")
+set(GRAPHFLOW_ALPAKA_PIN "unknown" CACHE STRING "alpaka commit written to photon metadata")
+if(GRAPHFLOW_GIT_COMMIT STREQUAL "unknown")
+    execute_process(
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE _graphflow_git_commit
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_graphflow_git_commit)
+        set(GRAPHFLOW_GIT_COMMIT "${_graphflow_git_commit}" CACHE STRING "graphFlow commit written to photon metadata" FORCE)
+    endif()
+endif()
+
 option(GRAPHFLOW_ENABLE_CUDA "Compile the CUDA backend (sets alpaka_DEP_CUDA=ON)" OFF)
+option(
+    GRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS
+    "Register the opt-in large photon diagnostics CTest cases"
+    OFF
+)
 option(GRAPHFLOW_ENABLE_HIP "Compile the HIP backend (sets alpaka_DEP_HIP=ON)" OFF)
 option(GRAPHFLOW_ENABLE_OPENMP "Enable the OpenMP executor" OFF)
 option(GRAPHFLOW_BUILD_TESTS "Build the Catch2 test suite" ON)
@@ -32,6 +51,18 @@ if(NOT EXISTS "${GRAPHFLOW_ALPAKA_SOURCE_DIR}/include/alpaka/alpaka.hpp")
         FATAL_ERROR
         "GRAPHFLOW_ALPAKA_SOURCE_DIR='${GRAPHFLOW_ALPAKA_SOURCE_DIR}' does not contain include/alpaka/alpaka.hpp"
     )
+endif()
+
+if(GRAPHFLOW_ALPAKA_PIN STREQUAL "unknown")
+    execute_process(
+        COMMAND git -C "${GRAPHFLOW_ALPAKA_SOURCE_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE _graphflow_alpaka_pin
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_graphflow_alpaka_pin)
+        set(GRAPHFLOW_ALPAKA_PIN "${_graphflow_alpaka_pin}" CACHE STRING "alpaka commit written to photon metadata" FORCE)
+    endif()
 endif()
 
 if(GRAPHFLOW_ENABLE_CUDA AND GRAPHFLOW_ENABLE_HIP)
@@ -114,6 +145,22 @@ if(GRAPHFLOW_BUILD_EXAMPLES)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback
     )
     alpaka_finalize(graphFlow_particle_feedback)
+
+    add_executable(graphFlow_photon_scattering examples/photon_scattering/main.cpp)
+    target_link_libraries(graphFlow_photon_scattering PRIVATE graphFlow::graphFlow)
+    target_include_directories(
+        graphFlow_photon_scattering
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering
+    )
+    target_compile_definitions(
+        graphFlow_photon_scattering
+        PRIVATE
+            GRAPHFLOW_GIT_COMMIT="${GRAPHFLOW_GIT_COMMIT}"
+            GRAPHFLOW_ALPAKA_PIN="${GRAPHFLOW_ALPAKA_PIN}"
+            GRAPHFLOW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            GRAPHFLOW_ALPAKA_SOURCE_DIR="${GRAPHFLOW_ALPAKA_SOURCE_DIR}"
+    )
+    alpaka_finalize(graphFlow_photon_scattering)
 endif()
 
 if(GRAPHFLOW_BUILD_TESTS)
@@ -149,6 +196,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
+        tests/integration/test_photon_scattering.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
         target_sources(
@@ -156,6 +204,7 @@ if(GRAPHFLOW_BUILD_TESTS)
             PRIVATE
                 tests/unit/test_cuda_kernel.cpp
                 tests/integration/test_flow_execution_cuda.cpp
+                tests/integration/test_photon_scattering_cuda.cpp
         )
     endif()
     if(GRAPHFLOW_ENABLE_HIP)
@@ -167,6 +216,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         graphFlow_tests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/reference
     )
@@ -174,7 +224,16 @@ if(GRAPHFLOW_BUILD_TESTS)
     alpaka_finalize(graphFlow_tests)
 
     include(Catch)
-    catch_discover_tests(graphFlow_tests)
+    # Large statistical photon runs are opt-in. The default suite keeps only fast cases.
+    catch_discover_tests(graphFlow_tests TEST_SPEC "~[diagnostics]")
+    if(GRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS)
+        catch_discover_tests(
+            graphFlow_tests
+            TEST_SPEC "[diagnostics]"
+            TEST_PREFIX "diagnostics."
+            PROPERTIES LABELS "diagnostics"
+        )
+    endif()
 
     # Source-level contract: the user-facing example must not fall back to numeric node ids,
     # route vectors, manual runner/pool construction, or the deprecated example stages.
@@ -242,4 +301,92 @@ if(GRAPHFLOW_BUILD_TESTS)
             endif()
         endforeach()
     endforeach()
+
+    add_test(
+        NAME example.photon_public_api
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DEXAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_photon_public_api.cmake"
+    )
+    set_tests_properties(example.photon_public_api PROPERTIES LABELS "example;api;photon")
+
+    if(TARGET graphFlow_photon_scattering)
+        set(
+            GRAPHFLOW_PHOTON_CLI_BINARY
+            "$<TARGET_FILE:graphFlow_photon_scattering>"
+        )
+    else()
+        set(
+            GRAPHFLOW_PHOTON_CLI_BINARY
+            "${CMAKE_CURRENT_BINARY_DIR}/graphFlow_photon_scattering${CMAKE_EXECUTABLE_SUFFIX}"
+        )
+    endif()
+
+    function(graphflow_add_photon_cli_test backend photons chunk_size mode sigma_s sigma_a cap seed)
+        set(
+            test_name
+            "example.photon.${backend}.N${photons}.C${chunk_size}.${mode}.S${sigma_s}.A${sigma_a}.K${cap}"
+        )
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DBINARY=${GRAPHFLOW_PHOTON_CLI_BINARY}"
+                "-DBACKEND=${backend}"
+                "-DPHOTONS=${photons}"
+                "-DCHUNK_SIZE=${chunk_size}"
+                "-DSEED=${seed}"
+                "-DSIGMA_S=${sigma_s}"
+                "-DSIGMA_A=${sigma_a}"
+                "-DMODE=${mode}"
+                "-DCAP=${cap}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_photon_cli.cmake"
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                TIMEOUT 300
+                LABELS "example;cli;photon;${backend}"
+        )
+    endfunction()
+
+    foreach(photons IN ITEMS 0 1 127 4097)
+        foreach(chunk_size IN ITEMS 1 127)
+            graphflow_add_photon_cli_test(cpu ${photons} ${chunk_size} forward 1.0 0.0 64 42)
+            if(GRAPHFLOW_ENABLE_CUDA)
+                graphflow_add_photon_cli_test(cuda ${photons} ${chunk_size} forward 1.0 0.0 64 42)
+            endif()
+        endforeach()
+    endforeach()
+    graphflow_add_photon_cli_test(cpu 4097 31 isotropic 0.7 0.3 256 7)
+    graphflow_add_photon_cli_test(cpu 512 31 forward 1.0 0.0 2 42)
+    if(GRAPHFLOW_ENABLE_CUDA)
+        graphflow_add_photon_cli_test(cuda 4097 31 isotropic 0.7 0.3 256 7)
+        graphflow_add_photon_cli_test(cuda 512 31 forward 1.0 0.0 2 42)
+    endif()
+
+    function(graphflow_add_photon_output_test backend)
+        set(test_name "example.photon.output.${backend}")
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DBINARY=${GRAPHFLOW_PHOTON_CLI_BINARY}"
+                "-DBACKEND=${backend}"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/photon-output-${backend}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_photon_output.cmake"
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                TIMEOUT 300
+                LABELS "example;photon;output;${backend}"
+        )
+    endfunction()
+
+    graphflow_add_photon_output_test(cpu)
+    if(GRAPHFLOW_ENABLE_CUDA)
+        graphflow_add_photon_output_test(cuda)
+    endif()
 endif()

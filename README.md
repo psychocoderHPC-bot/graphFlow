@@ -44,7 +44,7 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 170/170, hal CUDA 206/206. The totals
+Recorded integrated tests: fwk394 CPU 194/194, hal CUDA 246/246. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
 include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
 failure-status cases. The typed CUDA tests run the feedback graph,
@@ -186,6 +186,77 @@ current storage credits, so a full `Q` batch is not required for progress.
 `--backend` dispatches to `onHost::makeDeviceSelector` with the pinned tags
 `api::host`/`deviceKind::cpu`, `api::cuda`/`deviceKind::nvidiaGpu`, and
 `api::hip`/`deviceKind::amdGpu`.
+
+## Photon scattering example
+
+`graphFlow_photon_scattering` transports independent photon histories through
+a homogeneous plane-parallel slab. The source emits at `(0, 0, 0)` along
+`+z`; the graph is source -> propose flight -> advance and route -> scatter ->
+propose flight, with transmitted, reflected, absorbed and capped outcomes
+feeding one terminal sink. Lengths use one unit and coefficients use inverse
+length. The forward mode preserves the direction after a collision; the
+isotropic mode samples `mu = 2U-1` and `phi = 2*pi*V`.
+
+Forward run with machine-readable output and a bounded trace:
+
+```sh
+mkdir -p /tmp/photon-forward
+./build-cpu/graphFlow_photon_scattering --backend cpu --photons 4097 \
+  --thickness 1 --sigma-s 3 --sigma-a 0 --mode forward --seed 42 \
+  --chunk-size 127 --output-dir /tmp/photon-forward \
+  --trace-photons 16 --trace-vertices 256
+```
+
+Isotropic run with absorption and the optional detector image:
+
+```sh
+mkdir -p /tmp/photon-isotropic
+./build-cpu/graphFlow_photon_scattering --backend cpu --photons 4097 \
+  --thickness 1 --sigma-s 1 --sigma-a 0.2 --mode isotropic --seed 7 \
+  --chunk-size 127 --output-dir /tmp/photon-isotropic \
+  --trace-photons 16 --trace-vertices 256
+```
+
+`--output-dir` writes `metadata.csv`, `outcomes.csv`,
+`scatter_histogram.csv`, `exits.csv`, `traces.csv` and `trace_summary.csv`.
+Metadata records the graphFlow commit, alpaka pin, source directories, backend,
+device, command line, parameters, units, counts and trace limits. `exits.csv`
+contains face exit angles and transverse positions. `traces.csv` stores the
+ordered source, scatter and terminal vertices for the deterministic ids
+`[0, trace-photons)`. `trace_summary.csv` reports each selected id's stored
+vertex count and a `truncated` flag. That flag is independent of the simulation
+`--max-scatters` guard: a full trace buffer drops later vertices but the history
+still terminates normally or as `capped`.
+
+Plot the saved data (Python and Matplotlib are not C++ or CTest dependencies):
+
+```sh
+python3 tools/plot_photon_scattering.py --input /tmp/photon-forward \
+  --out /tmp/photon-forward/plots
+python3 tools/plot_photon_scattering.py --input /tmp/photon-isotropic \
+  --out /tmp/photon-isotropic/plots
+```
+
+Each run writes `figure1_paths`, `figure2_scatter_spectrum`,
+`figure3_outcomes` and `figure4_detector` as PNG, SVG and PDF. Figure 1 shows
+the x-z projection with the scripted three-scatter reflected path from the
+unit test. Figure 2 overlays `N*Poisson(sigma_s*L)` in forward mode and shows a
+residual panel. Figure 3 shows terminal outcomes and the uncollided fraction
+with its binomial error bar against `exp(-sigma_t*L)`. Figure 4 intersects face
+exits with finite detector planes and reports hits outside the detector.
+
+Expected forward output for the command above: `transmitted,4097`,
+`reflected,0`, `absorbed,0`, `capped,0`, `# terminal-sum,4097` and
+`# inconsistent,0`. The collision count follows `Poisson(3)`; about 80.09% of
+histories have at least two scatters. For the isotropic command, the expected
+uncollided fraction is `exp(-1.2) = 0.3010`. Both runs write one row per
+terminal photon to `exits.csv` only for transmitted and reflected outcomes.
+
+Larger statistical diagnostics (`N=200000` forward and `N=100000` isotropic)
+are not part of the default CTest suite. Configure with
+`-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
+`ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
+claimed runtime; CUDA execution is validated on `hal` with `sm_80`.
 
 ## Semantics
 
