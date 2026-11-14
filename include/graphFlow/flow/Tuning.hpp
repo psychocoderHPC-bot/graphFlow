@@ -25,6 +25,14 @@ namespace graphFlow
 
         // Batching.
         std::optional<std::uint32_t> batchChunks;
+        /** Maximum number of concurrently in-flight batches per node.
+         *
+         * Absence keeps the historical one-batch-per-node scheduling. A value above one lets the
+         * runner submit several independent batches of the same node before the first completes,
+         * which overlaps host planning with device work and bounds the accepted work by the event
+         * set of each node. The default never changes.
+         */
+        std::optional<std::uint32_t> inflightBatches;
 
         // Storage and pool limits.
         std::optional<std::uint32_t> chunkCapacity;
@@ -52,6 +60,7 @@ namespace graphFlow
         void validate() const
         {
             validateNonZero(batchChunks, "batchChunks");
+            validateNonZero(inflightBatches, "inflightBatches");
             validateNonZero(chunkCapacity, "chunkCapacity");
             validateNonZero(liveParticles, "liveParticles");
             validateNonZero(tileSize, "tileSize");

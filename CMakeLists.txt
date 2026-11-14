@@ -212,6 +212,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_admission.cpp
         tests/integration/test_failure_paths.cpp
         tests/integration/test_batching.cpp
+        tests/integration/test_async_execution.cpp
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
