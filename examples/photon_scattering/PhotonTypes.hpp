@@ -74,9 +74,9 @@ namespace graphFlow::photon
 
     /** Photon payload of the public `Flow` API.
      *
-     * `scatterCount` counts completed scatter interactions and is also the Philox visit index, so
-     * every flight decision, collision-kind decision and angular draw depends only on
-     * `(seed, id, scatterCount, purpose)`.
+     * `scatterCount` counts completed scatter interactions and is also the stream event index, so
+     * every flight decision, collision-kind decision and angular draw depends only on the packed
+     * `(seed, id, scatterCount, purpose)` engine position.
      */
     struct Photon
     {
@@ -184,6 +184,10 @@ namespace graphFlow::photon
     /** Validate the physical and execution configuration before a run. */
     inline void validateParameters(Parameters const& parameters)
     {
+        if(parameters.numPhotons != 0u && parameters.numPhotons - 1u > graphFlow::rng::maxStreamId)
+            throw std::invalid_argument{"graphFlow::photon: photon count exceeds the RNG stream-id range"};
+        if(parameters.maxScatters > graphFlow::rng::maxStreamEvent)
+            throw std::invalid_argument{"graphFlow::photon: max scatters exceeds the RNG stream-event range"};
         if(!std::isfinite(parameters.thickness) || parameters.thickness <= 0.0)
             throw std::invalid_argument{"graphFlow::photon: thickness must be finite and positive"};
         if(!std::isfinite(parameters.sigmaS) || parameters.sigmaS < 0.0)
@@ -216,6 +220,7 @@ namespace graphFlow::photon
     inline graphFlow::Tuning tuningOf(Parameters const& parameters)
     {
         graphFlow::Tuning tuning;
+        tuning.seed = parameters.seed;
         tuning.chunkCapacity = parameters.chunkSize;
         if(parameters.liveParticles != 0u)
             tuning.liveParticles = parameters.liveParticles;

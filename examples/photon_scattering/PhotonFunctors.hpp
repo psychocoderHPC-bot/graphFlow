@@ -5,7 +5,6 @@
 #pragma once
 
 #include "PhotonTypes.hpp"
-
 #include "graphFlow/flow/Concepts.hpp"
 #include "graphFlow/flow/Status.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
@@ -17,20 +16,9 @@
 
 namespace graphFlow::photon
 {
-    /** Open-interval uniform from one 32 bit Philox word.
-     *
-     * The midpoint mapping `(word + 0.5) * 2^-32` is strictly inside `(0, 1)`, so `log(U)` is
-     * finite and the exponential free-flight sample is always positive.
-     */
-    ALPAKA_FN_ACC inline double openUniform(std::uint32_t word)
-    {
-        return (static_cast<double>(word) + 0.5) * (1.0 / 4294967296.0);
-    }
-
     ALPAKA_FN_ACC inline bool finite(Vec3 const& value)
     {
-        return alpaka::math::isfinite(value.x) && alpaka::math::isfinite(value.y)
-               && alpaka::math::isfinite(value.z);
+        return alpaka::math::isfinite(value.x) && alpaka::math::isfinite(value.y) && alpaka::math::isfinite(value.z);
     }
 
     /** Face reached by the current ray, if any. */
@@ -185,31 +173,19 @@ namespace graphFlow::photon
         return UpdateResult::success;
     }
 
-    /** Isotropic direction from the cosine and azimuth purposes at the current scatter count. */
-    ALPAKA_FN_ACC inline Vec3 isotropicDirection(
-        std::uint64_t seed,
-        std::uint64_t id,
-        std::uint32_t scatterCount)
+    /** Isotropic direction from the scatter engine.
+     *
+     * The cosine draw uses `[0, 1)`; `2U - 1` covers `[-1, 1)`. The azimuth uses a second `[0, 1)`
+     * draw. graphFlow owns the event and purpose, so these are consecutive draws of the scatter
+     * stage engine.
+     */
+    ALPAKA_FN_ACC inline Vec3 isotropicDirection(rng::Engine& engine)
     {
-        std::uint32_t const cosineWord = rng::draw(
-            seed,
-            id,
-            scatterCount,
-            rng::purposeCosine,
-            rng::photonPurposesPerVisit);
-        std::uint32_t const azimuthWord = rng::draw(
-            seed,
-            id,
-            scatterCount,
-            rng::purposeAzimuth,
-            rng::photonPurposesPerVisit);
-        double const mu = 2.0 * openUniform(cosineWord) - 1.0;
-        double const phi = 2.0 * 3.141592653589793238462643383279502884 * openUniform(azimuthWord);
+        double const mu = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(engine) -1.0;
+        double const phi
+            = 2.0 * 3.141592653589793238462643383279502884 * alpaka::rand::distribution::UniformReal<double>{}(engine);
         double const transverse = alpaka::math::sqrt(alpaka::math::max(0.0, 1.0 - mu * mu));
-        return Vec3{
-            transverse * alpaka::math::cos(phi),
-            transverse * alpaka::math::sin(phi),
-            mu};
+        return Vec3{transverse * alpaka::math::cos(phi), transverse * alpaka::math::sin(phi), mu};
     }
 
     /** No-op trace writer used by production runs without diagnostics. */
@@ -281,38 +257,27 @@ namespace graphFlow::photon
 
     using GeneratePhoton = GeneratePhotonT<>;
 
-    /** Transform: draw the flight and collision-kind uniforms and store a checked proposal. */
+    /** Transform: draw the flight and collision-kind uniforms and store a checked proposal.
+     *
+     * The flight sample needs a positive value for `log`. `UniformReal<double, interval::CO>`
+     * returns `[0, 1)`; `1 - U` maps it to `(0, 1]`, so the material distance is non-negative and
+     * `resolveFlight` rejects the exact zero-distance endpoint. The collision-kind draw is a second
+     * `[0, 1)` sample from the same propose-stage engine.
+     */
     struct ProposeFlight
     {
         Slab slab{};
-        std::uint64_t seed = 0u;
         std::uint32_t maxScatters = 0u;
 
-        ALPAKA_FN_ACC void operator()(auto const&, Status& status, Photon& photon) const
+        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, Photon& photon) const
         {
-            std::uint32_t const flightWord = rng::draw(
-                seed,
-                photon.id,
-                photon.scatterCount,
-                rng::purposeFlight,
-                rng::photonPurposesPerVisit);
-            std::uint32_t const kindWord = rng::draw(
-                seed,
-                photon.id,
-                photon.scatterCount,
-                rng::purposeCollisionKind,
-                rng::photonPurposesPerVisit);
-            double const uniform = openUniform(flightWord);
+            double const flightUniform = 1.0 - alpaka::rand::distribution::UniformReal<double>{}(engine);
+            double const kindUniform = alpaka::rand::distribution::UniformReal<double>{}(engine);
             double const total = sigmaTotal(slab);
             double sampledDistance = 0.0;
             if(alpaka::math::isfinite(total) && total > 0.0)
-                sampledDistance = -alpaka::math::log(uniform) / total;
-            photon.proposal = resolveFlight(
-                slab,
-                photon,
-                sampledDistance,
-                openUniform(kindWord),
-                maxScatters);
+                sampledDistance = -alpaka::math::log(flightUniform) / total;
+            photon.proposal = resolveFlight(slab, photon, sampledDistance, kindUniform, maxScatters);
             if(!photon.proposal.valid)
                 status.set(StatusCode::invalid);
         }
@@ -361,10 +326,9 @@ namespace graphFlow::photon
     struct ScatterT
     {
         ScatterMode mode = ScatterMode::forward;
-        std::uint64_t seed = 0u;
         mutable TTrace trace;
 
-        ALPAKA_FN_ACC void operator()(auto const&, Status& status, Photon& photon) const
+        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, Photon& photon) const
         {
             if(!photon.proposal.valid || photon.proposal.event != Event::scatter)
             {
@@ -372,7 +336,7 @@ namespace graphFlow::photon
                 return;
             }
             if(mode == ScatterMode::isotropic)
-                photon.direction = isotropicDirection(seed, photon.id, photon.scatterCount);
+                photon.direction = isotropicDirection(engine);
             if(!finite(photon.direction))
             {
                 status.set(StatusCode::invalid);
@@ -383,12 +347,7 @@ namespace graphFlow::photon
                 status.set(StatusCode::overflow);
                 return;
             }
-            trace.record(
-                photon.id,
-                TraceKind::scatter,
-                photon.scatterCount + 1u,
-                photon.position,
-                photon.direction);
+            trace.record(photon.id, TraceKind::scatter, photon.scatterCount + 1u, photon.position, photon.direction);
             ++photon.scatterCount;
         }
     };
@@ -418,22 +377,10 @@ namespace graphFlow::photon
                 return;
             }
 
-            records[photon.id] = TerminalRecord{
-                event,
-                photon.scatterCount,
-                photon.position,
-                photon.direction};
-            trace.record(
-                photon.id,
-                traceKindOf(event),
-                photon.scatterCount,
-                photon.position,
-                photon.direction);
-            std::uint32_t const previous = alpaka::onAcc::atomicAdd(
-                acc,
-                &visits[photon.id],
-                std::uint32_t{1u},
-                alpaka::onAcc::scope::device);
+            records[photon.id] = TerminalRecord{event, photon.scatterCount, photon.position, photon.direction};
+            trace.record(photon.id, traceKindOf(event), photon.scatterCount, photon.position, photon.direction);
+            std::uint32_t const previous
+                = alpaka::onAcc::atomicAdd(acc, &visits[photon.id], std::uint32_t{1u}, alpaka::onAcc::scope::device);
             if(previous != 0u)
                 status.set(StatusCode::invalid);
         }

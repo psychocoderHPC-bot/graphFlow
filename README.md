@@ -51,7 +51,8 @@ remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results: CPU CTest **194/194 passed** (OMP=ON Release); CPU OpenMP with
+results: CPU CTest **193/193 passed** at the RNG API change (OMP=ON Release,
+pedantic); CPU OpenMP with
 `GOMP_SPINCOUNT=0` (passive) at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, OMP=2 Q8 4.46 s. All histogram sums are exact and no
@@ -72,9 +73,9 @@ with `Flow<Particle>` handles and named outcome ports in a 121-line user file
 (`ParticleFeedback.hpp`). `ParticleStages.hpp` remains only for the older
 low-level tests. The photon-scattering example runs the same public API
 with slab geometry, five events, `Philox4x32x10` draws, typed failure status,
-CSV and trace output, and plots. The fixed-seed 33-invocation CLI comparison
-that matched the pre-change binary is historical evidence on the previous
-platforms; the `rosi_v100` 33-invocation baseline is not yet recorded.
+CSV and trace output, and plots. The RNG API change replaced the old Philox
+offset map with keyed engines, so fixed-seed particle and photon baselines
+changed once. The earlier 33-invocation CLI comparison predates that change.
 
 ## Historical measured baseline
 
@@ -301,23 +302,26 @@ Fields per particle: `id: uint64`, `property: uint32`, `weight: uint32`,
 `visit: uint32`. All decisions are integer only.
 
 ```text
-Generate: property = Philox(seed, id, offset 0); weight = 0; visit = 0
-Filter:   draw(seed, id, visit, Filter) >= property ? bin 1 : bin 0
-A:        draw(seed, id, visit, A) >= 0x80000000 ? weight += 1000, visit += 1, feedback : sink
-B:        draw(seed, id, visit, B) >= 0x80000000 ? weight += 1,    visit += 1, feedback : sink
+Generate: property = engine(id, event 0, source)(); weight = 0; visit = 0
+Filter:   engine(id, visit, filter)() >= property ? bin 1 : bin 0
+A:        engine(id, visit, A)() >= 0x80000000 ? weight += 1000, visit += 1, feedback : sink
+B:        engine(id, visit, B)() >= 0x80000000 ? weight += 1,    visit += 1, feedback : sink
 Sink:     result[id] = weight
 ```
 
-Decision offsets are `4 * (1 + 3 * visit + purpose)` with purpose 0 for Filter,
-1 for A, and 2 for B. The property draw uses offset 0. Weight addition is
-checked; overflow and an out-of-range classifier result are hard batch errors. A
-particle that would feed back but already reached `--max-visits` is routed to the
-sink without a mutation and counted as non-terminating.
+`--seed` sets `Tuning::seed`. graphFlow packs `(id, event, purpose)`, mixes the
+position with SplitMix64, and constructs `Philox4x32x10(key, 0, 0)` for each
+logical position. The functor receives the initialized engine; it never sees a
+seed, offset, or purpose count. Weight addition is checked; overflow and an
+out-of-range classifier result are hard batch errors. A particle that would feed
+back but already reached `--max-visits` is routed to the sink without a mutation
+and counted as non-terminating.
 
-The pinned `Philox4x32x10` constructor offset is defective. `rng::drawAt`
-constructs at offset zero and advances the public engine. Draw positions depend
-only on seed, particle id, visit, and purpose, so batching and scatter order do
-not change them. See [numerics](docs/numerics.md).
+The packed key avoids the pinned `Philox4x32x10` constructor-offset defect
+without an advance loop. Draw positions depend only on seed, id, event, and the
+internal stage purpose, so batching and scatter order do not change them. The
+engine-based mapping replaces the old offset map, so fixed-seed baselines change
+once. See [numerics](docs/numerics.md).
 
 ## Pipeline
 
@@ -428,7 +432,7 @@ The full design is in [architecture](docs/architecture.md).
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
   multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
-  194/194 with OMP=ON.
+  193/193 with OMP=ON at the RNG API change.
 - CUDA V100 `sm_70` on `rosi_v100` is blocked by an nvcc 12.6.85 ICE at
   `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed.
 - CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
@@ -446,9 +450,9 @@ The full design is in [architecture](docs/architecture.md).
    the pinned tree, `PhiloxSingle::skip()` sets the within-block position and
    `advanceState()` resets it, and `skip4()` derives carry words from
    `counter[0] < temp[1]` / `counter[0] < temp[2]`. For a nonzero subsequence
-   even `skip4(0)` perturbs counter word 3. `graphFlow::rng::drawAt` constructs
-   at offset zero and advances the public engine. See
-   `tests/unit/test_philox.cpp` and [numerics](docs/numerics.md).
+   even `skip4(0)` perturbs counter word 3. `graphFlow::rng::makeEngine` packs
+   the position into the key and constructs with subsequence and offset zero.
+   See `tests/unit/test_philox.cpp` and [numerics](docs/numerics.md).
 2. **The plan's pool formula `ceil(P/C) + K*R` is not sound for split
    routing.** A transform can split one chunk into one chunk per bin, and
    repeated feedback fragments live particles until they occupy one chunk each.
@@ -464,8 +468,9 @@ The full design is in [architecture](docs/architecture.md).
 4. **Histogram multiset equality is the acceptance gate.** Scatter order is
    unspecified, so the 64-bin test compares sorted multisets. Per-particle
    comparisons remain a diagnostic for lost or duplicated ids.
-5. **Oracle independence.** `tests/reference/ScalarModel.hpp` does not include
-   the production RNG header. It constructs `Philox4x32x10(seed, id, 0)` and
-   applies the draw-index formula locally; pinned literals in
-   `tests/unit/test_philox.cpp` fix the `(seed, id, visit, purpose)` mapping so a
-   shared offset bug cannot hide.
+5. **Oracle independence.** `tests/reference/ScalarModel.hpp` and
+   `tests/reference/ScalarTransport.hpp` do not include the production RNG
+   header. They re-implement the packed stream mapping and construct their own
+   zero-offset engines; pinned literals in `tests/unit/test_philox.cpp` fix the
+   keyed `(seed, id, event, purpose)` outputs so a shared mapping bug cannot
+   hide.

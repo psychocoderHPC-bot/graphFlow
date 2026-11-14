@@ -19,6 +19,9 @@ namespace graphFlow
      */
     struct Tuning
     {
+        /** Root RNG seed of this run. graphFlow derives every per-item stream from it. */
+        std::uint64_t seed = 0u;
+
         // Batching.
         std::optional<std::uint32_t> batchChunks;
 

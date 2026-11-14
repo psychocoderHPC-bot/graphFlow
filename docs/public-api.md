@@ -44,8 +44,9 @@ calls below are the complete minimal surface.
 | `run(source, itemCount)` | Return `SchedulerStats` after completion and resource retirement, or propagate an execution error. |
 
 `Flow` also accepts an optional `graphFlow::Tuning` value outside these calls
-through `configure`. `Tuning` fields are optional and are empty by default, so
-the device policy supplies the derived value: batching (`batchChunks`,
+through `configure`. `Tuning::seed` is a plain `uint64_t` (default zero).
+Every other `Tuning` field is optional and empty by default, so the device
+policy supplies the derived value: batching (`batchChunks`,
 `chunkCapacity`), storage and pool limits (`liveParticles`, `tileSize`,
 `numChunks`, `poolPayloadBudgetBytes`), the launch frame cap (`frameCap`),
 device-policy knobs, and the opt-in `diagnostics` flag. It never changes
@@ -122,6 +123,27 @@ Using a handle after its owning `Flow` has been destroyed is rejected with
 dereference the destroyed owner. Using a handle with a different live graph is
 rejected with `std::invalid_argument`. Neither case silently aliases node state.
 
+## RNG and engine injection
+
+`Tuning::seed` is the only run-level RNG input. graphFlow derives one
+initialized `graphFlow::rng::Engine` per logical `(id, event, purpose)` stream
+and passes it to an opting-in functor after the optional accelerator argument:
+
+```cpp
+ALPAKA_FN_ACC Output operator()(auto const& acc, graphFlow::rng::Engine& engine, Input const& in) const
+{
+    double u = alpaka::rand::distribution::UniformReal<double>{}(engine);
+    // integer decisions use engine() directly
+}
+```
+
+The same optional argument works in `source`, `partition` classifiers, `update`
+updaters, `transform`, and `sink` functors. Existing signatures without an
+engine keep working through `if constexpr` dispatch. A partition updater receives
+its own stream. Payloads expose `id` and `visit` or `scatterCount`; a custom
+payload can specialise `graphFlow::rng::StreamTraits`. Users never construct a
+seed, offset, or purpose.
+
 ## Examples
 
 The two example binaries are the executable contract of this API.
@@ -131,15 +153,16 @@ The two example binaries are the executable contract of this API.
 `examples/particle_feedback` runs a Generate -> Filter -> {A, B} -> Sink
 feedback network. The user graph lives in a 121-line file
 (`ParticleFeedback.hpp`); the functors and domain types are separate user
-files. A fixed-seed 33-invocation CLI comparison matched the pre-change binary
-on CPU and CUDA. Minimal shape:
+files. The RNG API change replaced the offset map with keyed engines, so the
+fixed-seed baselines changed once; the earlier 33-invocation comparison
+predates it. Minimal shape:
 
 ```cpp
 graphFlow::Flow<graphFlow::Particle, TDevice> flow{device};
-auto source   = flow.source("generate", GenerateParticles{seed});
-auto filter   = flow.partition("filter", FilterByProperty{seed});
-auto processA = flow.partition("process A", SelectOutcome{seed, ...}, UpdateWeight{1000u});
-auto processB = flow.partition("process B", SelectOutcome{seed, ...}, UpdateWeight{1u});
+auto source   = flow.source("generate", GenerateParticles{});
+auto filter   = flow.partition("filter", FilterByProperty{});
+auto processA = flow.partition("process A", SelectOutcome{maxVisits}, UpdateWeight{1000u});
+auto processB = flow.partition("process B", SelectOutcome{maxVisits}, UpdateWeight{1u});
 auto sink     = flow.sink("record weight", RecordWeight<decltype(weights.getView())>{weights.getView()});
 
 flow.connect(source, filter);
@@ -163,10 +186,11 @@ Run it with:
 `examples/photon_scattering` transports independent photon histories through a
 homogeneous plane-parallel slab. The graph is source -> propose flight ->
 advance and route -> scatter -> propose flight, with transmitted, reflected,
-absorbed, and capped outcomes feeding one terminal sink. Random draws use
-`Philox4x32x10` through the same key-based mapping as the particle example.
-Functors that reject an item set the typed `Status`; the host rejects the batch
-before it publishes output.
+absorbed, and capped outcomes feeding one terminal sink. Functors receive the
+same initialized `graphFlow::rng::Engine`; floating-point draws use
+`UniformReal<double>` (and `NormalReal<double>` where needed). Functors that
+reject an item set the typed `Status`; the host rejects the batch before it
+publishes output.
 
 ```sh
 mkdir -p /tmp/photon-forward

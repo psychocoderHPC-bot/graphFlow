@@ -51,19 +51,49 @@ namespace graphFlow::detail
         functor(status, std::forward<TArgs>(args)...);
     };
 
-    /** Invoke a public functor with the optional accelerator and status arguments.
-     *
-     * The accelerator forms take priority over the status-only form so an existing functor whose
-     * first parameter is a generic `auto const&` keeps its accelerator meaning.
-     */
-    template<typename TFunctor, typename TAcc, typename TStatus, typename... TArgs>
-    ALPAKA_FN_ACC decltype(auto) invokeWithStatus(
+    /** Engine-aware invocation shapes. The engine follows the optional accelerator and precedes
+     * the optional status, matching the documented `operator()(acc, Engine&, Status&, Payload&)`. */
+    template<typename TFunctor, typename TAcc, typename TEngine, typename TStatus, typename... TArgs>
+    concept InvocableWithAcceleratorEngineAndStatus = requires(
         TFunctor const& functor,
         TAcc const& accelerator,
+        TEngine& engine,
+        TStatus& status,
+        TArgs&&... args) { functor(accelerator, engine, status, std::forward<TArgs>(args)...); };
+
+    template<typename TFunctor, typename TAcc, typename TEngine, typename... TArgs>
+    concept InvocableWithAcceleratorAndEngine
+        = requires(TFunctor const& functor, TAcc const& accelerator, TEngine& engine, TArgs&&... args) {
+              functor(accelerator, engine, std::forward<TArgs>(args)...);
+          };
+
+    /** Any supported invocation shape for the given argument tail. */
+    template<typename TFunctor, typename TAcc, typename TEngine, typename TStatus, typename... TArgs>
+    concept ContextInvocable
+        = InvocableWithAcceleratorEngineAndStatus<TFunctor, TAcc, TEngine, TStatus, TArgs...>
+          || InvocableWithAcceleratorAndEngine<TFunctor, TAcc, TEngine, TArgs...>
+          || InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TArgs...>
+          || InvocableWithAccelerator<TFunctor, TAcc, TArgs...> || InvocableWithStatus<TFunctor, TStatus, TArgs...>
+          || std::invocable<TFunctor const&, TArgs...>;
+
+    /** Invoke a public functor with the optional accelerator, engine and status arguments.
+     *
+     * Engine forms take priority so an opting-in functor receives its initialized stream. Existing
+     * accelerator and status forms keep their meaning through the fallback order below.
+     */
+    template<typename TFunctor, typename TAcc, typename TEngine, typename TStatus, typename... TArgs>
+    ALPAKA_FN_ACC decltype(auto) invokeWithContext(
+        TFunctor const& functor,
+        TAcc const& accelerator,
+        TEngine& engine,
         TStatus& status,
         TArgs&&... args)
     {
-        if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TArgs...>)
+        if constexpr(InvocableWithAcceleratorEngineAndStatus<TFunctor, TAcc, TEngine, TStatus, TArgs...>)
+            return functor(accelerator, engine, status, std::forward<TArgs>(args)...);
+        else if constexpr(InvocableWithAcceleratorAndEngine<TFunctor, TAcc, TEngine, TArgs...>)
+            return functor(accelerator, engine, std::forward<TArgs>(args)...);
+        else if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TArgs...>)
             return functor(accelerator, status, std::forward<TArgs>(args)...);
         else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TArgs...>)
             return functor(accelerator, std::forward<TArgs>(args)...);
@@ -88,72 +118,71 @@ namespace graphFlow::detail
     }
 
     /** Apply a transform functor, accepting a mutable payload or a returned replacement. */
-    template<typename TFunctor, typename TPayload, typename... TArgs>
-    ALPAKA_FN_ACC TPayload finishTransform(TFunctor const& functor, TPayload& payload, TArgs&&... args)
+    template<typename TPayload, typename TInvoke>
+    ALPAKA_FN_ACC TPayload finishTransform(TPayload& payload, TInvoke&& invoke)
     {
-        using Result = std::invoke_result_t<TFunctor const&, TArgs...>;
+        using Result = std::invoke_result_t<TInvoke>;
         if constexpr(std::is_void_v<Result>)
-            functor(std::forward<TArgs>(args)...);
+        {
+            std::forward<TInvoke>(invoke)();
+        }
         else
-            payload = static_cast<TPayload>(functor(std::forward<TArgs>(args)...));
+        {
+            payload = static_cast<TPayload>(std::forward<TInvoke>(invoke)());
+        }
         return payload;
     }
 
-    template<typename TFunctor, typename TAcc, typename TStatus, typename TPayload>
+    template<typename TFunctor, typename TAcc, typename TEngine, typename TStatus, typename TPayload>
     ALPAKA_FN_ACC TPayload applyTransform(
         TFunctor const& functor,
         TAcc const& accelerator,
+        TEngine& engine,
         TStatus& status,
         TPayload payload)
     {
-        if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TPayload&>)
-            return finishTransform(functor, payload, accelerator, status, payload);
-        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload&>)
-            return finishTransform(functor, payload, accelerator, payload);
-        else if constexpr(InvocableWithStatus<TFunctor, TStatus, TPayload&>)
-            return finishTransform(functor, payload, status, payload);
-        else if constexpr(std::invocable<TFunctor const&, TPayload&>)
-            return finishTransform(functor, payload, payload);
-        else if constexpr(InvocableWithAcceleratorAndStatus<TFunctor, TAcc, TStatus, TPayload const&>)
-            return finishTransform(functor, payload, accelerator, status, std::as_const(payload));
-        else if constexpr(InvocableWithAccelerator<TFunctor, TAcc, TPayload const&>)
-            return finishTransform(functor, payload, accelerator, std::as_const(payload));
-        else if constexpr(InvocableWithStatus<TFunctor, TStatus, TPayload const&>)
-            return finishTransform(functor, payload, status, std::as_const(payload));
+        if constexpr(ContextInvocable<TFunctor, TAcc, TEngine, TStatus, TPayload&>)
+        {
+            auto invoke
+                = [&]() -> decltype(auto) { return invokeWithContext(functor, accelerator, engine, status, payload); };
+            return finishTransform(payload, invoke);
+        }
         else
-            return finishTransform(functor, payload, std::as_const(payload));
+        {
+            auto invoke = [&]() -> decltype(auto)
+            { return invokeWithContext(functor, accelerator, engine, status, std::as_const(payload)); };
+            return finishTransform(payload, invoke);
+        }
     }
 
     /** Apply an optional partition updater and normalise its result. */
-    template<typename TUpdate, typename... TArgs>
-    ALPAKA_FN_ACC UpdateResult finishUpdate(TUpdate const& update, TArgs&&... args)
+    template<typename TInvoke>
+    ALPAKA_FN_ACC UpdateResult finishUpdate(TInvoke&& invoke)
     {
-        using Result = std::invoke_result_t<TUpdate const&, TArgs...>;
+        using Result = std::invoke_result_t<TInvoke>;
         if constexpr(std::is_void_v<Result>)
         {
-            update(std::forward<TArgs>(args)...);
+            std::forward<TInvoke>(invoke)();
             return UpdateResult::success;
         }
         else
-            return static_cast<UpdateResult>(update(std::forward<TArgs>(args)...));
+        {
+            return static_cast<UpdateResult>(std::forward<TInvoke>(invoke)());
+        }
     }
 
-    template<typename TUpdate, typename TAcc, typename TStatus, typename TPayload, typename TBin>
+    template<typename TUpdate, typename TAcc, typename TEngine, typename TStatus, typename TPayload, typename TBin>
     ALPAKA_FN_ACC UpdateResult applyUpdate(
         TUpdate const& update,
         TAcc const& accelerator,
+        TEngine& engine,
         TStatus& status,
         TBin bin,
         TPayload& payload)
     {
-        if constexpr(InvocableWithAcceleratorAndStatus<TUpdate, TAcc, TStatus, TBin, TPayload&>)
-            return finishUpdate(update, accelerator, status, bin, payload);
-        else if constexpr(InvocableWithAccelerator<TUpdate, TAcc, TBin, TPayload&>)
-            return finishUpdate(update, accelerator, bin, payload);
-        else if constexpr(InvocableWithStatus<TUpdate, TStatus, TBin, TPayload&>)
-            return finishUpdate(update, status, bin, payload);
-        else
-            return finishUpdate(update, bin, payload);
+        auto invoke
+            = [&]() -> decltype(auto) { return invokeWithContext(update, accelerator, engine, status, bin, payload); };
+        return finishUpdate(invoke);
     }
 
     /** Load/store trait of a payload storage.
@@ -270,6 +299,8 @@ namespace graphFlow::detail
     struct SourceKernel
     {
         TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -288,7 +319,9 @@ namespace graphFlow::detail
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const offset = static_cast<std::uint32_t>(i);
-                auto payload = invokeWithStatus(functor, acc, status, firstId + static_cast<std::uint64_t>(offset));
+                std::uint64_t const id = firstId + static_cast<std::uint64_t>(offset);
+                rng::Engine engine = rng::makeEngine(seed, id, 0u, purpose);
+                auto payload = invokeWithContext(functor, acc, engine, status, id);
                 access
                     .store(view0, view1, view2, view3, base + offset, static_cast<typename TAccess::Payload>(payload));
             }
@@ -305,6 +338,8 @@ namespace graphFlow::detail
     struct TransformKernel
     {
         TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -341,7 +376,9 @@ namespace graphFlow::detail
                     std::uint32_t const outputOffset = global % chunkCapacity;
                     std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
                     typename TAccess::Payload payload = access.load(in0, in1, in2, in3, inSlot + offset);
-                    payload = applyTransform(functor, acc, status, std::move(payload));
+                    rng::Engine engine
+                        = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                    payload = applyTransform(functor, acc, engine, status, std::move(payload));
                     access.store(out0, out1, out2, out3, outSlot, payload);
                 }
             }
@@ -355,6 +392,8 @@ namespace graphFlow::detail
         static_assert(T_B > 0u, "a partition needs at least one bin");
 
         TClassifier classifier;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -390,8 +429,10 @@ namespace graphFlow::detail
                 {
                     std::uint32_t const slot = base + static_cast<std::uint32_t>(i);
                     typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, slot);
+                    rng::Engine engine
+                        = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                     std::uint32_t const bin
-                        = static_cast<std::uint32_t>(invokeWithStatus(classifier, acc, status, payload));
+                        = static_cast<std::uint32_t>(invokeWithContext(classifier, acc, engine, status, payload));
                     if(bin >= T_B)
                     {
                         status.set(StatusCode::invalid);
@@ -430,6 +471,8 @@ namespace graphFlow::detail
         static_assert(T_B > 0u, "a partition needs at least one bin");
 
         TUpdate update;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -498,7 +541,10 @@ namespace graphFlow::detail
                     std::uint32_t const outputOffset = j % chunkCapacity;
 
                     typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
-                    UpdateResult const result = applyUpdate(update, acc, status, static_cast<TBin>(bin), payload);
+                    rng::Engine engine
+                        = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                    UpdateResult const result
+                        = applyUpdate(update, acc, engine, status, static_cast<TBin>(bin), payload);
                     if(result == UpdateResult::invalid)
                         status.set(StatusCode::invalid);
                     else if(result == UpdateResult::overflow)
@@ -517,6 +563,8 @@ namespace graphFlow::detail
     struct SinkKernel
     {
         TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -535,7 +583,8 @@ namespace graphFlow::detail
             {
                 std::uint32_t const offset = static_cast<std::uint32_t>(i);
                 typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, base + offset);
-                invokeWithStatus(functor, acc, status, payload);
+                rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                invokeWithContext(functor, acc, engine, status, payload);
             }
         }
     };
@@ -589,10 +638,17 @@ namespace graphFlow::detail
         using Queue = typename Base::Queue;
         using Batch = typename Base::Batch;
 
-        SourceStage(TDevice const& device, TStorage& storage, Config const& config, TFunctor functor)
+        SourceStage(
+            TDevice const& device,
+            TStorage& storage,
+            Config const& config,
+            TFunctor functor,
+            std::uint32_t purpose = 0u)
             : m_device{device}
             , m_storage{storage}
             , m_functor{std::move(functor)}
+            , m_seed{config.seed}
+            , m_purpose{purpose}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
@@ -616,7 +672,7 @@ namespace graphFlow::detail
                 queue.enqueue(
                     policy.frameSpec(),
                     alpaka::KernelBundle{
-                        SourceKernel<TFunctor, Access>{m_functor},
+                        SourceKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
                         Access::view0(m_storage),
                         Access::view1(m_storage),
                         Access::view2(m_storage),
@@ -672,6 +728,8 @@ namespace graphFlow::detail
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
+        std::uint64_t m_seed = 0u;
+        std::uint32_t m_purpose = 0u;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
         U32View m_status;
@@ -695,10 +753,17 @@ namespace graphFlow::detail
         using Queue = typename Base::Queue;
         using Batch = typename Base::Batch;
 
-        TransformStage(TDevice const& device, TStorage& storage, Config const& config, TFunctor functor)
+        TransformStage(
+            TDevice const& device,
+            TStorage& storage,
+            Config const& config,
+            TFunctor functor,
+            std::uint32_t purpose = 0u)
             : m_device{device}
             , m_storage{storage}
             , m_functor{std::move(functor)}
+            , m_seed{config.seed}
+            , m_purpose{purpose}
             , m_capacity{storage.chunkCapacity()}
             , m_batchChunks{config.batchChunks}
             , m_tileSize{config.tileSize}
@@ -791,7 +856,7 @@ namespace graphFlow::detail
                 queue.enqueue(
                     policy.frameSpec(),
                     alpaka::KernelBundle{
-                        TransformKernel<TFunctor, Access>{m_functor},
+                        TransformKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
                         Access::view0(m_storage),
                         Access::view1(m_storage),
                         Access::view2(m_storage),
@@ -898,6 +963,8 @@ namespace graphFlow::detail
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
+        std::uint64_t m_seed = 0u;
+        std::uint32_t m_purpose = 0u;
         std::uint32_t m_capacity;
         std::uint32_t m_batchChunks;
         std::uint32_t m_tileSize;
@@ -946,11 +1013,14 @@ namespace graphFlow::detail
             TStorage& storage,
             Config const& config,
             TClassifier classifier,
-            TUpdate update)
+            TUpdate update,
+            std::uint32_t purpose = 0u)
             : m_device{device}
             , m_storage{storage}
             , m_classifier{std::move(classifier)}
             , m_update{std::move(update)}
+            , m_seed{config.seed}
+            , m_purpose{purpose}
             , m_capacity{storage.chunkCapacity()}
             , m_bins{static_cast<std::uint32_t>(TClassifier::maxBins)}
             , m_batchChunks{config.batchChunks}
@@ -1034,7 +1104,7 @@ namespace graphFlow::detail
                 queue.enqueue(
                     policy.frameSpec(),
                     alpaka::KernelBundle{
-                        ClassifyKernel{m_classifier},
+                        ClassifyKernel{m_classifier, m_seed, m_purpose},
                         Access::view0(m_storage),
                         Access::view1(m_storage),
                         Access::view2(m_storage),
@@ -1205,7 +1275,7 @@ namespace graphFlow::detail
                     queue.enqueue(
                         policy.frameSpec(),
                         alpaka::KernelBundle{
-                            ScatterKernel{m_update},
+                            ScatterKernel{m_update, m_seed, static_cast<std::uint32_t>(m_purpose + 1u)},
                             Access::view0(m_storage),
                             Access::view1(m_storage),
                             Access::view2(m_storage),
@@ -1285,6 +1355,8 @@ namespace graphFlow::detail
         TStorage& m_storage;
         TClassifier m_classifier;
         TUpdate m_update;
+        std::uint64_t m_seed = 0u;
+        std::uint32_t m_purpose = 0u;
         std::uint32_t m_capacity;
         std::uint32_t m_bins;
         std::uint32_t m_batchChunks;
@@ -1327,10 +1399,17 @@ namespace graphFlow::detail
         using Queue = typename Base::Queue;
         using Batch = typename Base::Batch;
 
-        SinkStage(TDevice const& device, TStorage& storage, Config const& config, TFunctor functor)
+        SinkStage(
+            TDevice const& device,
+            TStorage& storage,
+            Config const& config,
+            TFunctor functor,
+            std::uint32_t purpose = 0u)
             : m_device{device}
             , m_storage{storage}
             , m_functor{std::move(functor)}
+            , m_seed{config.seed}
+            , m_purpose{purpose}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
@@ -1352,7 +1431,7 @@ namespace graphFlow::detail
                 queue.enqueue(
                     policy.frameSpec(),
                     alpaka::KernelBundle{
-                        SinkKernel<TFunctor, Access>{m_functor},
+                        SinkKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
                         Access::view0(m_storage),
                         Access::view1(m_storage),
                         Access::view2(m_storage),
@@ -1406,6 +1485,8 @@ namespace graphFlow::detail
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
+        std::uint64_t m_seed = 0u;
+        std::uint32_t m_purpose = 0u;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
         U32View m_status;

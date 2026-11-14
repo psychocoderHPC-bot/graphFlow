@@ -5,13 +5,12 @@
 #pragma once
 
 #include "ParticleTypes.hpp"
-
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/core/Reservation.hpp"
-#include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graph/BinTable.hpp"
+#include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/graph/ClassifyKernel.hpp"
 #include "graphFlow/graph/DenseBinTable.hpp"
 #include "graphFlow/graph/HashClassifyKernel.hpp"
@@ -40,6 +39,16 @@ namespace graphFlow::particle
     /** Number of transform nodes in the particle-feedback graph. */
     inline constexpr std::uint32_t TransformNodes = 3u;
 
+    /** Internal stream purposes of the deprecated low-level particle path.
+     *
+     * The values match the node-order purpose assignment of the public `Flow` example
+     * (`2 * nodeKey`), so both paths reproduce the same particle draws.
+     */
+    inline constexpr std::uint32_t streamPurposeSource = 0u;
+    inline constexpr std::uint32_t streamPurposeFilter = 2u;
+    inline constexpr std::uint32_t streamPurposeProcessA = 4u;
+    inline constexpr std::uint32_t streamPurposeProcessB = 6u;
+
     /** Total payload budget of the fixed-capacity pool.
      *
      * Deprecated low-level path: the device policy budget bounds the live working set `P*C`. The
@@ -47,12 +56,10 @@ namespace graphFlow::particle
      * plus the payload of exactly those credits. `Flow` derives the same quantity from the
      * registered node bins for the public example.
      */
-    inline std::uint64_t poolPayloadBudgetBytes(
-        std::uint64_t policyBudgetBytes,
-        std::uint32_t chunkCapacity)
+    inline std::uint64_t poolPayloadBudgetBytes(std::uint64_t policyBudgetBytes, std::uint32_t chunkCapacity)
     {
-        std::uint64_t const reserveChunks = static_cast<std::uint64_t>(TransformNodes)
-            * outputChunkBound(chunkCapacity, chunkCapacity, FlowBins);
+        std::uint64_t const reserveChunks
+            = static_cast<std::uint64_t>(TransformNodes) * outputChunkBound(chunkCapacity, chunkCapacity, FlowBins);
         return payloadBudgetWithReserve(policyBudgetBytes, chunkCapacity, reserveChunks);
     }
 
@@ -84,8 +91,10 @@ namespace graphFlow::particle
         return typename Runner::Hooks{
             [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch)
             { stage.launch(queue, batch); },
-            [&stage](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
-            { return stage.advance(queue, batch, allocated); },
+            [&stage](
+                typename Runner::Queue const& queue,
+                typename Runner::Batch const& batch,
+                std::uint32_t& allocated) { return stage.advance(queue, batch, allocated); },
             [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
             { stage.finish(batch, outputs); },
             [&stage]()
@@ -146,8 +155,7 @@ namespace graphFlow::particle
         std::uint64_t const maxChunks = std::numeric_limits<std::uint32_t>::max();
         if(perTransform > maxChunks)
             throw std::overflow_error{"graphFlow: one transform reserve exceeds 2^32 chunks"};
-        std::uint64_t const transformCredits
-            = static_cast<std::uint64_t>(TransformNodes) * perTransform;
+        std::uint64_t const transformCredits = static_cast<std::uint64_t>(TransformNodes) * perTransform;
         if(live > maxChunks || transformCredits > maxChunks - live)
             throw std::overflow_error{"graphFlow: chunk pool would exceed 2^32 chunks"};
         std::uint64_t const chunks = live + transformCredits;
@@ -167,8 +175,8 @@ namespace graphFlow::particle
             [[maybe_unused]] std::uint32_t weight,
             std::uint32_t visit) const
         {
-            std::uint32_t const value = rng::draw(seed, id, visit, rng::purposeFilter);
-            return value >= property ? 1u : 0u;
+            rng::Engine engine = rng::makeEngine(seed, id, visit, streamPurposeFilter);
+            return engine() >= property ? 1u : 0u;
         }
 
         template<typename TAcc>
@@ -189,7 +197,7 @@ namespace graphFlow::particle
      * Both increment `visit` only on feedback. A particle that would feed back but already reached
      * `maxVisits` is routed to the sink without a mutation and counted as non-terminating.
      */
-    template<std::uint32_t T_purpose, std::uint32_t T_increment>
+    template<std::uint32_t T_streamPurpose, std::uint32_t T_increment>
     struct ProcessPolicy
     {
         static constexpr std::uint32_t maxBins = 2u;
@@ -199,7 +207,8 @@ namespace graphFlow::particle
 
         ALPAKA_FN_ACC bool survives(std::uint64_t id, std::uint32_t visit) const
         {
-            return rng::draw(seed, id, visit, T_purpose) >= 0x80000000u;
+            rng::Engine engine = rng::makeEngine(seed, id, visit, T_streamPurpose);
+            return engine() >= 0x8000'0000u;
         }
 
         ALPAKA_FN_ACC std::uint32_t classify(
@@ -240,8 +249,8 @@ namespace graphFlow::particle
         }
     };
 
-    using ProcessAPolicy = ProcessPolicy<rng::purposeProcessA, 1000u>;
-    using ProcessBPolicy = ProcessPolicy<rng::purposeProcessB, 1u>;
+    using ProcessAPolicy = ProcessPolicy<streamPurposeProcessA, 1000u>;
+    using ProcessBPolicy = ProcessPolicy<streamPurposeProcessB, 1u>;
 
     /** Source stage: enqueue the generate kernel for one admitted chunk. */
     template<typename TDevice>
@@ -276,7 +285,7 @@ namespace graphFlow::particle
             queue.enqueue(
                 policy.frameSpec(),
                 alpaka::KernelBundle{
-                    GenerateKernel{m_seed},
+                    GenerateKernel{m_seed, streamPurposeSource},
                     m_pool.ids(),
                     m_pool.properties(),
                     m_pool.weights(),
@@ -325,10 +334,10 @@ namespace graphFlow::particle
     public:
         using Queue = typename GraphRunner<TDevice>::Queue;
         using Batch = typename GraphRunner<TDevice>::Batch;
-        using U32View
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
-        using MappedU32View
-            = ALPAKA_TYPEOF(alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using U32View = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using MappedU32View = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
         using TileView = ALPAKA_TYPEOF(
             alpaka::onHost::alloc<TileDescriptor>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
         using MappedTileView = ALPAKA_TYPEOF(
@@ -398,8 +407,8 @@ namespace graphFlow::particle
                 throw BatchError{"transform: empty batch"};
             if(batch.chunks.size() > m_batchChunks)
                 throw BatchError{
-                    "transform: batch of " + std::to_string(batch.chunks.size())
-                    + " chunks exceeds batchChunks " + std::to_string(m_batchChunks)};
+                    "transform: batch of " + std::to_string(batch.chunks.size()) + " chunks exceeds batchChunks "
+                    + std::to_string(m_batchChunks)};
 
             m_stage = 0u;
             m_pending.clear();
@@ -561,18 +570,14 @@ namespace graphFlow::particle
         {
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
-            std::uint64_t const tiles
-                = static_cast<std::uint64_t>(tileCount(capacity, tileSize)) * batchChunks;
+            std::uint64_t const tiles = static_cast<std::uint64_t>(tileCount(capacity, tileSize)) * batchChunks;
             if(tiles > std::numeric_limits<std::uint32_t>::max())
                 throw std::overflow_error{"graphFlow: batch tile descriptor count overflow"};
             return static_cast<std::uint32_t>(tiles);
         }
 
         /** Largest output-chunk count a batch of `batchChunks` full chunks may produce. */
-        static std::uint32_t checkedReserveBound(
-            std::uint32_t capacity,
-            std::uint32_t batchChunks,
-            std::uint32_t bins)
+        static std::uint32_t checkedReserveBound(std::uint32_t capacity, std::uint32_t batchChunks, std::uint32_t bins)
         {
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
@@ -612,8 +617,7 @@ namespace graphFlow::particle
             {
                 for(std::size_t bin = 0u; bin < m_totals.size(); ++bin)
                 {
-                    std::uint32_t const chunks
-                        = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
+                    std::uint32_t const chunks = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
                     for(std::uint32_t k = 0u; k < chunks; ++k)
                     {
                         ChunkHandle const handle = m_pool.acquire();
@@ -718,8 +722,7 @@ namespace graphFlow::particle
         void throwIfFailed() const
         {
             if(m_failed)
-                throw std::logic_error{
-                    "graphFlow: TransformStage is single-use after a failed batch"};
+                throw std::logic_error{"graphFlow: TransformStage is single-use after a failed batch"};
         }
 
         void releasePending()
@@ -775,8 +778,8 @@ namespace graphFlow::particle
     {
     public:
         using Queue = typename GraphRunner<TDevice>::Queue;
-        using U32View
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using U32View = ALPAKA_TYPEOF(
+            alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         SinkStage(
             TDevice const& device,

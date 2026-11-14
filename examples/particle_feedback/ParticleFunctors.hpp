@@ -23,14 +23,19 @@ namespace graphFlow::particle
         capped = 2u
     };
 
-    /** Source functor: materialise one fresh particle per logical item index. */
+    /** Source functor: materialise one fresh particle per logical item index.
+     *
+     * graphFlow injects the engine of the source node; the particle property is its first unsigned
+     * output. The functor never handles a seed or a draw offset.
+     */
     struct GenerateParticles
     {
-        std::uint64_t seed = 0u;
-
-        ALPAKA_FN_ACC graphFlow::Particle operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        ALPAKA_FN_ACC graphFlow::Particle operator()(
+            [[maybe_unused]] auto const& accelerator,
+            rng::Engine& engine,
+            std::uint64_t id) const
         {
-            return graphFlow::Particle{id, rng::propertyDraw(seed, id), 0u, 0u};
+            return graphFlow::Particle{id, engine(), 0u, 0u};
         }
     };
 
@@ -39,14 +44,12 @@ namespace graphFlow::particle
     {
         static constexpr std::uint32_t maxBins = 2u;
 
-        std::uint64_t seed = 0u;
-
         ALPAKA_FN_ACC std::uint32_t operator()(
             [[maybe_unused]] auto const& accelerator,
+            rng::Engine& engine,
             graphFlow::Particle const& particle) const
         {
-            std::uint32_t const draw = rng::draw(seed, particle.id, particle.visit, rng::purposeFilter);
-            return draw >= particle.property ? 1u : 0u;
+            return engine() >= particle.property ? 1u : 0u;
         }
     };
 
@@ -55,15 +58,14 @@ namespace graphFlow::particle
     {
         static constexpr std::uint32_t maxBins = 3u;
 
-        std::uint64_t seed = 0u;
-        std::uint32_t purpose = 0u;
         std::uint32_t maxVisits = 0u;
 
-        ALPAKA_FN_ACC Outcome operator()([[maybe_unused]] auto const& accelerator, graphFlow::Particle const& particle)
-            const
+        ALPAKA_FN_ACC Outcome operator()(
+            [[maybe_unused]] auto const& accelerator,
+            rng::Engine& engine,
+            graphFlow::Particle const& particle) const
         {
-            std::uint32_t const draw = rng::draw(seed, particle.id, particle.visit, purpose);
-            if(draw < 0x8000'0000u)
+            if(engine() < 0x8000'0000u)
                 return Outcome::sink;
             return particle.visit < maxVisits ? Outcome::feedback : Outcome::capped;
         }
