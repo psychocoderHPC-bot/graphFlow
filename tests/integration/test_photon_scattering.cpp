@@ -3,10 +3,13 @@
  */
 
 #include "PhotonCli.hpp"
+#include "PhotonDebug.hpp"
 #include "PhotonFunctors.hpp"
 #include "PhotonScattering.hpp"
 #include "ScalarTransport.hpp"
 #include "TestDevice.hpp"
+
+#include "graphFlow/flow/Debug.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -30,6 +33,7 @@ namespace
     using graphFlow::photon::RecordTerminal;
     using graphFlow::photon::Scatter;
     using graphFlow::photon::ScatterMode;
+    using graphFlow::photon::ScatterT;
     using graphFlow::photon::Slab;
     using graphFlow::photon::TerminalRecord;
     using graphFlow::photon::Vec3;
@@ -128,6 +132,7 @@ namespace
             }
             photon.proposal = graphFlow::photon::resolveFlight(
                 slab,
+                graphFlow::photon::sigmaTotal(slab),
                 photon,
                 sampledDistance,
                 0.0,
@@ -275,6 +280,19 @@ namespace
             hostTrace.begin() + static_cast<std::ptrdiff_t>(outcome.trace.count));
         return outcome;
     }
+
+    /** Test-only source that injects a non-finite position into the photon flow. */
+    struct CorruptPhotonSource
+    {
+        ALPAKA_FN_ACC Photon operator()([[maybe_unused]] auto const& acc, std::uint64_t id) const
+        {
+            Photon photon;
+            photon.id = id;
+            photon.position = Vec3{std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0};
+            photon.direction = Vec3{0.0, 0.0, 1.0};
+            return photon;
+        }
+    };
 } // namespace
 
 TEST_CASE("photon payload and functors satisfy the public Flow contracts", "[photon][flow]")
@@ -289,7 +307,7 @@ TEST_CASE("photon payload and functors satisfy the public Flow contracts", "[pho
     static_assert(ClassifyEvent::maxBins == graphFlow::photon::eventBins);
 }
 
-TEST_CASE("photon flight geometry handles faces, ties, vacuum and invalid states", "[photon][geometry]")
+TEST_CASE("photon flight geometry handles faces, ties and vacuum", "[photon][geometry]")
 {
     using graphFlow::photon::applyEvent;
     using graphFlow::photon::faceFirst;
@@ -297,44 +315,49 @@ TEST_CASE("photon flight geometry handles faces, ties, vacuum and invalid states
 
     Slab const vacuum{1.0, 0.0, 0.0};
     Slab const material{1.0, 1.0, 0.0};
+    double const vacuumTotal = graphFlow::photon::sigmaTotal(vacuum);
+    double const materialTotal = graphFlow::photon::sigmaTotal(material);
 
-    auto const positive = resolveFlight(vacuum, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.0, 0.0, 8u);
+    auto const positive = resolveFlight(vacuum, vacuumTotal, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.0, 0.0, 8u);
     CHECK(positive.valid);
     CHECK(positive.event == Event::transmitted);
     CHECK(positive.distance == Catch::Approx(0.8).margin(1e-15));
 
-    auto const negative = resolveFlight(vacuum, makePhoton(0.2, Vec3{0.0, 0.0, -1.0}), 0.0, 0.0, 8u);
+    auto const negative = resolveFlight(vacuum, vacuumTotal, makePhoton(0.2, Vec3{0.0, 0.0, -1.0}), 0.0, 0.0, 8u);
     CHECK(negative.valid);
     CHECK(negative.event == Event::reflected);
     CHECK(negative.distance == Catch::Approx(0.2).margin(1e-15));
 
-    auto const parallelVacuum = resolveFlight(vacuum, makePhoton(0.5, Vec3{1.0, 0.0, 0.0}), 0.0, 0.0, 8u);
+    auto const parallelVacuum = resolveFlight(vacuum, vacuumTotal, makePhoton(0.5, Vec3{1.0, 0.0, 0.0}), 0.0, 0.0, 8u);
     CHECK_FALSE(parallelVacuum.valid);
 
-    auto const parallelMaterial = resolveFlight(material, makePhoton(0.5, Vec3{1.0, 0.0, 0.0}), 0.5, 0.0, 8u);
+    auto const parallelMaterial
+        = resolveFlight(material, materialTotal, makePhoton(0.5, Vec3{1.0, 0.0, 0.0}), 0.5, 0.0, 8u);
     CHECK(parallelMaterial.valid);
     CHECK(parallelMaterial.event == Event::scatter);
     CHECK(parallelMaterial.distance == Catch::Approx(0.5).margin(1e-15));
 
     // A tie between the face distance and the sampled flight belongs to the face.
-    auto const tie = resolveFlight(material, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.8, 0.0, 8u);
+    auto const tie = resolveFlight(material, materialTotal, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.8, 0.0, 8u);
     CHECK(tie.valid);
     CHECK(tie.event == Event::transmitted);
     CHECK(tie.distance == Catch::Approx(0.8).margin(1e-15));
     CHECK(faceFirst(0.8, 0.8));
     CHECK_FALSE(faceFirst(0.8, 0.79));
 
-    auto const inside = resolveFlight(material, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.79, 0.0, 8u);
+    auto const inside = resolveFlight(material, materialTotal, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.79, 0.0, 8u);
     CHECK(inside.valid);
     CHECK(inside.event == Event::scatter);
     CHECK(inside.distance == Catch::Approx(0.79).margin(1e-15));
 
-    auto const capped = resolveFlight(material, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.3, 0.0, 0u);
+    auto const capped = resolveFlight(material, materialTotal, makePhoton(0.2, Vec3{0.0, 0.0, 1.0}), 0.3, 0.0, 0u);
     CHECK(capped.valid);
     CHECK(capped.event == Event::capped);
 
+    Slab const absorbing{1.0, 0.0, 1.0};
     auto const absorbed = resolveFlight(
-        Slab{1.0, 0.0, 1.0},
+        absorbing,
+        graphFlow::photon::sigmaTotal(absorbing),
         makePhoton(0.2, Vec3{0.0, 0.0, 1.0}),
         0.3,
         0.0,
@@ -354,13 +377,7 @@ TEST_CASE("photon flight geometry handles faces, ties, vacuum and invalid states
     CHECK(applyEvent(material, Event::reflected, clamped) == graphFlow::UpdateResult::success);
     CHECK(clamped.position.z == 0.0);
 
-    // Non-finite geometry, invalid proposals and inconsistent bin/event pairs are rejected.
-    Photon nanPhoton = makePhoton(std::numeric_limits<double>::quiet_NaN(), Vec3{0.0, 0.0, 1.0});
-    CHECK_FALSE(resolveFlight(vacuum, nanPhoton, 0.0, 0.0, 8u).valid);
-    Photon infDirection = makePhoton(0.2, Vec3{0.0, 0.0, std::numeric_limits<double>::infinity()});
-    CHECK_FALSE(resolveFlight(vacuum, infDirection, 0.0, 0.0, 8u).valid);
-    Photon outside = makePhoton(1.5, Vec3{0.0, 0.0, 1.0});
-    CHECK_FALSE(resolveFlight(vacuum, outside, 0.0, 0.0, 8u).valid);
+    // Invalid proposals and inconsistent bin/event pairs are release-path errors.
     Photon missing = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
     CHECK(applyEvent(vacuum, Event::transmitted, missing) == graphFlow::UpdateResult::invalid);
     Photon mismatched = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
@@ -369,6 +386,129 @@ TEST_CASE("photon flight geometry handles faces, ties, vacuum and invalid states
     Photon wrongFaceDirection = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
     wrongFaceDirection.proposal = graphFlow::photon::Proposal{Event::reflected, 0.2, true};
     CHECK(applyEvent(vacuum, Event::reflected, wrongFaceDirection) == graphFlow::UpdateResult::invalid);
+}
+
+TEST_CASE("photon debug validation rejects corrupted state", "[photon][debug]")
+{
+    using graphFlow::photon::applyEvent;
+    using graphFlow::photon::resolveFlight;
+    using graphFlow::photon::validatePhoton;
+    using graphFlow::photon::validateProposal;
+
+    Slab const vacuum{1.0, 0.0, 0.0};
+    Slab const material{1.0, 1.0, 0.0};
+    double const vacuumTotal = graphFlow::photon::sigmaTotal(vacuum);
+
+    Photon const nanPosition = makePhoton(std::numeric_limits<double>::quiet_NaN(), Vec3{0.0, 0.0, 1.0});
+    Photon const infDirection
+        = makePhoton(0.2, Vec3{0.0, 0.0, std::numeric_limits<double>::infinity()});
+    Photon const outside = makePhoton(1.5, Vec3{0.0, 0.0, 1.0});
+
+    if constexpr(graphFlow::debug::checksEnabled)
+    {
+        CHECK(validatePhoton(material, makePhoton(0.5, Vec3{0.0, 0.0, 1.0})));
+        CHECK_FALSE(validatePhoton(material, nanPosition));
+        CHECK_FALSE(validatePhoton(material, infDirection));
+        CHECK_FALSE(validatePhoton(material, outside));
+
+        CHECK_FALSE(resolveFlight(vacuum, vacuumTotal, nanPosition, 0.0, 0.0, 8u).valid);
+        CHECK_FALSE(resolveFlight(vacuum, vacuumTotal, infDirection, 0.0, 0.0, 8u).valid);
+        CHECK_FALSE(resolveFlight(vacuum, vacuumTotal, outside, 0.0, 0.0, 8u).valid);
+
+        Photon nanProposal = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
+        nanProposal.proposal = graphFlow::photon::Proposal{
+            Event::transmitted,
+            std::numeric_limits<double>::quiet_NaN(),
+            true};
+        CHECK_FALSE(validateProposal(material, nanProposal));
+        CHECK(applyEvent(material, Event::transmitted, nanProposal) == graphFlow::UpdateResult::invalid);
+
+        Photon negativeDistance = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
+        negativeDistance.proposal = graphFlow::photon::Proposal{Event::absorbed, -0.5, true};
+        CHECK_FALSE(validateProposal(material, negativeDistance));
+
+        Photon wrongPlane = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
+        wrongPlane.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.4, true};
+        CHECK_FALSE(validateProposal(material, wrongPlane));
+
+        Photon nanAdvance = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
+        nanAdvance.position.x = std::numeric_limits<double>::quiet_NaN();
+        nanAdvance.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.8, true};
+        CHECK(applyEvent(material, Event::transmitted, nanAdvance) == graphFlow::UpdateResult::invalid);
+    }
+    else
+    {
+        // Release trusts host-validated state. The resolver carries no per-event state branch, so
+        // corrupted values reach a proposal instead of a status error.
+        CHECK(resolveFlight(vacuum, vacuumTotal, nanPosition, 0.0, 0.0, 8u).valid);
+        CHECK(resolveFlight(vacuum, vacuumTotal, infDirection, 0.0, 0.0, 8u).valid);
+        CHECK(resolveFlight(vacuum, vacuumTotal, outside, 0.0, 0.0, 8u).valid);
+    }
+}
+
+TEST_CASE("debug validation fails a corrupted photon batch before publication", "[photon][debug]")
+{
+    if constexpr(!graphFlow::debug::checksEnabled)
+    {
+        SUCCEED("debug validation is compiled out");
+        return;
+    }
+
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+    constexpr std::uint64_t photons = 1u;
+    auto records = alpaka::onHost::alloc<TerminalRecord>(device, alpaka::Vec{photons});
+    auto visits = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{photons});
+    {
+        std::vector<TerminalRecord> const initial(
+            static_cast<std::size_t>(photons),
+            TerminalRecord{graphFlow::photon::missingEvent, 0u, Vec3{}, Vec3{}});
+        std::vector<std::uint32_t> const zero(static_cast<std::size_t>(photons), 0u);
+        auto queue = device.makeQueue(alpaka::queueKind::blocking);
+        alpaka::onHost::memcpy(queue, records, initial);
+        alpaka::onHost::memcpy(queue, visits, zero);
+    }
+
+    Slab const slab{1.0, 0.0, 0.0};
+    using RecordView = decltype(records.getView());
+    using VisitView = decltype(visits.getView());
+
+    graphFlow::Flow<Photon, Device> flow{device};
+    auto source = flow.source("corrupt", CorruptPhotonSource{});
+    auto flight = flow.transform("propose flight", ProposeFlight{slab, 8u});
+    auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
+    auto scatter = flow.transform("scatter", ScatterT<>{slab, ScatterMode::forward});
+    auto terminal = flow.sink(
+        "terminal",
+        RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView()});
+    flow.connect(source, flight);
+    flow.connect(flight, route);
+    flow.connect(route.template out<Event::scatter>(), scatter);
+    flow.connect(scatter, flight);
+    flow.connect(route.template out<Event::transmitted>(), terminal);
+    flow.connect(route.template out<Event::reflected>(), terminal);
+    flow.connect(route.template out<Event::absorbed>(), terminal);
+    flow.connect(route.template out<Event::capped>(), terminal);
+
+    graphFlow::Tuning tuning;
+    tuning.chunkCapacity = 1u;
+    tuning.liveParticles = 1u;
+    tuning.tileSize = 1u;
+    tuning.batchChunks = 1u;
+    tuning.frameCap = 1u;
+    flow.configure(tuning);
+
+    CHECK_THROWS_AS(flow.run(source, photons), graphFlow::BatchError);
+
+    std::vector<TerminalRecord> hostRecords(static_cast<std::size_t>(photons));
+    std::vector<std::uint32_t> hostVisits(static_cast<std::size_t>(photons), 0u);
+    {
+        auto queue = device.makeQueue(alpaka::queueKind::blocking);
+        alpaka::onHost::memcpy(queue, hostRecords, records);
+        alpaka::onHost::memcpy(queue, hostVisits, visits);
+    }
+    CHECK(hostRecords[0].event == graphFlow::photon::missingEvent);
+    CHECK(hostVisits[0] == 0u);
 }
 
 TEST_CASE("scripted photon history uses three scatters and four flights", "[photon][scripted]")

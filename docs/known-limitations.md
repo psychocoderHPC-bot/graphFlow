@@ -153,6 +153,11 @@ is the static 1024-bin limit, not a measured crossover.
   concept-parameter workaround.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
+- Release builds do not detect corrupted photon payload state per event. Host
+  setup validates the slab and configuration once. Configure
+  `-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` to compile the per-event checks in
+  `graphFlow/flow/Debug.hpp` and `PhotonDebug.hpp`; the option is off by
+  default.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall
   times remain shared-host baselines, and no frozen regression target exists
   yet.

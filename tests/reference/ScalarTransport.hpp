@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "graphFlow/flow/Debug.hpp"
+
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
@@ -115,9 +117,12 @@ namespace graphFlow::test
 
                 while(true)
                 {
-                    if(!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(ux)
-                       || !std::isfinite(uy) || !std::isfinite(uz) || z < 0.0 || z > thickness)
-                        throw std::runtime_error{"scalar transport: non-finite or impossible state"};
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(ux)
+                           || !std::isfinite(uy) || !std::isfinite(uz) || z < 0.0 || z > thickness)
+                            throw std::runtime_error{"scalar transport: non-finite or impossible state"};
+                    }
 
                     bool faceReachable = false;
                     double faceDistance = 0.0;
@@ -134,8 +139,11 @@ namespace graphFlow::test
                         faceDistance = -z / uz;
                         faceEvent = reflected;
                     }
-                    if(faceReachable && (!std::isfinite(faceDistance) || faceDistance < 0.0))
-                        throw std::runtime_error{"scalar transport: invalid face distance"};
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(faceReachable && (!std::isfinite(faceDistance) || faceDistance < 0.0))
+                            throw std::runtime_error{"scalar transport: invalid face distance"};
+                    }
 
                     if(total == 0.0)
                     {
@@ -151,8 +159,11 @@ namespace graphFlow::test
                     Engine flightEngine = engineFor(seed, id, scatterCount, purposeFlight);
                     double const flightUniform = 1.0 - alpaka::rand::distribution::UniformReal<double>{}(flightEngine);
                     double const kindUniform = alpaka::rand::distribution::UniformReal<double>{}(flightEngine);
-                    if(flightUniform <= 0.0)
-                        throw std::runtime_error{"scalar transport: non-positive flight uniform"};
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(flightUniform <= 0.0)
+                            throw std::runtime_error{"scalar transport: non-positive flight uniform"};
+                    }
                     double const sampledDistance = -std::log(flightUniform) / total;
                     if(faceReachable && faceDistance <= sampledDistance)
                     {

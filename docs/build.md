@@ -155,6 +155,22 @@ cmake --build build-debug -j 14
 ctest --test-dir build-debug --output-on-failure --no-tests=error
 ```
 
+Per-event payload validation is off by default in every build type. A Debug
+validation build compiles the photon checks in `graphFlow/flow/Debug.hpp` and
+`PhotonDebug.hpp`:
+
+```sh
+cmake -S . -B build-debug-validation -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace
+cmake --build build-debug-validation -j 14
+ctest --test-dir build-debug-validation --output-on-failure --no-tests=error
+```
+
+The option adds `GRAPHFLOW_DEBUG_VALIDATION=1` to the `graphFlow` interface
+target. Release hot loops keep no per-event state branch.
+
 ASAN and UBSAN on the host scheduler:
 
 ```sh

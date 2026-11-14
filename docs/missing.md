@@ -26,6 +26,10 @@ Current state at the sm_70 ICE workaround
 - The public API is implemented: `Flow<TPayload, TDevice, TStorage>` with
   source/partition/transform/sink handles, named ports, `configure(Tuning)`,
   typed failure `Status`, and `run()`.
+- Per-event photon payload validation is debug-only
+  (`GRAPHFLOW_ENABLE_DEBUG_VALIDATION`, issue #26). Host setup validates the
+  slab and configuration once; release keeps the physics errors on the status
+  channel.
 - T1 (device-aware policy), T2 (payload storage), T3 (CUDA kernel test and
   typed Flow execution), T5 (batching, payload budget, photon scattering),
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
@@ -126,7 +130,10 @@ resource or decision is missing.
   output is published and all leases are released.
 - [ ] **P2: counters and validation.** In debug or validation builds, check
   conservation (`next[bin]==total[bin]`), input conservation, output chunk fill
-  levels, and exactly-once sink delivery; keep these off the hot path.
+  levels, and exactly-once sink delivery; keep these off the hot path. The
+  photon per-event payload checks are implemented behind
+  `GRAPHFLOW_ENABLE_DEBUG_VALIDATION` (issue #26); the scheduler counter checks
+  remain open.
 
 ## 3. Example, RNG, and end-to-end tests
 

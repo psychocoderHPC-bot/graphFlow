@@ -92,6 +92,15 @@ weights, photon outcomes, and histograms therefore change once. The new
 baselines are the values produced at the RNG API change; tests compare against
 the independent oracle and no longer pin the old offset literals.
 
+## Validation split
+
+The host validates the slab and configuration once before a run. Release device
+code does not re-check finite state or the slab position per event. A build with
+`GRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` compiles `PhotonDebug.hpp` and rejects
+non-finite state, out-of-slab positions, and inconsistent proposals through
+`StatusCode::invalid`. The option does not change the draw order or the
+arithmetic; it only adds checks in debug builds.
+
 ## Integer decisions
 
 ```text
