@@ -143,7 +143,8 @@ Payload budget against the measured 3,171,090,432 B A30 budget:
   are single-run baselines on shared hosts, not exclusive-hardware acceptance
   numbers.
 - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-  `gfx1100`, ROCm 7.2) with 238/238 CTest, but no HIP benchmark is recorded.
+  `gfx1100`, ROCm 7.2) with 245/245 CTest (43 HIP cases), but no HIP benchmark
+  is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
 - There is no sustained copy-bandwidth reference for the same device and data
