@@ -341,6 +341,13 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
+        template<
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TInBase,
+            alpaka::concepts::IMdSpan TInCount,
+            alpaka::concepts::IMdSpan TOutPosition,
+            alpaka::concepts::IMdSpan TOutChunks>
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
             auto in0,
@@ -351,11 +358,11 @@ namespace graphFlow::detail
             auto out1,
             auto out2,
             auto out3,
-            alpaka::concepts::IMdSpan auto statusView,
-            alpaka::concepts::IMdSpan auto inBase,
-            alpaka::concepts::IMdSpan auto inCount,
-            alpaka::concepts::IMdSpan auto outPosition,
-            alpaka::concepts::IMdSpan auto outChunks,
+            TStatusView statusView,
+            TInBase inBase,
+            TInCount inCount,
+            TOutPosition outPosition,
+            TOutChunks outChunks,
             std::uint32_t chunkCapacity,
             std::uint32_t chunks) const
         {
@@ -474,6 +481,14 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
+        template<
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TBinIds,
+            alpaka::concepts::IMdSpan TTable,
+            alpaka::concepts::IMdSpan TNext,
+            alpaka::concepts::IMdSpan TCounts,
+            alpaka::concepts::IMdSpan TTiles>
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
             auto in0,
@@ -484,12 +499,12 @@ namespace graphFlow::detail
             auto out1,
             auto out2,
             auto out3,
-            alpaka::concepts::IMdSpan auto statusView,
-            alpaka::concepts::IMdSpan auto binIds,
-            alpaka::concepts::IMdSpan auto table,
-            alpaka::concepts::IMdSpan auto next,
-            alpaka::concepts::IMdSpan auto counts,
-            alpaka::concepts::IMdSpan auto tiles,
+            TStatusView statusView,
+            TBinIds binIds,
+            TTable table,
+            TNext next,
+            TCounts counts,
+            TTiles tiles,
             std::uint32_t chunkCapacity) const
         {
             using namespace alpaka;

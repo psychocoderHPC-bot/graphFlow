@@ -37,14 +37,22 @@ namespace graphFlow
 
         TPolicy policy{};
 
+        // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
+        template<
+            alpaka::concepts::IMdSpan TIdsIn,
+            alpaka::concepts::IMdSpan TPropertiesIn,
+            alpaka::concepts::IMdSpan TWeightsIn,
+            alpaka::concepts::IMdSpan TVisitsIn,
+            alpaka::concepts::IMdSpan TBinIds,
+            alpaka::concepts::IMdSpan TIdsOut>
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
-            alpaka::concepts::IMdSpan auto idsIn,
-            alpaka::concepts::IMdSpan auto propertiesIn,
-            alpaka::concepts::IMdSpan auto weightsIn,
-            alpaka::concepts::IMdSpan auto visitsIn,
-            alpaka::concepts::IMdSpan auto binIds,
-            alpaka::concepts::IMdSpan auto idsOut,
+            TIdsIn idsIn,
+            TPropertiesIn propertiesIn,
+            TWeightsIn weightsIn,
+            TVisitsIn visitsIn,
+            TBinIds binIds,
+            TIdsOut idsOut,
             alpaka::concepts::IMdSpan auto propertiesOut,
             alpaka::concepts::IMdSpan auto weightsOut,
             alpaka::concepts::IMdSpan auto visitsOut,
