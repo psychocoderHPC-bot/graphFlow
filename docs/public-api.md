@@ -156,6 +156,20 @@ its own stream. Payloads expose `id` and `visit` or `scatterCount`; a custom
 payload can specialise `graphFlow::rng::StreamTraits`. Users never construct a
 seed, offset, or purpose.
 
+## Backend validation
+
+The contract is exercised on CPU, CUDA, and HIP. The HIP build on `hal`
+(AMD Radeon RX 7900 XTX, `gfx1100`, ROCm 7.2) runs 8 typed Flow cases through
+the public `Flow` API, plus the particle and photon example CLI/output cases:
+238/238 CTest with 43 HIP cases. The typed cases cover the feedback matrix,
+partial tails, bounded pools, empty and single runs, the generic POD chain,
+one batch-wide transform launch, one classify plus one scatter partition
+launch, and Q=8 feedback termination. `rocprof` confirms the device kernels.
+
+GitHub-hosted HIP builds are compile-only because those runners have no AMD
+GPU, so they are not a runtime result. `hal` reports `sharing=unknown`; the HIP
+run is a correctness record and makes no performance claim.
+
 ## Examples
 
 The two example binaries are the executable contract of this API.

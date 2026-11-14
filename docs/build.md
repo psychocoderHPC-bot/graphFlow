@@ -19,7 +19,7 @@ exclusive in one build; the CPU backend stays enabled in accelerator builds so
 | CMake | 3.28.3 | `cmake_minimum_required(VERSION 3.25)` |
 | Ninja | 1.11.1 | `-G Ninja` |
 | CUDA | 13.4 | validated on the A30 with `sm_80`; `sm_75` is the RTX 2080 Ti target |
-| ROCm | amdclang++ from `/opt/rocm` | compile-only `gfx90a` gate |
+| ROCm | 7.2.0, `amdclang++` from `/opt/rocm` | runtime `gfx1100` gate on `hal`; GitHub-hosted HIP is compile-only |
 | C++ | C++20 | `CMAKE_CXX_STANDARD 20`, extensions off |
 
 The integrated CPU run used g++ 13.3 on fwk394; the CUDA run used hal. A
@@ -68,9 +68,9 @@ CTest also runs the real `graphFlow_particle_feedback` binary through
 `tests/integration/example_cli.cmake`. The matrix is `N=0,1,17,127,128,4097`
 crossed with `C=1,31,127,128`, with `--seed 42` and `--max-visits 64`. Every
 case requires exit code 0 and a histogram whose counts sum to `N`. The CPU cases
-are always registered; a CUDA build adds the same matrix for the CUDA backend.
-A missing binary or an unavailable requested backend fails the case instead of
-skipping it. The case names follow
+are always registered; a CUDA build adds the same matrix for the CUDA backend,
+and a HIP build adds it for the HIP backend. A missing binary or an unavailable
+requested backend fails the case instead of skipping it. The case names follow
 `example.particle_feedback.<backend>.N<N>.C<C>`.
 
 `--output-junit <file>` writes the CTest results as JUnit XML. Keep it in the
@@ -111,11 +111,13 @@ ctest --test-dir build-cuda-sm75 --output-on-failure --no-tests=error
 The `sm_75` command is the documented RTX 2080 Ti target. The benchmark record
 in `docs/benchmarks.md` was measured on the A30 only.
 
-## HIP, compile-only
+## HIP
 
-The validated HIP gate compiles the full tree for `gfx90a` with `amdclang++`
-from ROCm under `/opt/rocm`. No AMD device was visible in the validation
-environment, so this gate does not run the example or the tests.
+The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
+(`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
+ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
+the particle and photon CLI/output cases for the HIP backend. It passes
+238/238 with 43 HIP cases.
 
 ```sh
 export ROCM_PATH=/opt/rocm
@@ -126,22 +128,24 @@ cmake -S . -B build-hip -G Ninja \
   -DGRAPHFLOW_ENABLE_HIP=ON \
   -DGRAPHFLOW_ENABLE_OPENMP=OFF \
   -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/amdclang++ \
-  -DCMAKE_HIP_ARCHITECTURES=gfx90a \
+  -DCMAKE_HIP_ARCHITECTURES=gfx1100 \
   -DCMAKE_PREFIX_PATH=/opt/rocm \
   -Dalpaka_DEP_OMP=OFF
 cmake --build build-hip -j 14
+ROCR_VISIBLE_DEVICES=0 ctest --test-dir build-hip \
+  --output-on-failure --no-tests=error
 ```
 
 `-Dalpaka_DEP_OMP=OFF` is required so alpaka does not add an OpenMP dependency
-to the HIP build. Do not run CTest when no AMD device is visible. On an AMD
-runner, select one device and run the same test command:
-
-```sh
-ROCR_VISIBLE_DEVICES=0 ctest --test-dir build-hip --output-on-failure --no-tests=error
-```
+to the HIP build. The HIP runtime cases fail when no AMD GPU is visible instead
+of skipping. GitHub-hosted runners have no AMD GPU, so a HIP build there is
+compile-only; do not record that as a runtime result. The historical `gfx90a`
+compile-only gate remains valid as a compile check, not as an execution result.
 
 Record the GPU model, ROCm version, and `gfx` target with any HIP execution
-result. The current `gfx90a` result is compile-only.
+result. The recorded runtime result is `hal`, AMD Radeon RX 7900 XTX,
+`gfx1100`, ROCm 7.2.0. `hal` reports `sharing=unknown`, so this is a
+correctness result without a performance claim.
 
 ## Debug and sanitizers
 
@@ -213,13 +217,14 @@ not wired into a workflow yet.
 The repository has no `.github/workflows` and no CI runners. The commands above
 are the documented local entry points. The recorded integrated results cover
 the FrameSpec revision `327f74f`: the fwk394 CPU build with CTest 82/82 and the
-hal CUDA A30 `sm_80` build with CTest 86/86; the HIP `gfx90a` compile gate also
-passes. The later additive PR-A graph API core at
+hal CUDA A30 `sm_80` build with CTest 86/86; the historical HIP `gfx90a`
+compile gate also passed. The later additive PR-A graph API core at
 `60a34302b1c3cf205304916c7233f13118591dd0` was validated with **97/97 CPU
 CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
-The `sm_75` CUDA build still fails with the CUDA 12.5 nvcc internal compiler
-error (`docs/known-limitations.md`); HIP execution and an integrated
-ASAN/UBSAN count have no recorded run. Format and REUSE metadata are present;
-no CI job runs them yet.
+The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
+**238/238** with 43 HIP cases. The `sm_75` CUDA build still fails with the
+CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`); an
+integrated ASAN/UBSAN count has no recorded run. Format and REUSE metadata are
+present; no CI job runs them yet.

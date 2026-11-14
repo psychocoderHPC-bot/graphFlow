@@ -154,5 +154,6 @@ stays histogram multiset equality.
 The historical pre-T5/T7 CPU and CUDA `N=1e6` runs with seed 42, `C=8192`, and
 `P=65536` produced identical histograms by direct row diff. That check was not
 repeated on the integrated revision, where the pair is rejected by the payload
-budget. HIP compiles the same code path for `gfx90a`, but no AMD device was
-visible, so no HIP numeric result is claimed.
+budget. HIP execution is validated on `hal` (AMD Radeon RX 7900 XTX, `gfx1100`,
+ROCm 7.2) for the typed Flow and particle/photon example cases, but no
+cross-backend HIP histogram-equality run is recorded.

@@ -142,8 +142,9 @@ Payload budget against the measured 3,171,090,432 B A30 budget:
   integrated T13 table: all of its wall times and derived particles/s values
   are single-run baselines on shared hosts, not exclusive-hardware acceptance
   numbers.
-- No AMD GPU was visible. HIP is compile-only for `gfx90a`, so there is no HIP
-  benchmark.
+- HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
+  `gfx1100`, ROCm 7.2) with 238/238 CTest, but no HIP benchmark is recorded.
+  `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
 - There is no sustained copy-bandwidth reference for the same device and data
   size yet.
