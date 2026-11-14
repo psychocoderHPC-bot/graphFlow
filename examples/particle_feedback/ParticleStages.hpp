@@ -576,16 +576,25 @@ namespace graphFlow::particle
             return static_cast<std::uint32_t>(tiles);
         }
 
-        /** Largest output-chunk count a batch of `batchChunks` full chunks may produce. */
-        static std::uint32_t checkedReserveBound(std::uint32_t capacity, std::uint32_t batchChunks, std::uint32_t bins)
+        /** Largest output-chunk count a batch of `batchChunks` full chunks may produce.
+         *
+         * `maxBins` is the policy's partition width. For a hash partition this is
+         * `TPolicy::maxBins`, never `TBinTable::entries`, the tile width, or `batchChunks`.
+         * The batch size only enters through the particle count `capacity * batchChunks`.
+         */
+        static std::uint32_t checkedReserveBound(
+            std::uint32_t capacity,
+            std::uint32_t batchChunks,
+            std::uint32_t maxBins)
         {
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
             std::uint64_t const particles = static_cast<std::uint64_t>(capacity) * batchChunks;
-            std::uint64_t const bound = outputChunkBound(particles, capacity, bins);
-            if(bound > std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error{"graphFlow: batch output-chunk bound overflow"};
-            return static_cast<std::uint32_t>(bound);
+            return checkedOutputChunkBound(
+                particles,
+                capacity,
+                maxBins,
+                "graphFlow: batch output-chunk bound");
         }
 
         void planAndScatter(Queue const& queue, Batch const& batch, std::uint32_t& allocated)

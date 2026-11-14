@@ -66,7 +66,13 @@ namespace graphFlow
         /** Payload bytes of one storage slot; the particle SoA default is 24. */
         std::uint64_t slotBytes = payloadBytesPerSlot;
 
-        /** Largest bin count the dense shared table supports in this slice. */
+        /** Largest bin count the dense shared table supports in this slice.
+         *
+         * This is a dense-path limit. The hash path sizes its shared table from the tile width,
+         * not from `maxBins`, so a hash classifier may declare more bins. `DenseNodePolicy`
+         * enforces this limit at compile time for the dense kernels; `Config` only rejects a
+         * zero bin count here and leaves the hash upper bound to the partition implementation.
+         */
         static constexpr std::uint32_t denseBinLimit = 1024u;
 
         void validate() const
@@ -90,10 +96,9 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};
-            if(maxBins > denseBinLimit)
-                throw std::invalid_argument{
-                    "graphFlow::Config: maxBins " + std::to_string(maxBins) + " exceeds the dense bin limit of "
-                    + std::to_string(denseBinLimit)};
+            // No denseBinLimit check here: the hash path supports larger partition widths. The
+            // dense shared-table limit is still enforced by DenseNodePolicy and the dense
+            // kernels, which instantiate their shared counts[maxBins] table at compile time.
             if(policyWaves == 0u)
                 throw std::invalid_argument{"graphFlow::Config: policyWaves must be non-zero"};
             if(policyTargetBlocksPerSm == 0u)

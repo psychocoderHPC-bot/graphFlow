@@ -53,7 +53,11 @@ remains open (T14b), and there is no CI workflow yet. See
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
 results at the sm_70 ICE workaround: CPU CTest **195/195 passed** (OMP=ON
 Release and Debug, pedantic) and CUDA CTest **247/247 passed** on V100 `sm_70`
-(CUDA 12.6.85, Release and Debug). Both totals are one higher than before the
+(CUDA 12.6.85, Release and Debug). The hash `maxBins` output-credit fix adds
+seven cases (reservation, pool budget, exact and partial credits, Q=1/2/8,
+overflow, and `maxBins` above the dense limit); the rebased Release totals on
+`rosi_v100` are CPU **202/202** and CUDA **254/254** (Debug was not re-run for
+this fix). Those pre-fix totals are one higher than before the
 RNG merge: the RNG change removed one `TEST_CASE` and the debug validation adds
 two `[photon][debug]` cases. Release compiles the per-event checks out; Debug
 compiles them in. Host setup validates the configuration once, and genuine
