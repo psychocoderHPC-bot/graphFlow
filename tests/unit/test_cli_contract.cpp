@@ -372,6 +372,80 @@ TEST_CASE("CLI backend and device selection follow the compiled contract", "[cli
 #endif
 }
 
+TEST_CASE("CLI parses the opt-in kernel workload axes", "[cli][kernel-axes]")
+{
+    graphFlow::cli::Options const options = parseArgs(
+        {"--workload",
+         "kernel",
+         "--scatter",
+         "direct",
+         "--bin-path",
+         "dense",
+         "--bins",
+         "1024",
+         "--distribution",
+         "skewed"});
+
+    CHECK(options.workload == graphFlow::particle::Workload::kernel);
+    REQUIRE(options.scatter.has_value());
+    CHECK(*options.scatter == graphFlow::particle::ScatterChoice::direct);
+    REQUIRE(options.binPath.has_value());
+    CHECK(*options.binPath == graphFlow::particle::BinPath::dense);
+    REQUIRE(options.bins.has_value());
+    CHECK(*options.bins == 1024u);
+    REQUIRE(options.distribution.has_value());
+    CHECK(*options.distribution == graphFlow::particle::Distribution::skewed);
+
+    graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(options, cpuProperties());
+    CHECK(resolved.workload == graphFlow::particle::Workload::kernel);
+    CHECK(resolved.kernel.scatter == graphFlow::particle::ScatterChoice::direct);
+    CHECK(resolved.kernel.binPath == graphFlow::particle::BinPath::dense);
+    CHECK(resolved.kernel.bins == 1024u);
+    CHECK(resolved.kernel.distribution == graphFlow::particle::Distribution::skewed);
+
+    graphFlow::cli::ResolvedOptions const defaults
+        = graphFlow::cli::resolveOptions(parseArgs({"--workload", "kernel"}), cpuProperties());
+    CHECK(defaults.kernel.scatter == graphFlow::particle::ScatterChoice::shared);
+    CHECK(defaults.kernel.binPath == graphFlow::particle::BinPath::dense);
+    CHECK(defaults.kernel.bins == 64u);
+    CHECK(defaults.kernel.distribution == graphFlow::particle::Distribution::balanced);
+}
+
+TEST_CASE("CLI rejects axis flags on the feedback workload and invalid combinations", "[cli][kernel-axes]")
+{
+    using Catch::Matchers::ContainsSubstring;
+
+    CHECK_THROWS_WITH(parseArgs({"--workload", "bogus"}), ContainsSubstring("expected feedback or kernel"));
+    CHECK_THROWS_WITH(parseArgs({"--scatter", "staged"}), ContainsSubstring("expected shared or direct"));
+    CHECK_THROWS_WITH(parseArgs({"--bin-path", "dense2"}), ContainsSubstring("expected dense or hash"));
+    CHECK_THROWS_WITH(
+        parseArgs({"--distribution", "uniform"}),
+        ContainsSubstring("expected balanced, one-hot, skewed or sparse"));
+
+    // The default feedback workload keeps its exact argument set; an axis without --workload
+    // kernel is a usage error instead of a silent no-op.
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--scatter", "direct"}), cpuProperties()),
+        ContainsSubstring("require --workload kernel"));
+
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--workload", "kernel", "--bins", "128"}), cpuProperties()),
+        ContainsSubstring("instantiates 64, 1024, 4096 and 65536"));
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--workload", "kernel", "--bins", "4096"}), cpuProperties()),
+        ContainsSubstring("dense supports at most 1024"));
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(
+            parseArgs({"--workload", "kernel", "--bin-path", "hash", "--scatter", "direct"}),
+            cpuProperties()),
+        ContainsSubstring("hash path always stages"));
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(
+            parseArgs({"--workload", "kernel", "--distribution", "sparse", "--bins", "64"}),
+            cpuProperties()),
+        ContainsSubstring("sparse requires --bins 1024 or larger"));
+}
+
 #if !defined(_WIN32)
 TEST_CASE("CLI process contract maps usage errors to the documented exit codes", "[cli][exit]")
 {
@@ -412,6 +486,14 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
     CHECK(cpu.output.find("# graphFlow_particle_feedback backend=cpu device=0 ") != std::string::npos);
     CHECK(cpu.output.find(" particles=0 ") != std::string::npos);
     CHECK(cpu.output.find("# weight,count") != std::string::npos);
+
+    ExampleRun const kernel = runExample(
+        "--backend cpu --workload kernel --particles 64 --chunk-size 16 --live-particles 64 "
+        "--bins 64 --distribution balanced");
+    CHECK(kernel.exitCode == 0);
+    CHECK(kernel.output.find("workload=kernel") != std::string::npos);
+    CHECK(kernel.output.find("scatter=shared bin-path=dense bins=64 distribution=balanced") != std::string::npos);
+    CHECK(kernel.output.find("# weight,count") != std::string::npos);
 
 #    if ALPAKA_LANG_CUDA
     ExampleRun const cuda = runExample("--backend cuda --particles 0 --chunk-size 128 --seed 42");

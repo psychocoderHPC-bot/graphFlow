@@ -3,11 +3,11 @@
 
 # Benchmarks
 
-This page contains the P07 exclusive measurement on main `64d4a1e`, the
-historical pre-T5/T7 baseline, and the integrated T13 result. Every number
-states its provenance. The full matrix, budget rejections, copy reference,
-kernel matrix, and raw-row provenance live in
-[tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
+This page contains the P07 exclusive measurement on main `64d4a1e`, the P07b
+Q/C re-run and kernel-axis matrix on main `a610281`, the historical pre-T5/T7
+baseline, and the integrated T13 result. Every number states its provenance.
+The full matrix, budget rejections, copy reference, kernel matrix, and raw-row
+provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
 
 ## P07 measurement matrix and frozen target (main `64d4a1e`)
 
@@ -48,17 +48,58 @@ Sustained copy-bandwidth reference on the same device and payload
 (3,221,225,472 B, 10 device-to-device copies): `409.733` GB/s, 7.862 ms per
 copy. This is a D2D copy-engine reference, not a scatter-bandwidth claim.
 
-Scatter mode, dense versus hash, and the balanced/one-hot/skewed/sparse
-distributions are not selectable through the example CLI at this revision.
-Their end-to-end throughput is therefore blocked. The committed integration
-cases pass: direct versus shared-staging scatter across all four distributions
-(1.360 s), dense/hash agreement at overlapping bins (1.042 s), 2*T versus 4*T
-(1.447 s), and sparse 4096/65536 bins (0.729 s). The durations cover whole
-Catch2 cases, not isolated kernels, so they are not throughput numbers. The
-committed CPU kernel timings remain the P03 measurement on fwk394: shared
+## P07b Q/C re-run and kernel axes (main `a610281`)
+
+This run closes the P07 kernel-axis gap. An opt-in `--workload kernel` path in
+the example selects the P03 `ScatterMode` (`shared|direct`), the dense/hash bin
+table (`--bin-path`), the bin count (`--bins 64|1024|4096|65536`) and the
+occupancy (`--distribution balanced|one-hot|skewed|sparse`). The default
+feedback workload and its output are unchanged. The kernel workload is a
+separate Generate -> Transform -> Sink pipeline, so its particles/s is not
+comparable with the feedback Q/C numbers above.
+
+Provenance: main `a61028192884bb92e0107b32f20e12b5c9ca76c9` plus the P07b change set on branch
+`gf/p07b-e2e`, exclusive `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
+driver 570.158.01, CUDA 12.6.85, `sm_70`, Release, three repetitions. Binary
+SHA-256 `23c2bbeed6b9b7b0216ffaf865eaa081a80176b44d14ab05f163ba8a749775b4`.
+No H100 was used.
+
+The same run re-ran the Q/C matrix at `N=1e8`, `C=8192`, `P=16384`. The Q=8
+median is `12,987,013` particles/s, so the `13,000,000` target with its 10
+percent floor (`11,700,000`) passes. All nine Q runs print 260 rows summing to
+exactly `100,000,000` with SHA-256
+`21ab0aeb9ec72d380af2ce6e9631f8fa7b9111d24ff7831f272aa9f6a7be9dab`. The C
+wave at `P=8192`, Q=8 takes 11.12 s (C=2048), 11.36 s (C=4096) and 23.01 s
+(C=8192). The full tables are in
+[tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md#p07b-qc-re-run-and-kernel-axis-e2e).
+
+| scatter | bin path | bins | distribution | N | median wall s | IQR wall s | median particles/s |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| shared | hash | 4096 | sparse | 262144 | 2.030 | 0.010 | 1.2913e5 |
+| shared | hash | 65536 | sparse | 262144 | 2.170 | 0.005 | 1.2080e5 |
+| direct | dense | 64 | balanced | 1000000 | 0.340 | 0.000 | 2.9412e6 |
+| shared | dense | 64 | balanced | 1000000 | 0.340 | 0.005 | 2.9412e6 |
+| shared | dense | 64 | one-hot | 1000000 | 0.210 | 0.005 | 4.7619e6 |
+| shared | dense | 64 | skewed | 1000000 | 0.230 | 0.010 | 4.3478e6 |
+| direct | dense | 1024 | balanced | 1000000 | 2.000 | 0.000 | 5.0000e5 |
+| shared | dense | 1024 | balanced | 1000000 | 2.000 | 0.005 | 5.0000e5 |
+| shared | hash | 64 | balanced | 1000000 | 0.340 | 0.010 | 2.9412e6 |
+| shared | hash | 1024 | balanced | 1000000 | 2.000 | 0.020 | 5.0000e5 |
+
+All 30 runs exited 0 and their histogram sums equal N. The sorted rows are
+identical across repetitions, scatter modes and dense/hash at the same bin
+count; the kernel-axes histogram SHA-256 values are in
+[tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md#p07b-qc-re-run-and-kernel-axis-e2e).
+The 4096/65536 sparse cases use N=262144 because per-bin planning produces one
+sink chunk per particle there. The wall timer has 10 ms resolution, so the
+sub-second cases are quantized. `sparse` is the P03 many-bin balanced mapping
+over B>=1024; the committed tests have no separate sparse classifier. `direct`
+is dense-only, and the hash path assumes the 2*T table with T=128.
+
+The committed CPU kernel timings remain the P03 measurement on fwk394: shared
 staging versus direct 5.48 vs 15.85 ms (balanced), 2.13 vs 48.31 ms (one-hot),
 2.21 vs 37.25 ms (skewed), 4.19 vs 6.62 ms (sparse), and dense 4.06 ms versus
-5.11/4.90 ms for 2*T/4*T at B=1024. P07 did not re-measure those.
+5.11/4.90 ms for 2*T/4*T at B=1024. P07b did not re-measure those.
 
 ## Historical environment
 
@@ -221,7 +262,8 @@ H100 claim is made.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
 - The P07 section records a sustained D2D copy reference (`409.733` GB/s at
   3,221,225,472 B) on the V100. It is a context number, not a scatter
-  bandwidth. Isolated kernel timings for scatter, dense/hash, and the
-  distributions remain unavailable through the example CLI.
+  bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,
+  dense/hash and the four distributions; the P03 CPU kernel timings remain the
+  only isolated-kernel provenance.
 - No CI job runs these benchmarks. The frozen target is implemented in
   `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.

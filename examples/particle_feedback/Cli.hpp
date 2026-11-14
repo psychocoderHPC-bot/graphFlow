@@ -42,6 +42,13 @@ namespace graphFlow::cli
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
+        // Opt-in kernel workload. The axis options stay absent so the resolver can reject an
+        // axis on the default feedback workload instead of silently ignoring it.
+        particle::Workload workload = particle::Workload::feedback;
+        std::optional<particle::ScatterChoice> scatter;
+        std::optional<particle::BinPath> binPath;
+        std::optional<std::uint32_t> bins;
+        std::optional<particle::Distribution> distribution;
     };
 
     /** Resolved run configuration: the policy result plus the example parameters. */
@@ -52,6 +59,8 @@ namespace graphFlow::cli
         graphFlow::Tuning tuning{};
         graphFlow::DevicePolicy policy{};
         bool liveParticlesExplicit = false; // P came from --live-particles
+        particle::Workload workload = particle::Workload::feedback;
+        particle::KernelOptions kernel{};
     };
 
     inline void usage(std::ostream& out)
@@ -60,7 +69,52 @@ namespace graphFlow::cli
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
-               "                                    [--seed S] [--max-visits M]\n";
+               "                                    [--seed S] [--max-visits M]\n"
+               "                                    [--workload feedback|kernel]\n"
+               "       kernel workload only: [--scatter shared|direct]\n"
+               "                             [--bin-path dense|hash] [--bins B]\n"
+               "                             [--distribution balanced|one-hot|skewed|sparse]\n";
+    }
+
+    inline particle::Workload parseWorkload(std::string const& value)
+    {
+        if(value == "feedback")
+            return particle::Workload::feedback;
+        if(value == "kernel")
+            return particle::Workload::kernel;
+        throw std::invalid_argument{"--workload: expected feedback or kernel (got '" + value + "')"};
+    }
+
+    inline particle::ScatterChoice parseScatterChoice(std::string const& value)
+    {
+        if(value == "shared")
+            return particle::ScatterChoice::shared;
+        if(value == "direct")
+            return particle::ScatterChoice::direct;
+        throw std::invalid_argument{"--scatter: expected shared or direct (got '" + value + "')"};
+    }
+
+    inline particle::BinPath parseBinPath(std::string const& value)
+    {
+        if(value == "dense")
+            return particle::BinPath::dense;
+        if(value == "hash")
+            return particle::BinPath::hash;
+        throw std::invalid_argument{"--bin-path: expected dense or hash (got '" + value + "')"};
+    }
+
+    inline particle::Distribution parseDistribution(std::string const& value)
+    {
+        if(value == "balanced")
+            return particle::Distribution::balanced;
+        if(value == "one-hot")
+            return particle::Distribution::oneHot;
+        if(value == "skewed")
+            return particle::Distribution::skewed;
+        if(value == "sparse")
+            return particle::Distribution::sparse;
+        throw std::invalid_argument{
+            "--distribution: expected balanced, one-hot, skewed or sparse (got '" + value + "')"};
     }
 
     inline std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -157,6 +211,26 @@ namespace graphFlow::cli
             {
                 options.deviceIndex = parseU32(flag, nextValue(flag), true);
             }
+            else if(flag == "--workload")
+            {
+                options.workload = parseWorkload(nextValue(flag));
+            }
+            else if(flag == "--scatter")
+            {
+                options.scatter = parseScatterChoice(nextValue(flag));
+            }
+            else if(flag == "--bin-path")
+            {
+                options.binPath = parseBinPath(nextValue(flag));
+            }
+            else if(flag == "--bins")
+            {
+                options.bins = parseU32(flag, nextValue(flag));
+            }
+            else if(flag == "--distribution")
+            {
+                options.distribution = parseDistribution(nextValue(flag));
+            }
             else
             {
                 throw std::invalid_argument{"unknown argument '" + flag + "'"};
@@ -198,6 +272,40 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
+
+        resolved.workload = options.workload;
+        if(options.workload == particle::Workload::feedback)
+        {
+            if(options.scatter || options.binPath || options.bins || options.distribution)
+                throw std::invalid_argument{
+                    "--scatter, --bin-path, --bins and --distribution require --workload kernel"};
+        }
+        else
+        {
+            if(options.scatter)
+                resolved.kernel.scatter = *options.scatter;
+            if(options.binPath)
+                resolved.kernel.binPath = *options.binPath;
+            if(options.bins)
+                resolved.kernel.bins = *options.bins;
+            if(options.distribution)
+                resolved.kernel.distribution = *options.distribution;
+
+            if(!graphFlow::particle::isSupportedKernelBins(resolved.kernel.bins))
+                throw std::invalid_argument{
+                    "--bins: the kernel workload instantiates 64, 1024, 4096 and 65536 (got '"
+                    + std::to_string(resolved.kernel.bins) + "')"};
+            if(resolved.kernel.binPath == particle::BinPath::dense
+               && resolved.kernel.bins > graphFlow::particle::maxDenseKernelBins)
+                throw std::invalid_argument{
+                    "--bin-path dense supports at most 1024 bins; use --bin-path hash above that"};
+            if(resolved.kernel.binPath == particle::BinPath::hash
+               && resolved.kernel.scatter == particle::ScatterChoice::direct)
+                throw std::invalid_argument{"--scatter direct is the dense-path variant; the hash path always stages"};
+            if(resolved.kernel.distribution == particle::Distribution::sparse && resolved.kernel.bins < 1024u)
+                throw std::invalid_argument{"--distribution sparse requires --bins 1024 or larger"};
+        }
+
         resolved.tuning = particle::tuningOf(resolved.parameters);
         return resolved;
     }

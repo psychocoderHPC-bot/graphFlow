@@ -252,7 +252,15 @@ configuration error naming the matching `GRAPHFLOW_ENABLE_*` option),
 `--device D` (default 0), `--particles N`, `--chunk-size C`, `--live-particles P`,
 `--tile-size T`, `--batch-chunks Q` (default 1), `--seed S` (default 0), and
 `--max-visits M` (default 64). When `C`, `P` or `T` is absent, `DevicePolicy`
-derives it from the selected device. The policy chooses `C` from the wave
+derives it from the selected device. The default workload is the feedback graph
+and its output is unchanged. `--workload kernel` opts into the low-level
+Generate -> Transform -> Sink pipeline used for the P07b kernel matrix; it adds
+`--scatter shared|direct` (P03 `ScatterMode`), `--bin-path dense|hash`,
+`--bins 64|1024|4096|65536` and
+`--distribution balanced|one-hot|skewed|sparse`. The axis flags are rejected
+on the default feedback workload. The kernel workload stores the chosen bin in
+the sink, so its `weight,count` histogram is the exact per-bin occupancy and
+the counts sum to `N`. The policy chooses `C` from the wave
 estimate, launch limits, and run size, then uses `P = min(N, 2*C)` before budget
 clamping. The auto-derived `P` is clamped to the budget, rounded down to a
 whole tile when possible; the default path also caps `C` to keep the fixed host
@@ -496,10 +504,11 @@ The full design is in [architecture](docs/architecture.md).
   builds.
 - CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
   compile-only there, and no self-hosted runner is provisioned.
-- The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun
-  is pending. The dense/hash threshold is static. The public `Flow` API is the
-  dense path; hash classify/scatter is low-level, exercised only by the
-  >1024-bin low-level tests and not a public-API change.
+- The dense/hash threshold is static. The public `Flow` API is the dense path;
+  hash classify/scatter stays low-level and is not a public-API change. The
+  opt-in `--workload kernel` path makes the P03 scatter mode, the dense/hash
+  bin table and the four distributions reachable end to end from the example,
+  but it does not route the public `Flow` graph through the hash table.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The numbers in this README are
   historical and pre-T5/T7.

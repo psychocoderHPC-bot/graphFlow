@@ -3,6 +3,7 @@
  */
 
 #include "Cli.hpp"
+#include "KernelAxes.hpp"
 #include "ParticleFeedback.hpp"
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/detail/QueueProbe.hpp"
@@ -14,17 +15,21 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
-    void printHistogram(graphFlow::particle::FeedbackResult const& result, std::uint64_t numParticles)
+    void printHistogram(
+        std::vector<graphFlow::particle::HistogramRow> const& histogram,
+        std::uint64_t numParticles,
+        std::uint64_t cappedParticles = 0u)
     {
-        for(auto const& row : result.histogram)
+        for(auto const& row : histogram)
             std::cout << row.weight << ',' << row.count << '\n';
         if(numParticles == 0u)
             return;
-        if(result.cappedParticles != 0u)
-            std::cout << "# non-terminating " << result.cappedParticles << '\n';
+        if(cappedParticles != 0u)
+            std::cout << "# non-terminating " << cappedParticles << '\n';
     }
 
     template<typename TDevice>
@@ -48,7 +53,36 @@ namespace
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
         std::cout << "# scheduler " << graphFlow::formatSchedulerStats(result.stats) << '\n';
         std::cout << "# weight,count\n";
-        printHistogram(result, parameters.numParticles);
+        printHistogram(result.histogram, parameters.numParticles, result.cappedParticles);
+        return EXIT_SUCCESS;
+    }
+
+    template<typename TDevice>
+    int runKernel(
+        graphFlow::cli::ResolvedOptions const& resolved,
+        graphFlow::Backend backend,
+        TDevice device,
+        std::string const& deviceName)
+    {
+        graphFlow::particle::Parameters const& parameters = resolved.parameters;
+        graphFlow::particle::KernelOptions const& kernel = resolved.kernel;
+        graphFlow::particle::KernelAxisResult const result
+            = graphFlow::particle::runKernelAxes(device, parameters, kernel);
+
+        std::cout << "# graphFlow_particle_feedback backend=" << graphFlow::backendName(backend)
+                  << " device=" << parameters.deviceIndex << " device-name=" << deviceName
+                  << " workload=kernel particles=" << parameters.numParticles << " chunk-size=" << parameters.chunkSize
+                  << " live-particles=" << result.liveParticles << " tile-size=" << parameters.tileSize
+                  << " batch-chunks=" << parameters.batchChunks << " frame-cap=" << parameters.frameCap
+                  << " seed=" << parameters.seed
+                  << " scatter=" << graphFlow::particle::scatterChoiceName(kernel.scatter)
+                  << " bin-path=" << graphFlow::particle::binPathName(kernel.binPath) << " bins=" << kernel.bins
+                  << " distribution=" << graphFlow::particle::distributionName(kernel.distribution) << '\n';
+        std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
+                  << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
+        std::cout << "# scheduler " << graphFlow::formatSchedulerStats(result.stats) << '\n';
+        std::cout << "# weight,count\n";
+        printHistogram(result.histogram, parameters.numParticles);
         return EXIT_SUCCESS;
     }
 } // namespace
@@ -102,6 +136,8 @@ int main(int argc, char** argv)
                           << " queues-alias=" << (probe.queuesAlias ? "yes" : "no")
                           << " second-before-first=" << (probe.secondCompletedWhileFirstInFlight ? "yes" : "no")
                           << " poll-us=" << probe.pollDurationUs << '\n';
+                if(resolved.workload == graphFlow::particle::Workload::kernel)
+                    return runKernel(resolved, selected, device, deviceName);
                 return run(resolved, selected, device, deviceName);
             });
     }
