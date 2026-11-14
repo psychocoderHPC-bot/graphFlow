@@ -155,6 +155,35 @@ cmake --build build-debug -j 14
 ctest --test-dir build-debug --output-on-failure --no-tests=error
 ```
 
+Per-event payload validation defaults to `ON` when
+`CMAKE_BUILD_TYPE=Debug` and to `OFF` for `Release` and `RelWithDebInfo`. Pass
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` to override the default. The Debug
+build above compiles the photon checks in `include/graphFlow/flow/Debug.hpp`
+and `PhotonDebug.hpp`.
+
+To run the checks in a Release build, configure with:
+
+```sh
+cmake -S . -B build-release-validation -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace
+cmake --build build-release-validation -j 14
+ctest --test-dir build-release-validation --output-on-failure --no-tests=error
+```
+
+The option adds `GRAPHFLOW_DEBUG_VALIDATION=1` to the `graphFlow` interface
+target. Release hot loops keep no per-event state branch. The two
+`[photon][debug]` CTest cases run in both modes: the Release case asserts that
+the hot path has no per-event state branch, and the Debug case exercises the
+compiled checks. `rosi_v100` CTest results are **195/195 CPU** and **247/247
+CUDA** in the default `Release` build and **195/195 CPU** and **247/247 CUDA**
+in the default `Debug` build. Release compiles the per-event checks out; Debug
+compiles them in. Host setup validates the run configuration once, and genuine
+physics failures stay on the `StatusCode` channel in both builds. The five
+former `[status]` tests that tripped the RNG stream-id assertion on Debug
+builds now pass in both builds.
+
 ASAN and UBSAN on the host scheduler:
 
 ```sh

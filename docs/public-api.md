@@ -73,6 +73,18 @@ accelerator argument:
 reachable face, a classifier result outside `maxBins`, and other checked input
 failures. `overflow` covers a checked counter or capacity overflow.
 
+Application setup validates the configuration and geometry once on the host.
+Release kernels do not repeat per-event payload checks. Configure a build with
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` to compile the checks in
+`graphFlow/flow/Debug.hpp` and `PhotonDebug.hpp`; a failed debug check reports
+`StatusCode::invalid` through the same channel and fails the batch before it
+publishes output. The option defaults to `ON` for `CMAKE_BUILD_TYPE=Debug` and
+`OFF` for `Release` and `RelWithDebInfo`, and an explicit
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` overrides it. It never replaces a physics
+error: a vacuum ray with no reachable face, an invalid proposal or bin, a
+counter or weight overflow, and duplicate terminal delivery stay release-path
+failures.
+
 The device adapter copies the status word to the host after the metadata copy
 and before the batch event is observed. The host rejects the batch with a
 `BatchError` before it plans or publishes outputs, and the abort path returns

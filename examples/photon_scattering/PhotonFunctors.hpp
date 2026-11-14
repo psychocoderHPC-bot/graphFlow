@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "PhotonDebug.hpp"
 #include "PhotonTypes.hpp"
 #include "graphFlow/flow/Concepts.hpp"
 #include "graphFlow/flow/Status.hpp"
@@ -16,11 +17,6 @@
 
 namespace graphFlow::photon
 {
-    ALPAKA_FN_ACC inline bool finite(Vec3 const& value)
-    {
-        return alpaka::math::isfinite(value.x) && alpaka::math::isfinite(value.y) && alpaka::math::isfinite(value.z);
-    }
-
     /** Face reached by the current ray, if any. */
     struct FaceHit
     {
@@ -59,14 +55,21 @@ namespace graphFlow::photon
         return faceDistance <= sampledDistance;
     }
 
-    /** Resolve one already-sampled flight into a checked proposal.
+    /** Resolve one already-sampled flight into a proposal.
      *
-     * `sampledDistance` is `-log(U) / sigmaT` when material is present and is ignored for a
-     * ballistic vacuum ray. `sampledKind` is the independent collision-kind uniform. The function
-     * is pure so geometry, tie and cap decisions are testable without a graph or an RNG.
+     * `sigmaTotalValue` is the host-validated `sigmaTotal(slab)`, passed in so the hot loop adds it
+     * once per event. `sampledDistance` is `-log(U) / sigmaTotalValue` when material is present and
+     * is ignored for a ballistic vacuum ray. `sampledKind` is the independent collision-kind
+     * uniform. The function is pure so geometry, tie and cap decisions are testable without a graph
+     * or an RNG.
+     *
+     * Release builds trust the host-validated slab and photon state. `graphFlow::debug::checksEnabled`
+     * adds the finite/range checks in `PhotonDebug.hpp`; the physics errors stay unconditional: a
+     * vacuum ray with no reachable face is an invalid proposal.
      */
     ALPAKA_FN_ACC inline Proposal resolveFlight(
         Slab const& slab,
+        double sigmaTotalValue,
         Photon const& photon,
         double sampledDistance,
         double sampledKind,
@@ -77,22 +80,12 @@ namespace graphFlow::photon
         proposal.distance = 0.0;
         proposal.valid = false;
 
-        if(!finite(photon.position) || !finite(photon.direction))
-            return proposal;
-        if(!alpaka::math::isfinite(slab.thickness) || slab.thickness <= 0.0)
-            return proposal;
-        if(photon.position.z < 0.0 || photon.position.z > slab.thickness)
-            return proposal;
-
-        double const total = sigmaTotal(slab);
-        if(!alpaka::math::isfinite(total) || total < 0.0)
+        if(!validatePhoton(slab, photon))
             return proposal;
 
         FaceHit const face = faceHit(slab, photon.position, photon.direction);
-        if(face.reachable && (!alpaka::math::isfinite(face.distance) || face.distance < 0.0))
-            return proposal;
 
-        if(total == 0.0)
+        if(sigmaTotalValue == 0.0)
         {
             // Ballistic vacuum ray. A parallel ray never reaches a face in this model.
             if(!face.reachable)
@@ -103,11 +96,6 @@ namespace graphFlow::photon
             return proposal;
         }
 
-        if(!alpaka::math::isfinite(sampledDistance) || sampledDistance <= 0.0)
-            return proposal;
-        if(!alpaka::math::isfinite(sampledKind) || sampledKind < 0.0 || sampledKind >= 1.0)
-            return proposal;
-
         if(face.reachable && faceFirst(face.distance, sampledDistance))
         {
             proposal.event = face.event;
@@ -116,7 +104,7 @@ namespace graphFlow::photon
             return proposal;
         }
 
-        bool const scatters = sampledKind < slab.sigmaS / total;
+        bool const scatters = sampledKind < slab.sigmaS / sigmaTotalValue;
         proposal.distance = sampledDistance;
         if(!scatters)
             proposal.event = Event::absorbed;
@@ -137,11 +125,9 @@ namespace graphFlow::photon
     {
         if(!photon.proposal.valid || event != photon.proposal.event)
             return UpdateResult::invalid;
+        if(!validateProposal(slab, photon))
+            return UpdateResult::invalid;
         double const distance = photon.proposal.distance;
-        if(!alpaka::math::isfinite(distance) || distance < 0.0)
-            return UpdateResult::invalid;
-        if(!finite(photon.direction))
-            return UpdateResult::invalid;
 
         switch(event)
         {
@@ -168,7 +154,7 @@ namespace graphFlow::photon
             break;
         }
 
-        if(!finite(photon.position))
+        if(!validatePhoton(slab, photon))
             return UpdateResult::invalid;
         return UpdateResult::success;
     }
@@ -257,12 +243,13 @@ namespace graphFlow::photon
 
     using GeneratePhoton = GeneratePhotonT<>;
 
-    /** Transform: draw the flight and collision-kind uniforms and store a checked proposal.
+    /** Transform: draw the flight and collision-kind uniforms and store a proposal.
      *
      * The flight sample needs a positive value for `log`. `UniformReal<double, interval::CO>`
-     * returns `[0, 1)`; `1 - U` maps it to `(0, 1]`, so the material distance is non-negative and
-     * `resolveFlight` rejects the exact zero-distance endpoint. The collision-kind draw is a second
-     * `[0, 1)` sample from the same propose-stage engine.
+     * returns `[0, 1)`; `1 - U` maps it to `(0, 1]`, so the material distance is non-negative. The
+     * collision-kind draw is a second `[0, 1)` sample from the same propose-stage engine. The host
+     * validated the slab once, so the hot loop keeps only the vacuum/material branch and the
+     * optional debug proposal check.
      */
     struct ProposeFlight
     {
@@ -275,10 +262,10 @@ namespace graphFlow::photon
             double const kindUniform = alpaka::rand::distribution::UniformReal<double>{}(engine);
             double const total = sigmaTotal(slab);
             double sampledDistance = 0.0;
-            if(alpaka::math::isfinite(total) && total > 0.0)
+            if(total > 0.0)
                 sampledDistance = -alpaka::math::log(flightUniform) / total;
-            photon.proposal = resolveFlight(slab, photon, sampledDistance, kindUniform, maxScatters);
-            if(!photon.proposal.valid)
+            photon.proposal = resolveFlight(slab, total, photon, sampledDistance, kindUniform, maxScatters);
+            if(!photon.proposal.valid || !validateProposal(slab, photon))
                 status.set(StatusCode::invalid);
         }
     };
@@ -325,6 +312,7 @@ namespace graphFlow::photon
     template<typename TTrace = NoTrace>
     struct ScatterT
     {
+        Slab slab{};
         ScatterMode mode = ScatterMode::forward;
         mutable TTrace trace;
 
@@ -337,7 +325,7 @@ namespace graphFlow::photon
             }
             if(mode == ScatterMode::isotropic)
                 photon.direction = isotropicDirection(engine);
-            if(!finite(photon.direction))
+            if(!validatePhoton(slab, photon))
             {
                 status.set(StatusCode::invalid);
                 return;

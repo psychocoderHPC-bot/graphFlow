@@ -51,12 +51,16 @@ remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results at the sm_70 ICE workaround: CPU CTest **193/193 passed** (OMP=ON
-Release, pedantic) and CUDA CTest **245/245 passed** on V100 `sm_70`
-(CUDA 12.6.85, Release). Both totals are one lower than before the RNG merge
-because the RNG change removes one `TEST_CASE`. The explicit
-concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
-the RNG main is preserved. CPU OpenMP with
+results at the sm_70 ICE workaround: CPU CTest **195/195 passed** (OMP=ON
+Release and Debug, pedantic) and CUDA CTest **247/247 passed** on V100 `sm_70`
+(CUDA 12.6.85, Release and Debug). Both totals are one higher than before the
+RNG merge: the RNG change removed one `TEST_CASE` and the debug validation adds
+two `[photon][debug]` cases. Release compiles the per-event checks out; Debug
+compiles them in. Host setup validates the configuration once, and genuine
+physics failures stay on the status channel. The five former `[status]` tests
+that tripped the RNG stream-id assertion on Debug builds now pass in both
+builds. The explicit concept-parameter workaround keeps nvcc 12.6.85 off the
+name-hiding ICE and the RNG main is preserved. CPU OpenMP with
 `GOMP_SPINCOUNT=0` (passive) at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, OMP=2 Q8 4.46 s. All histogram sums are exact and no
@@ -184,6 +188,14 @@ in accelerator builds. Catch2 3.4.0 must be visible to `find_package`. The exact
 pins, the `sm_75` RTX 2080 Ti command, the environment scrub, and the format and
 REUSE commands are in [build](docs/build.md).
 
+`GRAPHFLOW_ENABLE_DEBUG_VALIDATION` defaults to `ON` for
+`CMAKE_BUILD_TYPE=Debug` and `OFF` for `Release` and `RelWithDebInfo`. Pass
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` to override it. The two
+`[photon][debug]` CTest cases run in both modes: Release asserts that the hot
+path has no per-event state branch, and Debug exercises the compiled checks.
+Host setup validates the run configuration once. Both default `rosi_v100`
+builds pass 195/195 CPU and 247/247 CUDA.
+
 ## Run the example
 
 ```sh
@@ -294,7 +306,7 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
 claimed runtime. CUDA execution was historically validated on `hal` with
-`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build passes 245/245 with the
+`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build passes 247/247 with the
 explicit concept-parameter workaround. CUDA 13.4/`sm_80` was not re-run in
 this validation.
 
@@ -435,9 +447,12 @@ The full design is in [architecture](docs/architecture.md).
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
   multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
-  193/193 with OMP=ON at the sm_70 ICE workaround.
-- CUDA V100 `sm_70` on `rosi_v100` passes 245/245 (CUDA 12.6.85 Release)
-  with the explicit concept-parameter workaround.
+  195/195 with OMP=ON at the sm_70 ICE workaround in Release and Debug.
+- CUDA V100 `sm_70` on `rosi_v100` passes 247/247 (CUDA 12.6.85 Release and
+  Debug) with the explicit concept-parameter workaround.
+- Release builds have no per-event payload checks; the Debug default compiles
+  them in. Genuine physics failures stay on the `StatusCode` channel in both
+  builds.
 - CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
 - No CI runners or `.github/workflows` yet (PR #4 is a draft).
 - The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun

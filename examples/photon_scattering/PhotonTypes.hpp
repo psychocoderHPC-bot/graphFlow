@@ -181,6 +181,29 @@ namespace graphFlow::photon
         return slab.sigmaS + slab.sigmaA;
     }
 
+    /** Resolve the domain parameters into the slab every stage shares. */
+    constexpr Slab slabOf(Parameters const& parameters)
+    {
+        return Slab{parameters.thickness, parameters.sigmaS, parameters.sigmaA};
+    }
+
+    /** Validate a resolved slab once on the host.
+     *
+     * The device stages assume this check has passed. They do not repeat the thickness, coefficient
+     * or total checks per event.
+     */
+    inline void validateSlab(Slab const& slab)
+    {
+        if(!std::isfinite(slab.thickness) || slab.thickness <= 0.0)
+            throw std::invalid_argument{"graphFlow::photon: thickness must be finite and positive"};
+        if(!std::isfinite(slab.sigmaS) || slab.sigmaS < 0.0)
+            throw std::invalid_argument{"graphFlow::photon: sigmaS must be finite and non-negative"};
+        if(!std::isfinite(slab.sigmaA) || slab.sigmaA < 0.0)
+            throw std::invalid_argument{"graphFlow::photon: sigmaA must be finite and non-negative"};
+        if(!std::isfinite(sigmaTotal(slab)))
+            throw std::invalid_argument{"graphFlow::photon: sigmaS + sigmaA must be finite"};
+    }
+
     /** Validate the physical and execution configuration before a run. */
     inline void validateParameters(Parameters const& parameters)
     {
@@ -188,15 +211,7 @@ namespace graphFlow::photon
             throw std::invalid_argument{"graphFlow::photon: photon count exceeds the RNG stream-id range"};
         if(parameters.maxScatters > graphFlow::rng::maxStreamEvent)
             throw std::invalid_argument{"graphFlow::photon: max scatters exceeds the RNG stream-event range"};
-        if(!std::isfinite(parameters.thickness) || parameters.thickness <= 0.0)
-            throw std::invalid_argument{"graphFlow::photon: thickness must be finite and positive"};
-        if(!std::isfinite(parameters.sigmaS) || parameters.sigmaS < 0.0)
-            throw std::invalid_argument{"graphFlow::photon: sigmaS must be finite and non-negative"};
-        if(!std::isfinite(parameters.sigmaA) || parameters.sigmaA < 0.0)
-            throw std::invalid_argument{"graphFlow::photon: sigmaA must be finite and non-negative"};
-        double const total = sigmaTotal(Slab{parameters.thickness, parameters.sigmaS, parameters.sigmaA});
-        if(!std::isfinite(total))
-            throw std::invalid_argument{"graphFlow::photon: sigmaS + sigmaA must be finite"};
+        validateSlab(slabOf(parameters));
         if(parameters.chunkSize == 0u)
             throw std::invalid_argument{"graphFlow::photon: chunkSize must be non-zero"};
         if(parameters.tileSize == 0u)

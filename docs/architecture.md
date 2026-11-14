@@ -225,6 +225,28 @@ scheduler then routes each descriptor by its bin. The source is not a transform:
 it returns its own chunk downstream. Every other node releases its input chunks
 only after its last device stage has completed.
 
+## Validation split
+
+The host validates the run configuration once before the first launch. The
+photon example's `validateParameters` checks the slab (`thickness`, `sigmaS`,
+`sigmaA`, and their finite total), the RNG stream limits, and the execution
+knobs. Device stages assume a valid slab and do not re-check the coefficients
+or the position range per event.
+
+Per-event payload checks live in `include/graphFlow/flow/Debug.hpp` and the
+photon `PhotonDebug.hpp` helper. A build with
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` validates a finite position and
+direction, `z` inside `[0, L]`, a finite non-negative proposal distance, and
+proposal/event agreement. A failed check reports `StatusCode::invalid`, so the
+host fails the batch before it publishes output. The option defaults to `ON` for
+`CMAKE_BUILD_TYPE=Debug` and `OFF` for `Release` and `RelWithDebInfo`; pass
+`-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF` to override. Release builds compile
+the helper to a constant `true` and keep no per-event state branch.
+
+The release path keeps the physics errors: a vacuum ray with no reachable face,
+an invalid proposal or classifier bin, counter and weight overflow, and
+duplicate terminal delivery.
+
 ## Ownership, leases, and teardown
 
 A batch owns its input descriptors, output leases, staging buffers, event, and

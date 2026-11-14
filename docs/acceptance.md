@@ -18,17 +18,29 @@ results:
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on `rosi_v100` (OMP=ON Release) | **193/193 passed** |
-| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **245/245 passed** |
+| CPU CTest on `rosi_v100` (OMP=ON Release) | **195/195 passed** |
+| CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** |
+| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **247/247 passed** |
+| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **247/247 passed** |
 | CPU OpenMP on `rosi_v100` (passive, `GOMP_SPINCOUNT=0`) | Works; no hangs. `N=1e5`, `C=128`/`P=1024`, `Q=1`: OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s. `N=1e6` OMP=2 Q1 23.71 s, Q8 4.46 s. All sums exact. |
 
 The V100 `sm_70` build is unblocked by the explicit concept-parameter
 workaround in the transform, partition, scatter, and hash-scatter kernels and
-the test hook adapters. The RNG main is preserved. Both totals are one lower
-than before the RNG merge because the RNG change removes one `TEST_CASE`. The
-recorded run is Release only; Debug, the hash-path rerun, and CI remain open.
-CUDA 13.4/`sm_80`, fwk394, and H100 were not re-run in this validation, so no
-claim is updated beyond the recorded `rosi_v100` run.
+the test hook adapters. The RNG main is preserved. Both totals are one higher
+than before the RNG merge: the RNG change removed one `TEST_CASE` and the
+debug validation adds two `[photon][debug]` cases. The two cases run in both
+build types: Release asserts that the hot path has no per-event state branch,
+and Debug exercises the compiled checks.
+`GRAPHFLOW_ENABLE_DEBUG_VALIDATION` defaults to `ON` for
+`CMAKE_BUILD_TYPE=Debug` and `OFF` for `Release` and `RelWithDebInfo`; the
+cache entry stays overridable. Release and Debug are both recorded below.
+Release has no per-event checks; Debug compiles them in. Host setup validates
+the configuration once, and genuine physics failures stay on the `StatusCode`
+channel in both builds. The five former `[status]` tests that tripped the RNG
+stream-id assertion on Debug builds now pass in both builds.
+The hash-path rerun, CI, and the tree-wide format/SPDX sweep (T14b) remain
+open. CUDA 13.4/`sm_80`, fwk394, and H100 were not re-run in this validation,
+so no claim is updated beyond the recorded `rosi_v100` run.
 
 The previously recorded counts, fwk394 CPU 194/194 and hal CUDA 246/246, are
 **historical validation on a shared host** (`hal` reports `sharing=unknown`)
@@ -53,15 +65,17 @@ explicit concept-parameter workaround.
 
 ## Builds
 
-The `rosi_v100` CPU Release build passes and the CPU CTest suite runs to
-completion. The `rosi_v100` CUDA V100 `sm_70` build passes with nvcc 12.6.85
-using the explicit concept-parameter workaround. The historical build records
-below are from the previous platforms.
+The `rosi_v100` CPU Release and Debug builds pass and the CPU CTest suite runs
+to completion. The `rosi_v100` CUDA V100 `sm_70` Release and Debug builds pass
+with nvcc 12.6.85 using the explicit concept-parameter workaround. The
+historical build records below are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 193/193 |
-| `rosi_v100` CUDA Release (V100 `sm_70`) | configure and build pass; CTest 245/245 |
+| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 195/195 |
+| `rosi_v100` CPU Debug (OMP=ON) | configure and build pass; CTest 195/195 |
+| `rosi_v100` CUDA Release (V100 `sm_70`) | configure and build pass; CTest 247/247 |
+| `rosi_v100` CUDA Debug (V100 `sm_70`) | configure and build pass; CTest 247/247 |
 | Historical CPU Release on fwk394 | configure and build pass |
 | Historical CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
 | HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passes; no AMD runtime device on hal, execution blocked |
@@ -70,16 +84,18 @@ below are from the previous platforms.
 
 ## Tests
 
-Current `rosi_v100` CTest: CPU **193/193 passed** (OMP=ON Release) and CUDA
-**245/245 passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
-concept-parameter workaround unblocks the nvcc 12.6.85 name-hiding ICE; the
-RNG main is unchanged. The historical CTest totals below are from the previous
-platforms.
+Current `rosi_v100` CTest: CPU **195/195 passed** (OMP=ON Release and Debug)
+and CUDA **247/247 passed** on V100 `sm_70` (CUDA 12.6.85 Release and Debug).
+The explicit concept-parameter workaround unblocks the nvcc 12.6.85 name-hiding
+ICE; the RNG main is unchanged. The historical CTest totals below are from the
+previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU CTest (OMP=ON Release) | **193/193 passed** |
-| `rosi_v100` CUDA CTest (V100 `sm_70`) | **245/245 passed** |
+| `rosi_v100` CPU CTest (OMP=ON Release) | **195/195 passed** |
+| `rosi_v100` CPU CTest (OMP=ON Debug) | **195/195 passed** |
+| `rosi_v100` CUDA CTest (V100 `sm_70`, Release) | **247/247 passed** |
+| `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **247/247 passed** |
 | Historical CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the integrated main (T5) |
 | Historical CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the integrated main (T5) |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
@@ -114,9 +130,10 @@ matched the pre-change binary on both backends. The example header (including
 exit status are identical. The derived pool reserve changes from `P+6` to
 `P+8` because the A/B partitions now expose three named outcomes; that
 diagnostic is not a numeric result. These counts are historical. The
-`rosi_v100` CPU CTest passes 193/193 (OMP=ON Release) and the V100 `sm_70`
-CUDA CTest passes 245/245 with the explicit concept-parameter workaround; the
-`rosi_v100` 33-invocation baseline comparison is not yet recorded.
+`rosi_v100` CPU CTest passes 195/195 (OMP=ON Release and Debug) and the V100
+`sm_70` CUDA CTest passes 247/247 in Release and Debug with the explicit
+concept-parameter workaround; the `rosi_v100` 33-invocation baseline comparison
+is not yet recorded.
 
 ### T5 photon scattering output and diagnostics
 
@@ -134,8 +151,10 @@ provenance was passed explicitly with
 
 | Configuration | Command | Result |
 | --- | --- | --- |
-| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **193/193 passed** |
-| `rosi_v100` CUDA (V100 `sm_70`) | `ctest --output-on-failure` | **245/245 passed** |
+| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **195/195 passed** |
+| `rosi_v100` CPU (OMP=ON Debug) | `ctest --output-on-failure` | **195/195 passed** |
+| `rosi_v100` CUDA (V100 `sm_70` Release) | `ctest --output-on-failure` | **247/247 passed** |
+| `rosi_v100` CUDA (V100 `sm_70` Debug) | `ctest --output-on-failure` | **247/247 passed** |
 | Historical CPU fwk394 | `cmake --build photon-rework-build-cpu -j 16` then `ctest --output-on-failure -j 8` | 194/194 passed |
 | Historical CUDA hal A30 | `cmake --build photon-rework-build-cuda -j 16` then `ctest --output-on-failure -j 4` | 246/246 passed |
 | Historical CPU diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |

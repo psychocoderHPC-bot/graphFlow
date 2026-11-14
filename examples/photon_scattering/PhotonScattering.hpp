@@ -57,7 +57,7 @@ namespace graphFlow::photon
             alpaka::onHost::memcpy(initQueue, traceFlags, traceZero);
         }
 
-        Slab const slab{parameters.thickness, parameters.sigmaS, parameters.sigmaA};
+        Slab const slab = slabOf(parameters);
 
         using TraceVertexView = decltype(traceBuffer.getView());
         using TraceCountView = decltype(traceCounts.getView());
@@ -74,7 +74,7 @@ namespace graphFlow::photon
         auto source = flow.source("generate", GeneratePhotonT<Trace>{trace});
         auto flight = flow.transform("propose flight", ProposeFlight{slab, parameters.maxScatters});
         auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
-        auto scatter = flow.transform("scatter", ScatterT<Trace>{parameters.mode, trace});
+        auto scatter = flow.transform("scatter", ScatterT<Trace>{slab, parameters.mode, trace});
         using RecordView = decltype(records.getView());
         using VisitView = decltype(visits.getView());
         auto terminal = flow.sink(

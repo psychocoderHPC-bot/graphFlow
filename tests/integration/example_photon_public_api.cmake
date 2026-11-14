@@ -9,6 +9,7 @@ endif()
 
 set(user_files
     PhotonTypes.hpp
+    PhotonDebug.hpp
     PhotonFunctors.hpp
     PhotonScattering.hpp
     PhotonCli.hpp
