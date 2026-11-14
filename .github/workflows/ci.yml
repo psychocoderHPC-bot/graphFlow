@@ -87,7 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      ASAN_OPTIONS: detect_leaks=1
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      LSAN_OPTIONS: detect_leaks=1:exitcode=66
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
       GRAPHFLOW_ALPAKA_SOURCE_DIR: ${{ github.workspace }}/.alpaka
     steps:
@@ -117,6 +118,7 @@ jobs:
             -DGRAPHFLOW_ENABLE_OPENMP=OFF \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DGRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON \
             -Dalpaka_COMPILE_PEDANTIC=ON
 
       - name: Build
@@ -127,12 +129,81 @@ jobs:
           ctest --test-dir build --output-on-failure --no-tests=error \
             --output-junit ctest-sanitizers.xml
 
+      # Dedicated error-path leak gate: the [failure] and [status] cases run in
+      # one process so LeakSanitizer reports at exit. LSAN_OPTIONS turns a leak
+      # into a nonzero exit, and --no-tests=error keeps a missing check fatal.
+      - name: Error-path leak check
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -L leak --output-junit ctest-leak.xml
+
       - name: Upload CTest report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ctest-sanitizers
-          path: build/ctest-sanitizers.xml
+          path: |
+            build/ctest-sanitizers.xml
+            build/ctest-leak.xml
+          if-no-files-found: ignore
+
+  # Host-scheduler TSAN gate. The accepted configuration disables the OpenMP
+  # executor (CpuOmpBlocks) and links non-PIE, which is the configuration that
+  # passes cleanly; with CpuOmpBlocks plus OpenMP the suite reports races
+  # inside the upstream alpaka CPU queue. This job runs on a hosted runner and
+  # is CPU-only; the CUDA and HIP jobs stay compile-only.
+  tsan:
+    name: tsan (host scheduler, non-PIE, no OMP executor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:exitcode=66
+      GRAPHFLOW_ALPAKA_SOURCE_DIR: ${{ github.workspace }}/.alpaka
+    steps:
+      - name: Check out graphFlow
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ catch2 git ca-certificates
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/alpaka-group/alpaka.git "$GRAPHFLOW_ALPAKA_SOURCE_DIR"
+          git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" checkout --detach "$ALPAKA_COMMIT"
+          test "$(git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" rev-parse HEAD)" = "$ALPAKA_COMMIT"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          unset OMP_NUM_THREADS OMP_PROC_BIND OMP_PLACES GOMP_CPU_AFFINITY
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$GRAPHFLOW_ALPAKA_SOURCE_DIR" \
+            -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -fno-pie" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread -no-pie" \
+            -Dalpaka_EXEC_CpuOmpBlocks=OFF \
+            -Dalpaka_DEP_OMP=OFF \
+            -Dalpaka_COMPILE_PEDANTIC=ON
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+
+      - name: Test
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --output-junit ctest-tsan.xml
+
+      - name: Upload CTest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-tsan
+          path: build/ctest-tsan.xml
           if-no-files-found: ignore
 
   cuda-compile:
