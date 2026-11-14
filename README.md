@@ -44,7 +44,7 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 170/170, hal CUDA 206/206. The totals
+Recorded integrated tests: fwk394 CPU 194/194, hal CUDA 246/246. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
 include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
 failure-status cases. The typed CUDA tests run the feedback graph,
