@@ -27,7 +27,7 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The HIP CTest run passes 238/238 with 43 HIP cases: 8 typed Flow
+ROCm 7.2. The HIP CTest run passes 245/245 with 43 HIP cases: 8 typed Flow
 cases, 24 particle CLI cases, 10 photon CLI cases, and 1 photon output case.
 `rocprof` v3 confirms the device kernels. GitHub-hosted HIP remains
 compile-only because its runners have no AMD GPU, so no HIP runtime claim is
@@ -41,7 +41,7 @@ result.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 195/195 with
+spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 202/202 with
 OMP=ON Release. CPU OpenMP wall times at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
@@ -72,8 +72,8 @@ partition, scatter, and hash-scatter kernels now declare the trailing
 threshold; deduction and the instantiated signatures are unchanged. The test
 hook adapters keep `GraphRunner::Queue` and `Batch` out of non-template
 `std::function` construction, the other nvcc 12.6.85 frontend crash. With the
-workaround the `rosi_v100` V100 `sm_70` CTest passes 247/247 and the CPU CTest
-passes 195/195 in Release and Debug; the RNG main is preserved. The hash-path
+workaround the `rosi_v100` V100 `sm_70` CTest passes 254/254 and the CPU CTest
+passes 202/202 in Release and Debug; the RNG main is preserved. The hash-path
 rerun, CI, and the tree-wide format/SPDX sweep (T14b) remain open, and CUDA
 13.4/`sm_80`, fwk394, and H100 were not re-run in this validation.
 
@@ -87,7 +87,7 @@ run on `hal` is a correctness result only; `hal` sharing is unknown and no HIP
 performance number is recorded.
 
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results: CPU CTest 195/195 and CUDA CTest 247/247 on V100 `sm_70` (OMP=ON and
+results: CPU CTest 202/202 and CUDA CTest 254/254 on V100 `sm_70` (OMP=ON and
 CUDA 12.6.85, Release and Debug, both with the explicit concept-parameter
 workaround); CPU OpenMP wall times recorded (passive, `GOMP_SPINCOUNT=0`).
 No frozen regression target exists yet. CUDA 13.4/`sm_80`, fwk394, and H100
@@ -151,7 +151,9 @@ The dense path is the correctness reference and the only path the example uses.
 The shared-memory hash path is exercised by CPU integration tests (low-level
 only). It compiles for CUDA and HIP, but no hash-path accelerator execution is
 recorded. The `rosi_v100` hash-path rerun is pending. The dense/hash threshold
-is the static 1024-bin limit, not a measured crossover.
+is the static 1024-bin limit, not a measured crossover. The public `Flow` API
+is the dense path; the shared-memory hash path is low-level (exercised by the
+>1024-bin low-level tests) and is not a public-API change.
 
 ## Other open items
 
@@ -162,11 +164,11 @@ is the static 1024-bin limit, not a measured crossover.
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
   build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
   typed Flow cases. The historical integrated CTest totals are 194/194 CPU on
-  fwk394 and 246/246 CUDA on hal. The `rosi_v100` CPU CTest passes 195/195
-  (OMP=ON Release and Debug) and the CUDA CTest on V100 `sm_70` passes 247/247
-  in Release and Debug with the explicit concept-parameter workaround. The HIP
-  CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passes 238/238 with 43 HIP
-  cases.
+  fwk394 and 246/246 CUDA on hal (historical). The `rosi_v100` CPU CTest
+  passes 202/202 (OMP=ON Release and Debug) and the CUDA CTest on V100 `sm_70`
+  passes 254/254 in Release and Debug with the explicit concept-parameter
+  workaround. The HIP CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2)
+  passes 245/245 with 43 HIP cases.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - Release builds do not detect corrupted photon payload state per event. Host

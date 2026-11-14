@@ -117,7 +117,7 @@ The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
 the particle and photon CLI/output cases for the HIP backend. It passes
-238/238 with 43 HIP cases.
+245/245 with 43 HIP cases.
 
 ```sh
 export ROCM_PATH=/opt/rocm
@@ -180,8 +180,8 @@ The option adds `GRAPHFLOW_DEBUG_VALIDATION=1` to the `graphFlow` interface
 target. Release hot loops keep no per-event state branch. The two
 `[photon][debug]` CTest cases run in both modes: the Release case asserts that
 the hot path has no per-event state branch, and the Debug case exercises the
-compiled checks. `rosi_v100` CTest results are **195/195 CPU** and **247/247
-CUDA** in the default `Release` build and **195/195 CPU** and **247/247 CUDA**
+compiled checks. `rosi_v100` CTest results are **202/202 CPU** and **254/254
+CUDA** in the default `Release` build and **202/202 CPU** and **254/254 CUDA**
 in the default `Debug` build. Release compiles the per-event checks out; Debug
 compiles them in. Host setup validates the run configuration once, and genuine
 physics failures stay on the `StatusCode` channel in both builds. The five
@@ -218,14 +218,15 @@ runs `reuse lint`; a format job stays out of the workflow until T14b lands.
 `ubuntu-latest` runners and public containers; [CI](ci.md) lists the jobs and
 the pins. The commands above are the same entry points. The recorded integrated
 results cover the FrameSpec revision `327f74f`: the fwk394 CPU build with CTest
-82/82 and the hal CUDA A30 `sm_80` build with CTest 86/86; the historical HIP
+82/82 and the hal CUDA A30 `sm_80` build with CTest 86/86 (historical, that
+revision); the historical HIP
 `gfx90a` compile gate also passed. The later additive PR-A graph API core at
 `60a34302b1c3cf205304916c7233f13118591dd0` was validated with **97/97 CPU
 CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
 The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
-**238/238** with 43 HIP cases. The `sm_75` CUDA build still fails with the
+**245/245** with 43 HIP cases. The `sm_75` CUDA build still fails with the
 CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`). Format
 and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, and
 the `sanitizers` job runs ASAN+UBSAN over the CPU suite.

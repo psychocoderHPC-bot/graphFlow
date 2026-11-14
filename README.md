@@ -22,13 +22,13 @@ Documentation:
 
 ## Status
 
-Current main: `25fa0927a4e042f229d43229734f50dce8277954`. The T5 photon
+Current main: `cb2de187297bb7277b21ea47a6d2a8ed05b909ba`. The T5 photon
 scattering record is at `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T1, T2,
 T3, T5, T7, T13, T14a). The public API is implemented: the typed
 `Flow<TPayload, TDevice, TStorage>` topology, execution, storage, and status
 path described in [public API contract](docs/public-api.md). CPU, CUDA, and HIP
 execution are validated on real devices. HIP runs on `hal` with an AMD Radeon
-RX 7900 XTX (`gfx1100`) and ROCm 7.2: **238/238 CTest passed**, including **43
+RX 7900 XTX (`gfx1100`) and ROCm 7.2: **245/245 CTest passed**, including **43
 HIP cases** (8 typed Flow cases plus the particle and photon CLI/output cases),
 with `rocprof` recording the GPU kernel dispatches. GitHub-hosted HIP builds
 remain compile-only because those runners have no AMD GPU; no HIP runtime claim
@@ -60,7 +60,8 @@ remains open (T14b). See [known limitations](docs/known-limitations.md).
 `rosi_v100` is the exclusive validation platform. `rosi_v100` results at the
 sm_70 ICE workaround before the hash `maxBins` fix: CPU CTest **195/195
 passed** (OMP=ON Release and Debug, pedantic) and CUDA CTest **247/247 passed**
-on V100 `sm_70` (CUDA 12.6.85, Release and Debug). The hash `maxBins`
+on V100 `sm_70` (CUDA 12.6.85, Release and Debug); those totals are historical
+pre-fix values. The hash `maxBins`
 output-credit fix adds seven cases (reservation, pool budget, exact and partial
 credits, Q=1/2/8,
 overflow, and `maxBins` above the dense limit); the rebased Release totals on
@@ -84,7 +85,7 @@ and no H100 or fwk394 result is updated here. The CUDA build fails its
 `[cuda]` tests when no NVIDIA GPU is visible. The HIP build adds eight typed
 Flow cases and the particle and photon CLI/output matrix for the HIP backend;
 those cases fail when no AMD GPU is visible. On `hal` with the RX 7900 XTX
-(`gfx1100`, ROCm 7.2), the HIP build passed 238/238 with 43 HIP cases.
+(`gfx1100`, ROCm 7.2), the HIP build passed 245/245 with 43 HIP cases.
 
 The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
@@ -217,7 +218,7 @@ REUSE commands are in [build](docs/build.md).
 `[photon][debug]` CTest cases run in both modes: Release asserts that the hot
 path has no per-event state branch, and Debug exercises the compiled checks.
 Host setup validates the run configuration once. Both default `rosi_v100`
-builds pass 195/195 CPU and 247/247 CUDA.
+builds pass 202/202 CPU and 254/254 CUDA.
 
 ## Run the example
 
@@ -329,9 +330,9 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP execution is validated
 on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2): the HIP photon CLI and
-output cases are part of the 43 HIP cases in the 238/238 CTest run. CUDA
+output cases are part of the 43 HIP cases in the 245/245 CTest run. CUDA
 execution was historically validated on `hal` with `sm_80`; the `rosi_v100`
-CUDA V100 `sm_70` build passes 247/247 with the explicit concept-parameter
+CUDA V100 `sm_70` build passes 254/254 with the explicit concept-parameter
 workaround. CUDA 13.4/`sm_80` was not re-run in this validation.
 
 ## Semantics
@@ -453,7 +454,7 @@ The full design is in [architecture](docs/architecture.md).
   `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
   the host backend uses a unit frame extent.
 - HIP execution is validated on one AMD device: `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2), 238/238 CTest with 43 HIP cases. Other AMD
+  7900 XTX (`gfx1100`, ROCm 7.2), 245/245 CTest with 43 HIP cases. Other AMD
   architectures and the hash path are not run on HIP. `hal` reports
   `sharing=unknown`, so there is no HIP performance claim. GitHub-hosted HIP
   remains compile-only because its runners have no AMD GPU.
@@ -473,8 +474,8 @@ The full design is in [architecture](docs/architecture.md).
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
   multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
-  195/195 with OMP=ON at the sm_70 ICE workaround in Release and Debug.
-- CUDA V100 `sm_70` on `rosi_v100` passes 247/247 (CUDA 12.6.85 Release and
+   202/202 with OMP=ON in Release and Debug.
+- CUDA V100 `sm_70` on `rosi_v100` passes 254/254 (CUDA 12.6.85 Release and
   Debug) with the explicit concept-parameter workaround.
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both
@@ -483,7 +484,9 @@ The full design is in [architecture](docs/architecture.md).
 - CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
   compile-only there, and no self-hosted runner is provisioned.
 - The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun
-  is pending. The dense/hash threshold is static.
+  is pending. The dense/hash threshold is static. The public `Flow` API is the
+  dense path; hash classify/scatter is low-level, exercised only by the
+  >1024-bin low-level tests and not a public-API change.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The numbers in this README are
   historical and pre-T5/T7.

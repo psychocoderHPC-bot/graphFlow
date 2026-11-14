@@ -7,17 +7,16 @@ This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state, not on the intended final state.
 
-Current HIP runtime validation is at
-`58bb514def3f3c956126ab7c34d0de74a45f679e` on base
-`25fa0927a4e042f229d43229734f50dce8277954`. The `rosi_v100` CPU/CUDA counts
-below remain at the sm_70 ICE workaround
-`00b6fe0290a7ff4cf8e980eed1c3ba8f7ddefafa` on the earlier main
-`c85bbeeac2b3770a7aacc383daf78dd7f488a32b` (RNG API merge):
+HIP runtime validation is recorded at
+`58bb514def3f3c956126ab7c34d0de74a45f679e` on the previous main
+`25fa0927a4e042f229d43229734f50dce8277954`; the final main is
+`cb2de187297bb7277b21ea47a6d2a8ed05b909ba`. The `rosi_v100` CPU/CUDA counts
+below are the final main values:
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
 - **Validation platform:** `rosi_v100` is the exclusive validation platform.
-  Current `rosi_v100` results at the sm_70 ICE workaround: CPU CTest
-  **195/195 passed** (OMP=ON Release, pedantic) and CUDA CTest **247/247
+  Final `rosi_v100` results: CPU CTest
+  **202/202 passed** (OMP=ON Release, pedantic) and CUDA CTest **254/254
   passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
   concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
   the RNG main is preserved.
@@ -38,12 +37,12 @@ below remain at the sm_70 ICE workaround
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
-  238/238 CTest with 43 HIP cases. GitHub-hosted HIP remains compile-only
+  245/245 CTest with 43 HIP cases. GitHub-hosted HIP remains compile-only
   because those runners have no AMD GPU; the `gfx90a` compile-only gate is
   historical.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
-  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 195/195 with
-  OMP=ON at the sm_70 ICE workaround. The previous multi-region pathology is not observed on `rosi_v100`.
+  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 202/202 with
+  OMP=ON. The previous multi-region pathology is not observed on `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
   no final H100 claim is made. H100 remains blocked/preliminary.
@@ -60,8 +59,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 195/195 and the V100 `sm_70` CUDA CTest
-  passes 247/247 with the explicit concept-parameter workaround. Open
+  `rosi_v100` CPU CTest passes 202/202 and the V100 `sm_70` CUDA CTest
+  passes 254/254 with the explicit concept-parameter workaround. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -151,7 +150,7 @@ resource or decision is missing.
   removed; floating-point draws use `UniformReal` and integer decisions use the
   engine output. The independent scalar oracles use the same mapping without
   the production header. Fixed-seed particle and photon baselines changed once
-  at this commit. V100 CUDA `sm_70` passes 247/247 with the explicit
+  at this commit. V100 CUDA `sm_70` passes 254/254 with the explicit
   concept-parameter workaround on the RNG main.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
@@ -220,7 +219,7 @@ resource or decision is missing.
   GPU and fails when no GPU is visible rather than skipping.
 - [x] **P0: HIP execution gate.** Done at
   `58bb514def3f3c956126ab7c34d0de74a45f679e` on `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`) and ROCm 7.2: 238/238 CTest with 43 HIP cases, plus
+  7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 43 HIP cases, plus
   particle and photon CLI/output cases. `rocprof` confirms the device kernels.
   Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
   `N=1e8` acceptance run, and no performance claim while `hal` reports
@@ -272,13 +271,19 @@ resource or decision is missing.
 ## 7. Blockers and decisions
 
 - **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 238/238 with
+  7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 245/245 with
   43 HIP cases. Other AMD architectures and the AMD `N=1e8` acceptance remain
   open; GitHub-hosted HIP stays compile-only.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
   is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
   TSAN run.
+- **CI status:** hosted CI is green on final main: CPU 202/202 (Release and
+  Debug) and ASAN+UBSAN Debug 202/202 on the CPU suite; CUDA and HIP jobs are
+  compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. TSAN stays
+  a local/manual check. The CUDA or HIP runtime gate still needs a device host
+  with a known sharing and label configuration; no self-hosted runner is
+  provisioned.
 - **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
   and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
   host with a known sharing and label configuration; no self-hosted runner is
@@ -290,7 +295,7 @@ resource or decision is missing.
   stale, so no final H100 claim is made.
 - **CPU OMP backend:** CPU execution with the OpenMP backend works on
   `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the CPU CTest
-  passes 195/195 with OMP=ON Release.
+   passes 202/202 with OMP=ON Release.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
   `P=65536` (about 12.9 GB). Decide between a slot-based pool, a smaller default
   `P`, or a memory-budget cap.
@@ -320,16 +325,16 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
-  XTX `gfx1100`, ROCm 7.2) with 238/238 CTest and 43 HIP cases. `rosi_v100`
-  CPU CTest passes 195/195 (OMP=ON) and the CUDA V100 `sm_70` CTest passes
-  247/247 with the explicit concept-parameter workaround.
+  XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 43 HIP cases. `rosi_v100`
+  CPU CTest passes 202/202 (OMP=ON) and the CUDA V100 `sm_70` CTest passes
+  254/254 with the explicit concept-parameter workaround.
 - [x] The example CLI is registered in CTest for the full CPU, CUDA, and HIP
   matrices; the HIP cases run on `hal` with a real AMD GPU.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.
 - [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
-  histograms. The `rosi_v100` CPU CTest passes 195/195; the `rosi_v100`
+   histograms. The `rosi_v100` CPU CTest passes 202/202; the `rosi_v100`
   33-invocation baseline comparison is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
   `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times

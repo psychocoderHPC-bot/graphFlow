@@ -3,14 +3,14 @@
 
 # graphFlow acceptance record
 
-Current main is `25fa0927a4e042f229d43229734f50dce8277954` (merge of the
+Current main is `cb2de187297bb7277b21ea47a6d2a8ed05b909ba` (merge of the
 debug-validation work). The T5 photon scattering record is at
 `ac89ab558c26b938038035b26ca5dbe6d7ce7727`, building on the typed Flow
 execution and particle example port at
 `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` and the earlier integrated
 revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
-T13, T14a). Their counts and the historical T13 performance table remain below
-as evidence.
+T13, T14a). The current final counts and the historical T13 performance table
+remain below as evidence.
 
 The HIP runtime validation in this record ran at
 `58bb514def3f3c956126ab7c34d0de74a45f679e` on base
@@ -25,11 +25,11 @@ results:
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on `rosi_v100` (OMP=ON Release) | **195/195 passed** |
-| CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** |
-| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **247/247 passed** |
-| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **247/247 passed** |
-| HIP CTest on `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm 7.2, Release) | **238/238 passed**; 43 HIP cases |
+| CPU CTest on `rosi_v100` (OMP=ON Release) | **202/202 passed** |
+| CPU CTest on `rosi_v100` (OMP=ON Debug) | **202/202 passed** |
+| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **254/254 passed** |
+| CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Debug) | **254/254 passed** |
+| HIP CTest on `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm 7.2, Release) | **245/245 passed**; 43 HIP cases |
 | CPU OpenMP on `rosi_v100` (passive, `GOMP_SPINCOUNT=0`) | Works; no hangs. `N=1e5`, `C=128`/`P=1024`, `Q=1`: OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s. `N=1e6` OMP=2 Q1 23.71 s, Q8 4.46 s. All sums exact. |
 
 The V100 `sm_70` build is unblocked by the explicit concept-parameter
@@ -83,7 +83,7 @@ The HIP runtime record is
 
 | Configuration | Result |
 | --- | --- |
-| HIP CTest (`ROCR_VISIBLE_DEVICES=0`, Release) | **238/238 passed** |
+| HIP CTest (`ROCR_VISIBLE_DEVICES=0`, Release) | **245/245 passed** |
 | HIP cases | **43**: 8 typed Flow, 24 particle CLI, 10 photon CLI, 1 photon output |
 | `rocprof` v3, particle feedback example | 4,901 GPU kernel dispatches |
 | `rocprof` v3, typed Flow case | passed, 38,266 assertions |
@@ -111,35 +111,35 @@ historical build records below are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 195/195 |
-| `rosi_v100` CPU Debug (OMP=ON) | configure and build pass; CTest 195/195 |
-| `rosi_v100` CUDA Release (V100 `sm_70`) | configure and build pass; CTest 247/247 |
-| `rosi_v100` CUDA Debug (V100 `sm_70`) | configure and build pass; CTest 247/247 |
+| `rosi_v100` CPU Release (OMP=ON) | configure and build pass; CTest 202/202 |
+| `rosi_v100` CPU Debug (OMP=ON) | configure and build pass; CTest 202/202 |
+| `rosi_v100` CUDA Release (V100 `sm_70`) | configure and build pass; CTest 254/254 |
+| `rosi_v100` CUDA Debug (V100 `sm_70`) | configure and build pass; CTest 254/254 |
 | Historical CPU Release on fwk394 | configure and build pass |
 | Historical CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
 | Historical HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passed; no AMD runtime device was visible, so execution was blocked at that revision |
-| HIP Release on hal (`gfx1100`, AMD Radeon RX 7900 XTX, ROCm 7.2) | configure, build, and CTest 238/238 pass |
-| ASAN+UBSAN Debug | not recorded for the integrated revision |
+| HIP Release on hal (`gfx1100`, AMD Radeon RX 7900 XTX, ROCm 7.2) | configure, build, and CTest 245/245 pass |
+| ASAN+UBSAN Debug (hosted CI) | 202/202 pass on the CPU suite; the `sanitizers` job runs ASAN+UBSAN over the CPU CTest |
 | TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
 
 ## Tests
 
-Current `rosi_v100` CTest: CPU **195/195 passed** (OMP=ON Release and Debug)
-and CUDA **247/247 passed** on V100 `sm_70` (CUDA 12.6.85 Release and Debug).
-HIP on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed **238/238** with 43 HIP
+Current `rosi_v100` CTest: CPU **202/202 passed** (OMP=ON Release and Debug)
+and CUDA **254/254 passed** on V100 `sm_70` (CUDA 12.6.85 Release and Debug).
+HIP on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed **245/245** with 43 HIP
 cases. The explicit concept-parameter workaround unblocks the nvcc 12.6.85
 name-hiding ICE; the RNG main is unchanged. The historical CTest totals below
 are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
-| `rosi_v100` CPU CTest (OMP=ON Release) | **195/195 passed** |
-| `rosi_v100` CPU CTest (OMP=ON Debug) | **195/195 passed** |
-| `rosi_v100` CUDA CTest (V100 `sm_70`, Release) | **247/247 passed** |
-| `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **247/247 passed** |
+| `rosi_v100` CPU CTest (OMP=ON Release) | **202/202 passed** |
+| `rosi_v100` CPU CTest (OMP=ON Debug) | **202/202 passed** |
+| `rosi_v100` CUDA CTest (V100 `sm_70`, Release) | **254/254 passed** |
+| `rosi_v100` CUDA CTest (V100 `sm_70`, Debug) | **254/254 passed** |
 | Historical CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the integrated main (T5) |
 | Historical CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the integrated main (T5) |
-| HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **238/238 passed**; 43 HIP cases |
+| HIP CTest on hal (`gfx1100`, RX 7900 XTX, ROCm 7.2) | **245/245 passed**; 43 HIP cases |
 | Historical HIP compile-only gate (`gfx90a`) | compiled; no AMD device was visible at that revision, so no execution was recorded |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 
@@ -172,8 +172,8 @@ matched the pre-change binary on both backends. The example header (including
 exit status are identical. The derived pool reserve changes from `P+6` to
 `P+8` because the A/B partitions now expose three named outcomes; that
 diagnostic is not a numeric result. These counts are historical. The
-`rosi_v100` CPU CTest passes 195/195 (OMP=ON Release and Debug) and the V100
-`sm_70` CUDA CTest passes 247/247 in Release and Debug with the explicit
+`rosi_v100` CPU CTest passes 202/202 (OMP=ON Release and Debug) and the V100
+`sm_70` CUDA CTest passes 254/254 in Release and Debug with the explicit
 concept-parameter workaround; the `rosi_v100` 33-invocation baseline comparison
 is not yet recorded.
 
@@ -193,10 +193,10 @@ provenance was passed explicitly with
 
 | Configuration | Command | Result |
 | --- | --- | --- |
-| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **195/195 passed** |
-| `rosi_v100` CPU (OMP=ON Debug) | `ctest --output-on-failure` | **195/195 passed** |
-| `rosi_v100` CUDA (V100 `sm_70` Release) | `ctest --output-on-failure` | **247/247 passed** |
-| `rosi_v100` CUDA (V100 `sm_70` Debug) | `ctest --output-on-failure` | **247/247 passed** |
+| `rosi_v100` CPU (OMP=ON Release) | `ctest --output-on-failure` | **202/202 passed** |
+| `rosi_v100` CPU (OMP=ON Debug) | `ctest --output-on-failure` | **202/202 passed** |
+| `rosi_v100` CUDA (V100 `sm_70` Release) | `ctest --output-on-failure` | **254/254 passed** |
+| `rosi_v100` CUDA (V100 `sm_70` Debug) | `ctest --output-on-failure` | **254/254 passed** |
 | Historical CPU fwk394 | `cmake --build photon-rework-build-cpu -j 16` then `ctest --output-on-failure -j 8` | 194/194 passed |
 | Historical CUDA hal A30 | `cmake --build photon-rework-build-cuda -j 16` then `ctest --output-on-failure -j 4` | 246/246 passed |
 | Historical CPU diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
