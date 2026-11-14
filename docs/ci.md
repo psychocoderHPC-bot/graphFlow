@@ -40,7 +40,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, Release and Debug | 202 | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 202 | the hosted `sanitizers` job |
 | CUDA `sm_70` | 254 | `rosi_v100` device run; the hosted job compiles only |
-| HIP `gfx1100` | 245 (45 HIP cases) | `hal` device run; the hosted job compiles only |
+| HIP `gfx1100` | 245 (43 HIP cases) | `hal` device run on `b972eaa`; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
@@ -172,11 +172,12 @@ to the HIP build. The hosted runner has no AMD GPU, so the job stops after the
 build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
-(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 245/245 with 45 HIP cases
-(8 typed Flow, 24 particle CLI, 12 photon CLI, and 1 photon output case). An
-earlier run captured `rocprof` kernel evidence. `hal` reports
-`sharing=unknown`, so this is a correctness result and not a performance claim.
-The GitHub-hosted job makes no HIP runtime claim.
+(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 245/245 with 43 HIP cases
+(8 typed Flow, 24 particle CLI, 10 photon CLI, and 1 photon output case),
+measured on `b972eaa3bd778b81f2dca505d3662df710792bd9` and recorded in
+`/home/agent/final-hip-b972eaa/ctest.log`, with `rocprof` kernel evidence. `hal` reports `sharing=unknown`, so this is a
+correctness result and not a performance claim. The GitHub-hosted job makes no
+HIP runtime claim.
 
 ## REUSE
 
@@ -239,8 +240,10 @@ image and the extra `git` install before checkout.
 ## Status
 
 On current `main` the hosted jobs pass `cpu (Release)`, `cpu (Debug)`,
-`sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`, and `reuse`. Each CPU
-job runs 202 CTest cases. The `sm_70` workaround clears the nvcc internal
+`sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`, `format`, and
+`reuse`. Each CPU job runs 202 CTest cases (Release and Debug); the `sanitizers`
+job runs ASAN+UBSAN over the CPU suite. The `format` job enforces the T14b
+sweep with clang-format 20.1.8. The `sm_70` workaround clears the nvcc internal
 compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example
 without a GPU. `hip-compile` builds the HIP sources and the HIP example without
 an AMD GPU. `icpx-cpu` is manual and skipped on push and pull requests.
