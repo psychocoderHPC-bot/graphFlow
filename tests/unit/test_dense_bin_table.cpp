@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+#include "graphFlow/core/Config.hpp"
 #include "graphFlow/graph/DenseBinTable.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -55,4 +56,19 @@ TEST_CASE("dense bin plan honours the reservation bound", "[bintable]")
     CHECK_THROWS_AS(planDenseBins({}, 1u), std::invalid_argument);
     CHECK_THROWS_AS(planDenseBins({1u}, 0u), std::invalid_argument);
     CHECK_THROWS_AS(buildDenseTable(plan, {1u}), std::invalid_argument);
+}
+
+TEST_CASE("dense bin limit follows the block-shared budget", "[bintable][config]")
+{
+    using graphFlow::Config;
+    // A 64 KiB host/A30 budget keeps the measured 1024-bin dense cap.
+    CHECK(Config::denseBinLimitForSharedMemory(64u * 1024u) == Config::denseBinLimit);
+    // 48 KiB still fits 1024 dense bins in a quarter of the shared memory.
+    CHECK(Config::denseBinLimitForSharedMemory(48u * 1024u) == Config::denseBinLimit);
+    // Smaller shared budgets lower the cap before it reaches the measured limit.
+    CHECK(Config::denseBinLimitForSharedMemory(32u * 1024u) == 682u);
+    CHECK(Config::denseBinLimitForSharedMemory(8u * 1024u) == 170u);
+    // A zero budget or a zero fraction cannot host a dense table.
+    CHECK(Config::denseBinLimitForSharedMemory(0u) == 0u);
+    CHECK(Config::denseBinLimitForSharedMemory(64u * 1024u, 0u) == 0u);
 }

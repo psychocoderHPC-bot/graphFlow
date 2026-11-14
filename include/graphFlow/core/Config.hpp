@@ -72,8 +72,46 @@ namespace graphFlow
          * not from `maxBins`, so a hash classifier may declare more bins. `DenseNodePolicy`
          * enforces this limit at compile time for the dense kernels; `Config` only rejects a
          * zero bin count here and leaves the hash upper bound to the partition implementation.
+         *
+         * Measured on fwk394 (Xeon W-2175, C=1024, T=128, N=1<<20, 14 OpenMP threads): the dense
+         * table beat the 2*T and 4*T hash tables at B=128, 256 (2*T), 512 (4*T), and 1024, e.g.
+         * B=1024: dense 4.06 ms vs 2*T 5.11 ms and 4*T 4.90 ms. The dense/hash crossover is
+         * therefore at or above 1024 on the CPU reference, so the default stays 1024. The 4*T table
+         * only narrowed the hash gap at B>=512 and was never faster than dense, so the default
+         * hash capacity stays 2*T. On an accelerator the 3*B*4-byte dense shared footprint limits
+         * occupancy before the CPU crossover; use `denseBinLimitForSharedMemory()` when a caller
+         * has the device properties.
          */
         static constexpr std::uint32_t denseBinLimit = 1024u;
+
+        /** Shared-memory words the dense scatter stages per bin.
+         *
+         * `ScatterKernel` keeps three `uint32_t` arrays indexed by bin in block-shared memory:
+         * the per-tile counts, the device-range base, and the block cursor. The classify kernel
+         * keeps one more. A device policy that wants the dense path must leave room for the
+         * scatter's three tables, so this is the conservative per-bin cost.
+         */
+        static constexpr std::uint64_t denseScatterWordsPerBin = 3u;
+
+        /** Device-specific dense bin cap for the block-shared scatter tables.
+         *
+         * Keeps `denseScatterWordsPerBin` words per bin inside `1/sharedFractionDenominator` of
+         * the block-shared budget so two resident blocks still fit. The result never exceeds the
+         * measured `denseBinLimit`; devices with less shared memory get a smaller dense cap and
+         * use the hash path above it. With the CI host and the A30 (64 KiB) the cap is the
+         * measured 1024, so 2*T and 4*T dense tables fit for T=128. This helper does not change
+         * any default; callers that have `DeviceProperties` can use it to pick a table.
+         */
+        [[nodiscard]] static constexpr std::uint32_t denseBinLimitForSharedMemory(
+            std::uint64_t sharedMemPerBlockBytes,
+            std::uint64_t sharedFractionDenominator = 4u) noexcept
+        {
+            if(sharedFractionDenominator == 0u)
+                return 0u;
+            std::uint64_t const bytesPerBin = denseScatterWordsPerBin * sizeof(std::uint32_t);
+            std::uint64_t const limit = (sharedMemPerBlockBytes / sharedFractionDenominator) / bytesPerBin;
+            return static_cast<std::uint32_t>(limit < denseBinLimit ? limit : denseBinLimit);
+        }
 
         void validate() const
         {
