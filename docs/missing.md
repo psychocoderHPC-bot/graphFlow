@@ -104,9 +104,9 @@ resource or decision is missing.
   chunks. Implement a slot-based pool or a documented smaller `P`/memory budget
   without breaking the fragmentation bound or progress guarantee. Acceptance:
   peak memory falls while `N >> P` still completes and the histogram is exact.
-- [ ] **P1: chunk-fill policy tests.** Pin `min(C, P, remaining)` admission
-  for `P<C`, `P==0`, the tail, and `N>>P`. Add a regression test that would fail
-  if one-particle source chunks return.
+- [x] **P1: chunk-fill policy tests.** Done: `tests/integration/test_admission.cpp`
+  pins `min(C, P, remaining)` for `P<C`, `P==C`, `P==0`, the tail, and `N>>P`,
+  and rejects one-particle source chunks with a mutation-style assertion.
 - [ ] **P1: scheduler state and stall diagnostics.** The stall timeout and state
   dump exist; expose the remaining counters (ready depth per node, in-flight
   depth, reserved credits, event-pool use, source budget) in the example output
@@ -250,8 +250,11 @@ resource or decision is missing.
 - [ ] **P1: copy-bandwidth reference.** Measure a sustained copy-bandwidth
   reference on the same device and data size and report it next to the scatter
   bandwidth.
-- [ ] **P1: `N=1e6` CI smoke.** Run `N=1e6` on CPU and CUDA in CI (and HIP when
-  available) with a finite timeout; keep `N=1e8` as the manual acceptance run.
+- [x] **P1: `N=1e6` CI smoke.** Done for the hosted CPU job: the fixed-seed
+  `example.particle_feedback.smoke.N1000000` CTest case runs in the ordinary
+  CTest job with a finite timeout and an exact histogram-sum check. Hosted CUDA
+  and HIP stay compile-only, so their `N=1e6` runtime smoke remains a manual
+  `rosi_v100`/`hal` check. `N=1e8` stays the manual acceptance run.
 - [ ] **P1: HAL acceptance record.** Record exact commit, alpaka pin, compiler,
   CUDA/ROCm versions, driver, GPU, commands, test counts, JUnit, and the
   no-skipped-test assertion. Keep raw logs outside the repository and link their
