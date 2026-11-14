@@ -209,22 +209,23 @@ passes the TSAN startup check.
 The tree contains `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
 `LICENSES/MPL-2.0.txt`. Run `reuse lint` with reuse 6.3.0 to check the license
 metadata. A format check needs clang-format 20.1.8 and the project
-`.clang-format`; the exact file list is a CI policy decision. These gates are
-not wired into a workflow yet.
+`.clang-format`; the exact file list is a CI policy decision. The `reuse` job
+runs `reuse lint`; a format job stays out of the workflow until T14b lands.
 
-## Checks that are not CI yet
+## CI on hosted runners
 
-The repository has no `.github/workflows` and no CI runners. The commands above
-are the documented local entry points. The recorded integrated results cover
-the FrameSpec revision `327f74f`: the fwk394 CPU build with CTest 82/82 and the
-hal CUDA A30 `sm_80` build with CTest 86/86; the historical HIP `gfx90a`
-compile gate also passed. The later additive PR-A graph API core at
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on GitHub-hosted
+`ubuntu-latest` runners and public containers; [CI](ci.md) lists the jobs and
+the pins. The commands above are the same entry points. The recorded integrated
+results cover the FrameSpec revision `327f74f`: the fwk394 CPU build with CTest
+82/82 and the hal CUDA A30 `sm_80` build with CTest 86/86; the historical HIP
+`gfx90a` compile gate also passed. The later additive PR-A graph API core at
 `60a34302b1c3cf205304916c7233f13118591dd0` was validated with **97/97 CPU
 CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
 The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
 **238/238** with 43 HIP cases. The `sm_75` CUDA build still fails with the
-CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`); an
-integrated ASAN/UBSAN count has no recorded run. Format and REUSE metadata are
-present; no CI job runs them yet.
+CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`). Format
+and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, and
+the `sanitizers` job runs ASAN+UBSAN over the CPU suite.

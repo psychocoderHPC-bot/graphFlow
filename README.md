@@ -9,6 +9,7 @@ feedback network and prints the sorted weight histogram.
 Documentation:
 
 - [Build and pins](docs/build.md)
+- [Continuous integration](docs/ci.md)
 - [Architecture](docs/architecture.md)
 - [Numerics](docs/numerics.md)
 - [Benchmarks](docs/benchmarks.md)
@@ -52,15 +53,16 @@ from the source capacity plus one output bound per registered node, so `Q`
 changes launch amortisation and buffer sizing, not the pool bound.
 
 The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
-`.reuse/dep5`, and `LICENSES/MPL-2.0.txt`. The tree-wide format and SPDX sweep
-remains open (T14b), and there is no CI workflow yet. See
-[known limitations](docs/known-limitations.md).
+`.reuse/dep5`, and `LICENSES/MPL-2.0.txt`. CI runs on GitHub-hosted runners and
+public containers; see [CI](docs/ci.md). The tree-wide format and SPDX sweep
+remains open (T14b). See [known limitations](docs/known-limitations.md).
 
-`rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results at the sm_70 ICE workaround: CPU CTest **195/195 passed** (OMP=ON
-Release and Debug, pedantic) and CUDA CTest **247/247 passed** on V100 `sm_70`
-(CUDA 12.6.85, Release and Debug). The hash `maxBins` output-credit fix adds
-seven cases (reservation, pool budget, exact and partial credits, Q=1/2/8,
+`rosi_v100` is the exclusive validation platform. `rosi_v100` results at the
+sm_70 ICE workaround before the hash `maxBins` fix: CPU CTest **195/195
+passed** (OMP=ON Release and Debug, pedantic) and CUDA CTest **247/247 passed**
+on V100 `sm_70` (CUDA 12.6.85, Release and Debug). The hash `maxBins`
+output-credit fix adds seven cases (reservation, pool budget, exact and partial
+credits, Q=1/2/8,
 overflow, and `maxBins` above the dense limit); the rebased Release totals on
 `rosi_v100` are CPU **202/202** and CUDA **254/254** (Debug was not re-run for
 this fix). Those pre-fix totals are one higher than before the
@@ -478,7 +480,8 @@ The full design is in [architecture](docs/architecture.md).
   them in. Genuine physics failures stay on the `StatusCode` channel in both
   builds.
 - CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
-- No CI runners or `.github/workflows` yet (PR #4 is a draft).
+- CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
+  compile-only there, and no self-hosted runner is provisioned.
 - The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun
   is pending. The dense/hash threshold is static.
 - The integrated performance run is recorded in
