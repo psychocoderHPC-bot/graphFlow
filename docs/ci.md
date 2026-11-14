@@ -33,12 +33,12 @@ from the Ubuntu 24.04 archive and clone alpaka from source. The CUDA, HIP, and
 oneAPI jobs do the same inside their container; they install `git` before
 `actions/checkout` because the base images do not guarantee it.
 
-## Test counts on current `main`
+## Test counts
 
 | Target | CTest cases | Where the result comes from |
 | --- | ---: | --- |
-| CPU, Release and Debug | 202 | the hosted `cpu` jobs |
-| CPU, ASAN+UBSAN Debug | 202 | the hosted `sanitizers` job |
+| CPU, Release and Debug | 205 on `gf/p1-admission-smoke` (202 at `2ad7d86`); 205 = 202 + 2 source-admission + 1 N=1e6 smoke | the hosted `cpu` jobs |
+| CPU, ASAN+UBSAN Debug | 205 on `gf/p1-admission-smoke` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
 | CUDA `sm_70` | 254 | `rosi_v100` device run; the hosted job compiles only |
 | HIP `gfx1100` | 245 (43 HIP cases) | `hal` device run on `b972eaa`; the hosted job compiles only |
 
@@ -50,10 +50,18 @@ results: the hosted `cuda-compile` and `hip-compile` jobs produce no CTest
 result. The HIP runtime total is the recorded `hal` run; see
 [HIP compile-only](#hip-compile-only).
 
+The N=1e6 CPU smoke (`example.particle_feedback.smoke.N1000000`) and the two
+source-admission cases register unconditionally in the ordinary CTest job, so
+hosted CPU CI runs them without a skip; there is no label or configuration that
+excludes them. CUDA and HIP remain compile-only there; their runtime smoke
+stays a manual `rosi_v100`/`hal` check.
+
 T14b re-ran all three suites on the formatted tree: CPU Release 202/202 on
-`rosi_v100`, CUDA `sm_70` 254/254 on `rosi_v100`, and HIP `gfx1100` 245/245 on
-`hal`. The format sweep changed whitespace, line breaks, include and `using`
-order, and configured numeric separators only.
+`rosi_v100` (the 202-case historical suite; 205/205 includes the two
+source-admission cases and the N=1e6 smoke added on
+`gf/p1-admission-smoke`), CUDA `sm_70` 254/254 on `rosi_v100`, and HIP
+`gfx1100` 245/245 on `hal`. The format sweep changed whitespace, line breaks,
+include and `using` order, and configured numeric separators only.
 
 ## Pins
 
@@ -239,10 +247,12 @@ image and the extra `git` install before checkout.
 
 ## Status
 
-On current `main` the hosted jobs pass `cpu (Release)`, `cpu (Debug)`,
+On `gf/p1-admission-smoke` the hosted jobs pass `cpu (Release)`, `cpu (Debug)`,
 `sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`, `format`, and
-`reuse`. Each CPU job runs 202 CTest cases (Release and Debug); the `sanitizers`
-job runs ASAN+UBSAN over the CPU suite. The `format` job enforces the T14b
+`reuse`. Each CPU job runs 205 CTest cases (Release and Debug), 202 at
+`2ad7d86`; the `sanitizers` job runs ASAN+UBSAN over the same CPU suite, and
+the N=1e6 smoke runs in the ordinary CTest job without a skip. The `format` job
+enforces the T14b
 sweep with clang-format 20.1.8. The `sm_70` workaround clears the nvcc internal
 compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example
 without a GPU. `hip-compile` builds the HIP sources and the HIP example without
