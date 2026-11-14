@@ -38,20 +38,46 @@ namespace graphFlow::photon
         std::uint64_t const resultSize = parameters.numPhotons == 0u ? 1u : parameters.numPhotons;
         auto records = alpaka::onHost::alloc<TerminalRecord>(device, alpaka::Vec{resultSize});
         auto visits = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{resultSize});
+
+        std::uint64_t const traceIds = parameters.trace.enabled
+                                           ? std::min<std::uint64_t>(
+                                                 parameters.numPhotons,
+                                                 parameters.trace.maxPhotons)
+                                           : 0u;
+        std::uint64_t const traceSlots = traceIds == 0u ? 1u : traceIds;
+        std::uint32_t const traceVertices = parameters.trace.enabled ? parameters.trace.maxVertices : 1u;
+        std::uint64_t const traceVertexSlots = traceSlots * traceVertices;
+        auto traceBuffer = alpaka::onHost::alloc<TraceVertex>(device, alpaka::Vec{traceVertexSlots});
+        auto traceCounts = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{traceSlots});
+        auto traceFlags = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{traceSlots});
         {
             std::vector<TerminalRecord> initial(
                 static_cast<std::size_t>(resultSize),
                 TerminalRecord{missingEvent, 0u, Vec3{}, Vec3{}});
             std::vector<std::uint32_t> const zero(static_cast<std::size_t>(resultSize), 0u);
+            std::vector<std::uint32_t> const traceZero(static_cast<std::size_t>(traceSlots), 0u);
             auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
             alpaka::onHost::memcpy(initQueue, records, initial);
             alpaka::onHost::memcpy(initQueue, visits, zero);
+            alpaka::onHost::memcpy(initQueue, traceCounts, traceZero);
+            alpaka::onHost::memcpy(initQueue, traceFlags, traceZero);
         }
 
         Slab const slab{parameters.thickness, parameters.sigmaS, parameters.sigmaA};
 
+        using TraceVertexView = decltype(traceBuffer.getView());
+        using TraceCountView = decltype(traceCounts.getView());
+        using TraceFlagView = decltype(traceFlags.getView());
+        using Trace = TraceWriter<TraceVertexView, TraceCountView, TraceFlagView>;
+        Trace const trace{
+            traceBuffer.getView(),
+            traceCounts.getView(),
+            traceFlags.getView(),
+            traceVertices,
+            static_cast<std::uint32_t>(traceIds)};
+
         graphFlow::Flow<Photon, TDevice> flow{device};
-        auto source = flow.source("generate", GeneratePhoton{});
+        auto source = flow.source("generate", GeneratePhotonT<Trace>{trace});
         auto flight = flow.transform(
             "propose flight",
             ProposeFlight{slab, parameters.seed, parameters.maxScatters});
@@ -59,12 +85,12 @@ namespace graphFlow::photon
             "advance and route",
             ClassifyEvent{},
             AdvanceToEvent{slab});
-        auto scatter = flow.transform("scatter", Scatter{parameters.mode, parameters.seed});
+        auto scatter = flow.transform("scatter", ScatterT<Trace>{parameters.mode, parameters.seed, trace});
         using RecordView = decltype(records.getView());
         using VisitView = decltype(visits.getView());
         auto terminal = flow.sink(
             "terminal",
-            RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView()});
+            RecordTerminal<RecordView, VisitView, Trace>{records.getView(), visits.getView(), trace});
 
         flow.connect(source, flight);
         flow.connect(flight, route);
@@ -81,10 +107,19 @@ namespace graphFlow::photon
 
         std::vector<TerminalRecord> hostRecords(static_cast<std::size_t>(resultSize));
         std::vector<std::uint32_t> hostVisits(static_cast<std::size_t>(resultSize), 0u);
+        std::vector<std::uint32_t> hostTraceCounts(static_cast<std::size_t>(traceSlots), 0u);
+        std::vector<std::uint32_t> hostTraceFlags(static_cast<std::size_t>(traceSlots), 0u);
+        std::vector<TraceVertex> hostTraceBuffer(static_cast<std::size_t>(traceVertexSlots));
         {
             auto readQueue = device.makeQueue(alpaka::queueKind::blocking);
             alpaka::onHost::memcpy(readQueue, hostRecords, records);
             alpaka::onHost::memcpy(readQueue, hostVisits, visits);
+            if(parameters.trace.enabled)
+            {
+                alpaka::onHost::memcpy(readQueue, hostTraceCounts, traceCounts);
+                alpaka::onHost::memcpy(readQueue, hostTraceFlags, traceFlags);
+                alpaka::onHost::memcpy(readQueue, hostTraceBuffer, traceBuffer);
+            }
         }
 
         result.terminal.assign(
@@ -122,6 +157,26 @@ namespace graphFlow::photon
                 static_cast<Event>(key.first),
                 key.second,
                 count});
+
+        if(parameters.trace.enabled)
+        {
+            result.traces.reserve(static_cast<std::size_t>(traceIds));
+            for(std::uint64_t id = 0u; id < traceIds; ++id)
+            {
+                std::uint32_t const count = hostTraceCounts[static_cast<std::size_t>(id)];
+                PhotonTrace trace;
+                trace.id = id;
+                trace.count = count;
+                trace.truncated = hostTraceFlags[static_cast<std::size_t>(id)] != 0u;
+                trace.vertices.assign(
+                    hostTraceBuffer.begin() + static_cast<std::ptrdiff_t>(id * traceVertices),
+                    hostTraceBuffer.begin()
+                        + static_cast<std::ptrdiff_t>(id * traceVertices + count));
+                if(trace.truncated)
+                    ++result.traceTruncated;
+                result.traces.push_back(std::move(trace));
+            }
+        }
 
         result.liveParticles = tuning.liveParticles.value_or(parameters.liveParticles);
         if(parameters.numPhotons == 0u)

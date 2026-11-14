@@ -143,8 +143,11 @@ namespace
     };
 
     /** Test-only angular kernel for the scripted three-scatter history. */
+    template<typename TTrace>
     struct ScriptedScatter
     {
+        mutable TTrace trace;
+
         ALPAKA_FN_ACC void operator()(auto const&, graphFlow::Status& status, Photon& photon) const
         {
             if(photon.proposal.event != Event::scatter)
@@ -167,6 +170,12 @@ namespace
                 status.set(graphFlow::StatusCode::invalid);
                 return;
             }
+            trace.record(
+                photon.id,
+                graphFlow::photon::TraceKind::scatter,
+                photon.scatterCount + 1u,
+                photon.position,
+                photon.direction);
             ++photon.scatterCount;
         }
     };
@@ -176,14 +185,19 @@ namespace
         TerminalRecord terminal{};
         std::uint32_t visits = 0u;
         std::uint32_t flights = 0u;
+        graphFlow::photon::PhotonTrace trace;
     };
 
-    ScriptedOutcome runScripted()
+    ScriptedOutcome runScripted(std::uint32_t traceVertices = 16u)
     {
         auto device = graphFlow::test::makeCpuDevice();
         auto records = alpaka::onHost::alloc<TerminalRecord>(device, alpaka::Vec{std::uint64_t{1u}});
         auto visits = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
         auto flights = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+        auto traceBuffer
+            = alpaka::onHost::alloc<graphFlow::photon::TraceVertex>(device, alpaka::Vec{std::uint64_t{traceVertices}});
+        auto traceCounts = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+        auto traceFlags = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
         {
             std::vector<TerminalRecord> const initial{
                 TerminalRecord{graphFlow::photon::missingEvent, 0u, Vec3{}, Vec3{}}};
@@ -192,22 +206,30 @@ namespace
             alpaka::onHost::memcpy(queue, records, initial);
             alpaka::onHost::memcpy(queue, visits, zero);
             alpaka::onHost::memcpy(queue, flights, zero);
+            alpaka::onHost::memcpy(queue, traceCounts, zero);
+            alpaka::onHost::memcpy(queue, traceFlags, zero);
         }
 
         Slab const slab{1.0, 1.0, 0.0};
+        using TraceVertexView = decltype(traceBuffer.getView());
+        using TraceCountView = decltype(traceCounts.getView());
+        using TraceFlagView = decltype(traceFlags.getView());
+        using Trace = graphFlow::photon::TraceWriter<TraceVertexView, TraceCountView, TraceFlagView>;
+        Trace const trace{traceBuffer.getView(), traceCounts.getView(), traceFlags.getView(), traceVertices, 1u};
+
         graphFlow::Flow<Photon, ALPAKA_TYPEOF(device)> flow{device};
-        auto source = flow.source("generate", GeneratePhoton{});
+        auto source = flow.source("generate", graphFlow::photon::GeneratePhotonT<Trace>{trace});
         using CountView = decltype(flights.getView());
         auto flight = flow.transform(
             "scripted flight",
             ScriptedFlight<CountView>{slab, 3u, flights.getView()});
         auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});
-        auto scatter = flow.transform("scripted scatter", ScriptedScatter{});
+        auto scatter = flow.transform("scripted scatter", ScriptedScatter<Trace>{trace});
         using RecordView = decltype(records.getView());
         using VisitView = decltype(visits.getView());
         auto terminal = flow.sink(
             "terminal",
-            RecordTerminal<RecordView, VisitView>{records.getView(), visits.getView()});
+            RecordTerminal<RecordView, VisitView, Trace>{records.getView(), visits.getView(), trace});
         flow.connect(source, flight);
         flow.connect(flight, route);
         flow.connect(route.template out<Event::scatter>(), scatter);
@@ -230,15 +252,27 @@ namespace
         std::vector<TerminalRecord> hostRecords(1u);
         std::vector<std::uint32_t> hostVisits(1u, 0u);
         std::vector<std::uint32_t> hostFlights(1u, 0u);
+        std::vector<std::uint32_t> hostTraceCounts(1u, 0u);
+        std::vector<std::uint32_t> hostTraceFlags(1u, 0u);
+        std::vector<graphFlow::photon::TraceVertex> hostTrace(traceVertices);
         {
             auto queue = device.makeQueue(alpaka::queueKind::blocking);
             alpaka::onHost::memcpy(queue, hostRecords, records);
             alpaka::onHost::memcpy(queue, hostVisits, visits);
             alpaka::onHost::memcpy(queue, hostFlights, flights);
+            alpaka::onHost::memcpy(queue, hostTraceCounts, traceCounts);
+            alpaka::onHost::memcpy(queue, hostTraceFlags, traceFlags);
+            alpaka::onHost::memcpy(queue, hostTrace, traceBuffer);
         }
         outcome.terminal = hostRecords[0u];
         outcome.visits = hostVisits[0u];
         outcome.flights = hostFlights[0u];
+        outcome.trace.id = 0u;
+        outcome.trace.count = hostTraceCounts[0u];
+        outcome.trace.truncated = hostTraceFlags[0u] != 0u;
+        outcome.trace.vertices.assign(
+            hostTrace.begin(),
+            hostTrace.begin() + static_cast<std::ptrdiff_t>(outcome.trace.count));
         return outcome;
     }
 } // namespace
@@ -348,6 +382,41 @@ TEST_CASE("scripted photon history uses three scatters and four flights", "[phot
     CHECK(outcome.terminal.position.x == Catch::Approx(0.0).margin(1e-15));
     CHECK(outcome.terminal.position.y == Catch::Approx(0.0).margin(1e-15));
     CHECK(outcome.terminal.direction.z == Catch::Approx(-1.0).margin(1e-15));
+
+    REQUIRE(outcome.trace.count == 5u);
+    CHECK_FALSE(outcome.trace.truncated);
+    auto const& vertices = outcome.trace.vertices;
+    std::vector<graphFlow::photon::TraceKind> const kinds{
+        graphFlow::photon::TraceKind::source,
+        graphFlow::photon::TraceKind::scatter,
+        graphFlow::photon::TraceKind::scatter,
+        graphFlow::photon::TraceKind::scatter,
+        graphFlow::photon::TraceKind::reflected};
+    std::vector<double> const heights{0.0, 0.2, 0.4, 0.3, 0.0};
+    std::vector<double> const directions{1.0, 0.5, -0.5, -1.0, -1.0};
+    std::vector<std::uint32_t> const counts{0u, 1u, 2u, 3u, 3u};
+    for(std::size_t step = 0u; step < vertices.size(); ++step)
+    {
+        CAPTURE(step);
+        CHECK(vertices[step].kind == kinds[step]);
+        CHECK(vertices[step].scatterCount == counts[step]);
+        CHECK(vertices[step].position.x == Catch::Approx(0.0).margin(1e-15));
+        CHECK(vertices[step].position.y == Catch::Approx(0.0).margin(1e-15));
+        CHECK(vertices[step].position.z == Catch::Approx(heights[step]).margin(1e-15));
+        CHECK(vertices[step].direction.z == Catch::Approx(directions[step]).margin(1e-15));
+    }
+
+    // A bounded trace truncates independently of the simulation cap: the history still terminates
+    // reflected, not capped, and all four flights still run.
+    ScriptedOutcome const truncated = runScripted(2u);
+    CHECK(truncated.flights == 4u);
+    CHECK(truncated.trace.truncated);
+    CHECK(truncated.trace.count == 2u);
+    CHECK(truncated.terminal.event == Event::reflected);
+    CHECK(truncated.terminal.scatterCount == 3u);
+    REQUIRE(truncated.trace.vertices.size() == 2u);
+    CHECK(truncated.trace.vertices[0u].kind == graphFlow::photon::TraceKind::source);
+    CHECK(truncated.trace.vertices[1u].kind == graphFlow::photon::TraceKind::scatter);
 }
 
 TEST_CASE("photon graph matches the independent scalar transport", "[photon][scalar]")
@@ -433,7 +502,7 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
     }
 }
 
-TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[photon][physics]")
+TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[photon][physics][diagnostics]")
 {
     auto const device = graphFlow::test::makeCpuDevice();
     constexpr std::uint64_t photons = 200000u;
@@ -492,7 +561,7 @@ TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[
     CHECK(chiSquare < 35.0);
 }
 
-TEST_CASE("isotropic photon scattering reproduces the uncollided fraction", "[photon][physics]")
+TEST_CASE("isotropic photon scattering reproduces the uncollided fraction", "[photon][physics][diagnostics]")
 {
     auto const device = graphFlow::test::makeCpuDevice();
     constexpr std::uint64_t photons = 100000u;
@@ -602,6 +671,67 @@ TEST_CASE("scatter cap emits a distinct non-physical outcome", "[photon][cap]")
     }
 }
 
+TEST_CASE("photon trace is bounded and independent of the simulation cap", "[photon][trace]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    Parameters parameters;
+    parameters.numPhotons = 64u;
+    parameters.chunkSize = 16u;
+    parameters.seed = 5u;
+    parameters.thickness = 1.0;
+    parameters.sigmaS = 1.0;
+    parameters.sigmaA = 0.0;
+    parameters.mode = ScatterMode::isotropic;
+    parameters.maxScatters = 2u;
+    parameters.trace = graphFlow::photon::TraceConfig{true, 8u, 3u};
+
+    auto const traced = graphFlow::photon::runPhotonScattering(device, parameters);
+    checkTerminalAccounting(traced, parameters.numPhotons);
+    REQUIRE(traced.traces.size() == 8u);
+    CHECK(traced.capped > 0u);
+    CHECK(traced.traceTruncated > 0u);
+    std::uint64_t truncated = 0u;
+    for(auto const& trace : traced.traces)
+    {
+        CAPTURE(trace.id);
+        CHECK(trace.id < 8u);
+        CHECK(trace.count <= 3u);
+        REQUIRE(trace.vertices.size() == trace.count);
+        if(!trace.vertices.empty())
+        {
+            CHECK(trace.vertices.front().kind == graphFlow::photon::TraceKind::source);
+            if(!trace.truncated)
+            {
+                auto const last = trace.vertices.back().kind;
+                CHECK(last != graphFlow::photon::TraceKind::source);
+                CHECK(last != graphFlow::photon::TraceKind::scatter);
+            }
+            else
+            {
+                CHECK(trace.count == parameters.trace.maxVertices);
+            }
+        }
+        if(trace.truncated)
+            ++truncated;
+    }
+    CHECK(truncated == traced.traceTruncated);
+
+    Parameters untraced = parameters;
+    untraced.trace = graphFlow::photon::TraceConfig{};
+    auto const baseline = graphFlow::photon::runPhotonScattering(device, untraced);
+    CHECK(baseline.traces.empty());
+    for(std::uint32_t event = 0u; event < graphFlow::photon::eventBins; ++event)
+        CHECK(traced.eventCounts[event] == baseline.eventCounts[event]);
+    REQUIRE(traced.terminal.size() == baseline.terminal.size());
+    for(std::size_t id = 0u; id < traced.terminal.size(); ++id)
+    {
+        CHECK(traced.terminal[id].event == baseline.terminal[id].event);
+        CHECK(traced.terminal[id].scatterCount == baseline.terminal[id].scatterCount);
+        CHECK(traced.terminal[id].position.z == baseline.terminal[id].position.z);
+        CHECK(traced.terminal[id].direction.z == baseline.terminal[id].direction.z);
+    }
+}
+
 TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
 {
     auto const properties = graphFlow::test::makeCpuDevice().getDeviceProperties();
@@ -636,7 +766,13 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
         "--T",
         "4",
         "--Q",
-        "2"};
+        "2",
+        "--output-dir",
+        "/tmp/photon-cli-output",
+        "--trace-photons",
+        "3",
+        "--trace-vertices",
+        "7"};
     std::vector<char const*> aliasArgv;
     aliasArgv.reserve(aliasArgs.size());
     for(auto const& argument : aliasArgs)
@@ -656,6 +792,10 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
     REQUIRE(aliases.tileSize.has_value());
     CHECK(*aliases.tileSize == 4u);
     CHECK(aliases.batchChunks == 2u);
+    REQUIRE(aliases.outputDirectory.has_value());
+    CHECK(*aliases.outputDirectory == "/tmp/photon-cli-output");
+    CHECK(aliases.tracePhotons == 3u);
+    CHECK(aliases.traceVertices == 7u);
 
     graphFlow::photon::cli::Options negativeSigma = valid;
     negativeSigma.sigmaS = -1.0;

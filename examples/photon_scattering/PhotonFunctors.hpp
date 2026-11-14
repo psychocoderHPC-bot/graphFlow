@@ -212,14 +212,74 @@ namespace graphFlow::photon
             mu};
     }
 
-    /** Source: one independent history per logical id at the entrance plane, normal incidence. */
-    struct GeneratePhoton
+    /** No-op trace writer used by production runs without diagnostics. */
+    struct NoTrace
     {
-        ALPAKA_FN_ACC Photon operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        ALPAKA_FN_ACC void record(
+            [[maybe_unused]] std::uint64_t id,
+            [[maybe_unused]] TraceKind kind,
+            [[maybe_unused]] std::uint32_t scatterCount,
+            [[maybe_unused]] Vec3 const& position,
+            [[maybe_unused]] Vec3 const& direction) const
         {
-            return Photon{id, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, 1.0}, 0u, Proposal{}};
         }
     };
+
+    /** Bounded deterministic trace writer.
+     *
+     * Selected ids are exactly `id < limit`. Each id owns `maxVertices` contiguous slots; a write
+     * beyond the bound sets the per-id truncation flag and never touches the simulation state.
+     */
+    template<typename TVertices, typename TCounts, typename TFlags>
+    struct TraceWriter
+    {
+        mutable TVertices vertices;
+        mutable TCounts counts;
+        mutable TFlags truncated;
+        std::uint32_t maxVertices = 0u;
+        std::uint32_t limit = 0u;
+
+        ALPAKA_FN_ACC void record(
+            std::uint64_t id,
+            TraceKind kind,
+            std::uint32_t scatterCount,
+            Vec3 const& position,
+            Vec3 const& direction) const
+        {
+            if(id >= limit)
+                return;
+            std::uint32_t const index = counts[id];
+            if(index >= maxVertices)
+            {
+                truncated[id] = 1u;
+                return;
+            }
+            vertices[id * maxVertices + index] = TraceVertex{kind, scatterCount, position, direction};
+            counts[id] = index + 1u;
+        }
+    };
+
+    /** Map a terminal event onto the diagnostic vertex kind. */
+    ALPAKA_FN_ACC inline TraceKind traceKindOf(Event event)
+    {
+        return static_cast<TraceKind>(static_cast<std::uint32_t>(event) + 1u);
+    }
+
+    /** Source: one independent history per logical id at the entrance plane, normal incidence. */
+    template<typename TTrace = NoTrace>
+    struct GeneratePhotonT
+    {
+        mutable TTrace trace;
+
+        ALPAKA_FN_ACC Photon operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        {
+            Photon photon{id, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, 1.0}, 0u, Proposal{}};
+            trace.record(id, TraceKind::source, 0u, photon.position, photon.direction);
+            return photon;
+        }
+    };
+
+    using GeneratePhoton = GeneratePhotonT<>;
 
     /** Transform: draw the flight and collision-kind uniforms and store a checked proposal. */
     struct ProposeFlight
@@ -297,10 +357,12 @@ namespace graphFlow::photon
     };
 
     /** Transform: change direction and increment the completed-scatter counter exactly once. */
-    struct Scatter
+    template<typename TTrace = NoTrace>
+    struct ScatterT
     {
         ScatterMode mode = ScatterMode::forward;
         std::uint64_t seed = 0u;
+        mutable TTrace trace;
 
         ALPAKA_FN_ACC void operator()(auto const&, Status& status, Photon& photon) const
         {
@@ -321,16 +383,25 @@ namespace graphFlow::photon
                 status.set(StatusCode::overflow);
                 return;
             }
+            trace.record(
+                photon.id,
+                TraceKind::scatter,
+                photon.scatterCount + 1u,
+                photon.position,
+                photon.direction);
             ++photon.scatterCount;
         }
     };
 
-    /** Shared terminal sink: record one final state and count per-id deliveries. */
-    template<typename TRecords, typename TVisits>
+    using Scatter = ScatterT<>;
+
+    /** Shared terminal sink: record one final state, trace vertex and per-id delivery count. */
+    template<typename TRecords, typename TVisits, typename TTrace = NoTrace>
     struct RecordTerminal
     {
         mutable TRecords records;
         mutable TVisits visits;
+        mutable TTrace trace;
 
         ALPAKA_FN_ACC void operator()(auto const& acc, Status& status, Photon const& photon) const
         {
@@ -352,6 +423,12 @@ namespace graphFlow::photon
                 photon.scatterCount,
                 photon.position,
                 photon.direction};
+            trace.record(
+                photon.id,
+                traceKindOf(event),
+                photon.scatterCount,
+                photon.position,
+                photon.direction);
             std::uint32_t const previous = alpaka::onAcc::atomicAdd(
                 acc,
                 &visits[photon.id],

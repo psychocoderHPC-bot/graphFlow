@@ -102,6 +102,51 @@ namespace graphFlow::photon
     static_assert(std::is_trivially_copyable_v<TerminalRecord>);
     static_assert(std::is_default_constructible_v<TerminalRecord>);
 
+    /** Ordered diagnostic vertex kind. `source` and `scatter` are intermediate vertices. */
+    enum class TraceKind : std::uint32_t
+    {
+        source = 0u,
+        scatter = 1u,
+        transmitted = 2u,
+        reflected = 3u,
+        absorbed = 4u,
+        capped = 5u
+    };
+
+    /** One bounded trace vertex: event kind, completed scatters, position and outgoing direction. */
+    struct TraceVertex
+    {
+        TraceKind kind = TraceKind::source;
+        std::uint32_t scatterCount = 0u;
+        Vec3 position{};
+        Vec3 direction{};
+    };
+
+    static_assert(std::is_trivially_copyable_v<TraceVertex>);
+    static_assert(std::is_default_constructible_v<TraceVertex>);
+
+    /** Opt-in bounded trace configuration.
+     *
+     * The trace selects the deterministic subset `id < maxPhotons` and stores at most
+     * `maxVertices` vertices per selected id. Trace truncation is independent of the simulation
+     * `maxScatters` guard.
+     */
+    struct TraceConfig
+    {
+        bool enabled = false;
+        std::uint32_t maxPhotons = 0u;
+        std::uint32_t maxVertices = 0u;
+    };
+
+    /** Host-side trace of one selected photon. */
+    struct PhotonTrace
+    {
+        std::uint64_t id = 0u;
+        std::uint32_t count = 0u;
+        bool truncated = false;
+        std::vector<TraceVertex> vertices;
+    };
+
     /** Sentinel event for a result slot that no terminal sink reached. */
     inline constexpr Event missingEvent = static_cast<Event>(0xFFFF'FFFFu);
 
@@ -127,6 +172,7 @@ namespace graphFlow::photon
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per batch
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
         std::uint64_t poolPayloadBudgetBytes = 0u; // zero means the Flow default
+        TraceConfig trace; // bounded deterministic diagnostic trace
     };
 
     /** Total macroscopic cross-section, `sigmaS + sigmaA`. */
@@ -157,6 +203,13 @@ namespace graphFlow::photon
             throw std::invalid_argument{"graphFlow::photon: frameCap must be non-zero"};
         if(parameters.mode != ScatterMode::forward && parameters.mode != ScatterMode::isotropic)
             throw std::invalid_argument{"graphFlow::photon: unknown scattering mode"};
+        if(parameters.trace.enabled)
+        {
+            if(parameters.trace.maxPhotons == 0u)
+                throw std::invalid_argument{"graphFlow::photon: trace maxPhotons must be non-zero"};
+            if(parameters.trace.maxVertices == 0u)
+                throw std::invalid_argument{"graphFlow::photon: trace maxVertices must be non-zero"};
+        }
     }
 
     /** Map the domain knobs to the optional execution tuning of `Flow`. */
@@ -195,6 +248,8 @@ namespace graphFlow::photon
         std::uint64_t terminated = 0u; // records with exactly one terminal write
         std::uint64_t inconsistent = 0u; // ids without exactly one terminal write
         std::uint32_t liveParticles = 0u; // configured source-admission capacity P
+        std::vector<PhotonTrace> traces; // opt-in bounded deterministic traces
+        std::uint64_t traceTruncated = 0u; // selected ids whose vertex buffer overflowed
         SchedulerStats stats;
     };
 } // namespace graphFlow::photon

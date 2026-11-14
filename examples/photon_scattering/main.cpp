@@ -3,6 +3,7 @@
  */
 
 #include "PhotonCli.hpp"
+#include "PhotonOutput.hpp"
 #include "PhotonScattering.hpp"
 
 #include "graphFlow/core/Backend.hpp"
@@ -12,8 +13,22 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+
+#ifndef GRAPHFLOW_GIT_COMMIT
+#    define GRAPHFLOW_GIT_COMMIT "unknown"
+#endif
+#ifndef GRAPHFLOW_ALPAKA_PIN
+#    define GRAPHFLOW_ALPAKA_PIN "unknown"
+#endif
+#ifndef GRAPHFLOW_SOURCE_DIR
+#    define GRAPHFLOW_SOURCE_DIR "unknown"
+#endif
+#ifndef GRAPHFLOW_ALPAKA_SOURCE_DIR
+#    define GRAPHFLOW_ALPAKA_SOURCE_DIR "unknown"
+#endif
 
 namespace
 {
@@ -63,7 +78,9 @@ namespace
         graphFlow::photon::cli::ResolvedOptions const& resolved,
         graphFlow::Backend backend,
         TDevice device,
-        std::string const& deviceName)
+        std::string const& deviceName,
+        std::string const& commandLine,
+        std::optional<std::string> const& outputDirectory)
     {
         graphFlow::photon::Parameters const& parameters = resolved.parameters;
         graphFlow::photon::ScatteringResult const result
@@ -88,6 +105,30 @@ namespace
                   << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
         printResult(result);
+
+        if(outputDirectory && !outputDirectory->empty())
+        {
+            auto const properties = device.getDeviceProperties();
+            graphFlow::photon::diagnostics::RunMetadata metadata;
+            metadata.command = commandLine;
+            metadata.backend = std::string{graphFlow::backendName(backend)};
+            metadata.deviceName = deviceName;
+            metadata.deviceApi = std::string{graphFlow::backendName(backend)};
+            metadata.deviceIndex = parameters.deviceIndex;
+            metadata.graphflowCommit = GRAPHFLOW_GIT_COMMIT;
+            metadata.alpakaPin = GRAPHFLOW_ALPAKA_PIN;
+            metadata.graphflowSourceDir = GRAPHFLOW_SOURCE_DIR;
+            metadata.alpakaSourceDir = GRAPHFLOW_ALPAKA_SOURCE_DIR;
+            metadata.multiProcessorCount = properties.multiProcessorCount;
+            metadata.warpSize = properties.warpSize;
+            metadata.globalMemBytes = properties.globalMemCapacityBytes;
+            graphFlow::photon::diagnostics::writeRunOutputs(
+                *outputDirectory,
+                result,
+                parameters,
+                metadata);
+            std::cout << "# output-dir=" << *outputDirectory << '\n';
+        }
         return EXIT_SUCCESS;
     }
 } // namespace
@@ -124,6 +165,14 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    std::string commandLine;
+    for(int i = 0; i < argc; ++i)
+    {
+        if(i != 0)
+            commandLine += ' ';
+        commandLine += argv[i];
+    }
+
     try
     {
         return graphFlow::withBackendDevice(
@@ -137,7 +186,13 @@ int main(int argc, char** argv)
                           << " selected-device=" << options.deviceIndex
                           << " device-name=" << deviceName << '\n';
                 std::cout << "# policy " << resolved.policy.description << '\n';
-                return run(resolved, selected, device, deviceName);
+                return run(
+                    resolved,
+                    selected,
+                    device,
+                    deviceName,
+                    commandLine,
+                    options.outputDirectory);
             });
     }
     catch(graphFlow::BackendUnavailable const& error)

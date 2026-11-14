@@ -36,6 +36,9 @@ namespace graphFlow::photon::cli
         std::uint32_t batchChunks = 1u; // Q
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
+        std::optional<std::string> outputDirectory;
+        std::uint32_t tracePhotons = 0u;
+        std::uint32_t traceVertices = 64u;
         std::uint64_t seed = 0u;
         double thickness = 1.0;
         double sigmaS = 0.0;
@@ -64,7 +67,9 @@ namespace graphFlow::photon::cli
                "                                      [--max-scatters M] [--seed S]\n"
                "                                      [--chunk-size C] [--live-particles P]\n"
                "                                      [--tile-size T] [--batch-chunks Q]\n"
-               "                                      [--frame-cap F] [--pool-budget-bytes B]\n";
+               "                                      [--frame-cap F] [--pool-budget-bytes B]\n"
+               "                                      [--output-dir DIR] [--trace-photons M]\n"
+               "                                      [--trace-vertices V]\n";
     }
 
     inline std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -160,6 +165,12 @@ namespace graphFlow::photon::cli
                 options.frameCap = parseU32(flag, nextValue(flag));
             else if(flag == "--pool-budget-bytes")
                 options.poolPayloadBudgetBytes = parseU64(flag, nextValue(flag));
+            else if(flag == "--output-dir")
+                options.outputDirectory = nextValue(flag);
+            else if(flag == "--trace-photons")
+                options.tracePhotons = parseU32(flag, nextValue(flag), true);
+            else if(flag == "--trace-vertices")
+                options.traceVertices = parseU32(flag, nextValue(flag), true);
             else if(flag == "--device")
                 options.deviceIndex = parseU32(flag, nextValue(flag), true);
             else
@@ -203,12 +214,17 @@ namespace graphFlow::photon::cli
         resolved.parameters.sigmaA = options.sigmaA;
         resolved.parameters.maxScatters = options.maxScatters;
         resolved.parameters.deviceIndex = options.deviceIndex;
+        resolved.parameters.trace.enabled = options.tracePhotons != 0u;
+        resolved.parameters.trace.maxPhotons = options.tracePhotons;
+        resolved.parameters.trace.maxVertices = options.traceVertices;
         if(options.poolPayloadBudgetBytes)
         {
             if(*options.poolPayloadBudgetBytes == 0u)
                 throw std::invalid_argument{"--pool-budget-bytes: value must be non-zero"};
             resolved.parameters.poolPayloadBudgetBytes = *options.poolPayloadBudgetBytes;
         }
+        if(options.outputDirectory && options.outputDirectory->empty())
+            throw std::invalid_argument{"--output-dir: value must not be empty"};
 
         if(options.mode == "forward")
             resolved.parameters.mode = graphFlow::photon::ScatterMode::forward;
