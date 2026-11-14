@@ -404,15 +404,16 @@ Also compare the same `(N, seed)` across capacities 31 and 128 and across CPU, C
 
 ### 11.3 CI
 
-GitHub Actions jobs:
+GitHub Actions jobs on hosted `ubuntu-latest` runners and public containers:
 
-- `cpu`: Ubuntu, Release and Debug, CTest with JUnit, `--no-tests=error`.
-- `format`: clang-format 20.1.8, `reuse lint` 6.3.0.
-- `sanitizers`: ASAN/UBSAN and TSAN on the host scheduler, with alpaka sanitizer suppressions.
-- `cuda`: self-hosted hal/A30 runner, `CMAKE_CUDA_ARCHITECTURES=80`, `CUDA_VISIBLE_DEVICES=0`, environment scrub, no skipped tests.
-- `hip`: self-hosted AMD runner, ROCm arch set to the runner GPU, `ROCR_VISIBLE_DEVICES=0`, no skipped tests.
+- `cpu`: Release and Debug, CTest with JUnit, `--no-tests=error`.
+- `sanitizers`: ASAN/UBSAN on the host scheduler. TSAN stays local until a host passes the runtime mapping check.
+- `cuda-compile`: `sm_70`, compile only because the runner has no NVIDIA GPU.
+- `hip-compile`: `gfx90a`, compile only because the runner has no AMD GPU.
+- `reuse`: `reuse lint` 6.3.0. A format job is deferred until the tree-wide sweep (T14b) lands.
+- `icpx-cpu`: manual `workflow_dispatch` only.
 
-GPU jobs must fail if a required test is skipped or if the requested backend did not run. Keep the JUnit reports and environment diagnostics.
+GPU runtime gates need a device host and are not part of the hosted workflow. Keep the JUnit reports and environment diagnostics.
 
 ## 12. Milestones and gates
 
@@ -441,7 +442,7 @@ GPU jobs must fail if a required test is skipped or if the requested backend did
 | `O(N)` result buffer | Count it separately; `N=1e8` at 4 bytes per weight is 400 MB; document the limit. |
 | Chunk fragmentation under split routing | Up to `P` live chunks, one per fragmented particle; size `S = P + K*R`, reduce `C`, or add a slot-based pool. |
 | Event/staging pool exhaustion | Bound live batches `K`; backpressure; never recycle a live event. |
-| GPU CI runners | Self-hosted labels and environment scrub; fail on skipped tests. |
+| GPU CI runners | Hosted CUDA/HIP compile-only; runtime gates need a device host. |
 
 ## 14. Acceptance checklist
 

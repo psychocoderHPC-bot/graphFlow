@@ -179,31 +179,29 @@ resource or decision is missing.
 
 ## 4. CI, format, REUSE, and repository policy
 
-- [ ] **P0: GitHub Actions workflow.** Add `.github/workflows/ci.yml` with:
-  - CPU Release and Debug on `ubuntu-latest`, CTest with JUnit and
-    `--no-tests=error`;
+- [x] **P0: GitHub Actions workflow.** `.github/workflows/ci.yml` runs on
+  GitHub-hosted `ubuntu-latest` runners and public containers:
+  - CPU Release and Debug with CTest, JUnit upload, and `--no-tests=error`;
   - ASAN+UBSAN on CPU;
-  - TSAN on a host where the runtime mapping check passes;
-  - CUDA on a self-hosted A30 runner with `CMAKE_CUDA_ARCHITECTURES=80`,
-    environment scrub, and no skipped GPU tests;
-  - HIP compile-only on GitHub-hosted runners and HIP execution on the AMD
-    `hal` runner;
-  - format and `reuse lint` jobs;
-  - finite timeouts and artifact upload for logs/JUnit.
+  - CUDA compile-only (`sm_70`) and HIP compile-only (`gfx90a`);
+  - `reuse lint`;
+  - finite timeouts and JUnit artifact upload.
+  Still open: TSAN on a host where the runtime mapping check passes, and a CUDA
+  or HIP runtime gate on a device host. The workflow uses no self-hosted runner.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
   (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
   (T14b) and the CI gate that fails on a diff remain open; T14b is CPU-only
   work.
 - [x] **P0: REUSE compliance.** The REUSE foundation is in main (PR #5 / T14a):
   `LICENSES/MPL-2.0.txt` and `.reuse/dep5` are present. The tree-wide SPDX sweep
-  (T14b) and the `reuse lint` CI gate remain open; T14b is CPU-only work.
+  (T14b) remains open; hosted CI runs `reuse lint`. T14b is CPU-only work.
 - [x] **P1: add the plan to the repository.** Done: `docs/plan.md` is in main
   with an SPDX header.
 - [x] **P1: complete the documentation set.** `docs/build.md` (exact pins,
   configure/build/test commands, environment scrub), `docs/architecture.md`,
   `docs/numerics.md`, `docs/known-limitations.md`, `docs/benchmarks.md`, and
-  `docs/public-api.md` are in main and linked from the README. Remaining:
-  `docs/ci.md` is part of the open CI workflow (PR #4 is a draft).
+  `docs/public-api.md` are in main and linked from the README. The hosted
+  workflow is documented in `docs/ci.md`.
 - [ ] **P1: complete the alpaka API map.** `docs/alpaka-api-map.md` covers the
   main primitives; add an entry for every new accelerator helper, with searched
   symbols, pinned path, selected API, tested backends, and the reason for any
@@ -281,10 +279,10 @@ resource or decision is missing.
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
   is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
   TSAN run.
-- **CI runners:** the workflow needs self-hosted CUDA and AMD runners with known
-  labels, credentials, and artifact retention. PR #4 is a draft and no runners
-  are provisioned; the repository is public and has no `.github/workflows` on
-  main.
+- **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
+  and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
+  host with a known sharing and label configuration; no self-hosted runner is
+  provisioned.
 - **Exclusive throughput:** `hal` is shared; the current 187.5 s is a baseline,
   not an exclusive-hardware acceptance number. The JURECA `jrc0880.jureca`
   H100 run is preliminary CUDA evidence only: its gateway sharing flag is

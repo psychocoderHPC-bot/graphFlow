@@ -125,15 +125,17 @@ Runtime graph mutation, join, and broadcast remain open. The particle-feedback
 example uses the typed `Flow` API; the lower-level `GraphBuilder` core is not
 used by the example.
 
-## No CI runners
+## CI is hosted and GPU builds are compile-only
 
-There is no `.github/workflows` and no CI runner pool on main. The CUDA and
-TSAN gates need self-hosted runners with known labels. A GitHub-hosted HIP build
-is compile-only because those runners have no AMD GPU; a HIP runtime gate needs
-an AMD runner with a known label. The local commands in `docs/build.md` are
-documented entry points, not a CI run. PR #4 is a draft; no runners are
-provisioned. The repository is public and has no branch-protection or CI badge
-configuration.
+CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
+(`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 202
+CPU CTest cases in Release and Debug, and `sanitizers` runs ASAN+UBSAN. The
+CUDA and HIP jobs compile only, because the hosted runners have no NVIDIA or
+AMD GPU; a CUDA or HIP runtime gate needs a device host. TSAN stays a
+local/manual check because the hosted runner has no known-good mapping
+configuration. No self-hosted runner, project GPU label, or GitLab pipeline is
+configured. The local commands in `docs/build.md` remain the documented entry
+points.
 
 ## Accelerator test coverage is partial
 

@@ -58,9 +58,10 @@ H100: the JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run is
 preliminary CUDA evidence only: its gateway sharing flag is unknown and the
 recorded run observed external load while the client was stale, so no final
 H100 claim is made. H100 remains blocked/preliminary. Still open: the
-tree-wide format and SPDX sweep (T14b) is CPU-only work, and CI has no
-runners (PR #4 is a draft). This docs commit records the existing
-`rosi_v100` and HIP `hal` results; it adds no new build or test run.
+tree-wide format and SPDX sweep (T14b) is CPU-only work. Hosted CI runs the
+CPU CTest suite and `reuse lint`, with compile-only CUDA and HIP. This docs
+commit records the existing `rosi_v100` and HIP `hal` results; it adds no new
+build or test run.
 
 Environment for the historical recorded runs: fwk394 for the CPU host and hal
 for CUDA, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3,
@@ -331,6 +332,7 @@ design without changing the `P` plus registered-node-reserve progress bound.
 
 `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
 `LICENSES/MPL-2.0.txt` are present, so the format/REUSE foundation is in main.
-The tree-wide format and SPDX sweep (T14b) remains open. There is no CI
-workflow yet. Format and REUSE commands are documented in `docs/build.md`; no
-CI run is claimed.
+The tree-wide format and SPDX sweep (T14b) remains open. Hosted CI is
+`.github/workflows/ci.yml` and is documented in `docs/ci.md`: CPU CTest and
+ASAN+UBSAN run there, CUDA and HIP are compile-only, and `reuse lint` runs. No
+format job is wired in until T14b lands.
