@@ -192,9 +192,10 @@ namespace graphFlow::test
                     if(isotropic)
                     {
                         Engine scatterEngine = engineFor(seed, id, scatterCount, purposeScatter);
+                        constexpr double pi = alpaka::math::constants::pi;
                         double const mu = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(scatterEngine) -1.0;
-                        double const phi = 2.0 * 3.141592653589793238462643383279502884
-                                           * alpaka::rand::distribution::UniformReal<double>{}(scatterEngine);
+                        double const phi
+                            = 2.0 * pi * alpaka::rand::distribution::UniformReal<double>{}(scatterEngine);
                         double const transverse = std::sqrt(std::max(0.0, 1.0 - mu * mu));
                         ux = transverse * std::cos(phi);
                         uy = transverse * std::sin(phi);
