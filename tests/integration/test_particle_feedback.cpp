@@ -8,11 +8,42 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace
 {
+    /** Select the accelerator compiled into this build, or the CPU backend otherwise.
+     *
+     * A CUDA/HIP build must have a visible device: the test throws instead of silently falling
+     * back to the host backend, so a device-less accelerator run fails rather than skips.
+     */
+    auto makeNativeTestDevice()
+    {
+#if ALPAKA_LANG_CUDA
+        auto selector = alpaka::onHost::makeDeviceSelector(
+            alpaka::onHost::DeviceSpec{alpaka::api::cuda, alpaka::deviceKind::nvidiaGpu});
+        if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+            throw std::runtime_error{"CUDA build requires a visible NVIDIA GPU"};
+        return selector.makeDevice(0u);
+#elif ALPAKA_LANG_HIP
+        auto selector = alpaka::onHost::makeDeviceSelector(
+            alpaka::onHost::DeviceSpec{alpaka::api::hip, alpaka::deviceKind::amdGpu});
+        if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+            throw std::runtime_error{"HIP build requires a visible AMD GPU"};
+        return selector.makeDevice(0u);
+#else
+        return graphFlow::test::makeCpuDevice();
+#endif
+    }
+
+    std::uint64_t countZeroWeights(std::vector<std::uint32_t> const& weights)
+    {
+        return static_cast<std::uint64_t>(std::count(weights.begin(), weights.end(), std::uint32_t{0u}));
+    }
+
     void checkAgainstReference(
         graphFlow::particle::Parameters const& parameters,
         graphFlow::particle::FeedbackResult const& result)
@@ -159,4 +190,147 @@ TEST_CASE("particle feedback example is a public Flow graph with a derived pool"
     CHECK(result.liveParticles == 256u);
     // Flow sums the registered output bounds: filter 2 + A 3 + B 3 = 8 reserve chunks.
     CHECK(result.stats.poolChunks == 256u + 8u);
+}
+
+TEST_CASE("max-visits cap bounds non-terminating feedback", "[integration][max-visits]")
+{
+    auto const device = makeNativeTestDevice();
+    constexpr std::uint64_t particles = 1024u;
+
+    for(std::uint32_t const maxVisits : {0u, 1u, 2u, 3u, 7u, 64u})
+    {
+        graphFlow::particle::Parameters parameters{};
+        parameters.numParticles = particles;
+        parameters.chunkSize = 128u;
+        parameters.liveParticles = 256u;
+        parameters.seed = 42u;
+        parameters.maxVisits = maxVisits;
+
+        CAPTURE(maxVisits);
+        auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+        graphFlow::test::ScalarOutcome const reference
+            = graphFlow::test::runScalarModel(parameters.seed, parameters.numParticles, parameters.maxVisits);
+
+        checkAgainstReference(parameters, result);
+        CHECK(result.cappedParticles == reference.cappedParticles);
+        // A capped particle stops at visit == maxVisits, so it accumulated at most that many
+        // feedback increments. The weakest increment is 1 and the strongest 1000.
+        for(std::uint32_t const weight : result.weights)
+            CHECK(weight <= maxVisits * 1000u);
+
+        // The guard is live, not an unused parameter: the oracle caps particles for every
+        // bounded run in this matrix and never caps at the default 64 visits.
+        if(maxVisits < 64u)
+            CHECK(reference.cappedParticles > 0u);
+        else
+            CHECK(reference.cappedParticles == 0u);
+
+        if(maxVisits == 0u)
+        {
+            // No feedback increment is allowed, so every particle - capped or sunk by the
+            // survival draw - ends with weight zero in one histogram row.
+            REQUIRE_FALSE(result.histogram.empty());
+            CHECK(result.histogram.size() == 1u);
+            CHECK(result.histogram.front().weight == 0u);
+            CHECK(result.histogram.front().count == particles);
+            for(std::uint32_t const weight : result.weights)
+                CHECK(weight == 0u);
+        }
+    }
+}
+
+TEST_CASE("zero-weight particles are sunk and form the first histogram row", "[integration][zero-weight]")
+{
+    auto const device = makeNativeTestDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 512u;
+    parameters.chunkSize = 31u;
+    parameters.liveParticles = 128u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+    graphFlow::test::ScalarOutcome const reference
+        = graphFlow::test::runScalarModel(parameters.seed, parameters.numParticles, parameters.maxVisits);
+
+    checkAgainstReference(parameters, result);
+
+    std::uint64_t const zeroCount = countZeroWeights(reference.weights);
+    REQUIRE(zeroCount > 0u);
+    REQUIRE(zeroCount < parameters.numParticles);
+    REQUIRE_FALSE(result.histogram.empty());
+    CHECK(result.histogram.front().weight == 0u);
+    CHECK(result.histogram.front().count == zeroCount);
+    // Zero is a real weight, not the sink sentinel: every id reached the sink.
+    for(std::uint32_t const weight : result.weights)
+        CHECK(weight != graphFlow::particle::missingWeight);
+}
+
+TEST_CASE("empty particle input completes without launching work", "[integration][empty]")
+{
+    auto const device = makeNativeTestDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 0u;
+    parameters.chunkSize = 128u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+
+    CHECK(result.weights.empty());
+    CHECK(result.histogram.empty());
+    CHECK(result.sunkParticles == 0u);
+    CHECK(result.cappedParticles == 0u);
+    // The empty run keeps the historical one-particle admission header.
+    CHECK(result.liveParticles == 1u);
+
+    CHECK(result.stats.poolChunks == 1u);
+    CHECK(result.stats.peakLiveChunks == 0u);
+    CHECK(result.stats.peakReservedChunks == 0u);
+    CHECK(result.stats.completedBatches == 0u);
+    CHECK(result.stats.sourceParticles == 0u);
+    CHECK(result.stats.sourceGenerated == 0u);
+    CHECK(result.stats.sourceSunk == 0u);
+    CHECK(result.stats.sourceLiveParticles == 0u);
+    CHECK(result.stats.chunkCapacity == parameters.chunkSize);
+}
+
+TEST_CASE("exact chunk and admission fill conserves every particle", "[integration][exact-fill]")
+{
+    auto const device = makeNativeTestDevice();
+
+    auto const verify = [&](std::uint64_t particles, std::uint32_t capacity, std::uint32_t live)
+    {
+        CAPTURE(particles, capacity, live);
+        REQUIRE(particles % capacity == 0u);
+        REQUIRE(particles % live == 0u);
+
+        graphFlow::particle::Parameters parameters{};
+        parameters.numParticles = particles;
+        parameters.chunkSize = capacity;
+        parameters.liveParticles = live;
+        parameters.seed = 42u;
+        parameters.maxVisits = 64u;
+
+        auto const result = graphFlow::particle::runParticleFeedback(device, parameters);
+        checkAgainstReference(parameters, result);
+
+        CHECK(result.liveParticles == live);
+        CHECK(result.stats.poolChunks == live + 8u);
+        CHECK(result.stats.peakLiveChunks <= result.stats.poolChunks);
+        CHECK(result.stats.peakReservedChunks <= result.stats.poolChunks);
+        CHECK(result.stats.sourceParticles == particles);
+        CHECK(result.stats.sourceGenerated == particles);
+        CHECK(result.stats.sourceSunk == particles);
+        CHECK(result.stats.sourceLiveParticles == 0u);
+        CHECK(result.stats.chunkCapacity == capacity);
+        CHECK(result.stats.completedBatches > 0u);
+    };
+
+    // One full admission round: two full C-sized source chunks exactly fill P.
+    verify(256u, 128u, 256u);
+    // Several whole admission rounds: eight full C-sized chunks in four live batches of 2C.
+    verify(1024u, 128u, 256u);
 }
