@@ -5,9 +5,30 @@
 
 graphFlow is a host-scheduled dataflow runner for chunked particle payloads.
 The host owns topology, admission, routing, and completion. Device code owns
-per-tile histogram, hash, and scatter work. The current tree is a
-particle-feedback example built from reusable runner primitives, not a generic
-graph API.
+per-tile histogram, hash, and scatter work. The public API is the typed
+`Flow<TPayload, TDevice, TStorage>` class in
+`include/graphFlow/flow/Flow.hpp`; the particle-feedback and photon-scattering
+examples both declare their graphs through `Flow` handles and named outcome
+ports. The lower-level `GraphBuilder`/`GraphRunner`/`Hooks` path stays
+available through its own headers for custom nodes.
+
+## Public Flow API
+
+`Flow<TPayload, TDevice, TStorage>` in
+`include/graphFlow/flow/Flow.hpp` is the application-facing entry point. It
+owns the node topology, the payload storage, and the execution runner. Users
+register functors through `source`, `partition`, `transform`, and `sink`;
+registration returns opaque handles. Users declare edges with `connect` and
+launch with `configure(Tuning)` and `run(source, itemCount)`. The `Payload`
+concept rejects a payload that is not trivially copyable and default-constructible.
+`TStorage` defaults to `DefaultStorage<TPayload, TDevice>`, a generic
+payload-slot storage with statically known `slotBytes`.
+
+`run()` validates the topology, derives the configuration, constructs the typed
+stages and the scheduler, and returns `SchedulerStats` only after every queue
+and pool chunk has been retired, or it propagates an execution error without
+publishing a partial output. The typed execution adapters live in
+`flow/Execution.hpp`; the status channel lives in `flow/Status.hpp`.
 
 ## Host scheduler
 
@@ -260,4 +281,5 @@ rejected.
 - Each batch uses one `FrameSpec` launch for classify and one for scatter. The
   frame count is capped, so a block may process several tiles.
 - A single transform output plan per batch.
-- The generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is host-only; the example still assembles its graph by hand.
+- The lower-level `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is
+  host-only; the example uses the typed `Flow` API, not the generic core.

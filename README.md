@@ -21,10 +21,16 @@ Documentation:
 
 ## Status
 
-Integrated main: `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b` (T1, T2, T3, T5,
-T7, T13, T14a). CPU and CUDA execution are validated on the recorded integrated
-runs. HIP compiles the full tree for `gfx90a` with `amdclang++`, but no AMD
-device is visible, so HIP execution is not claimed.
+Integrated main: `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T1, T2, T3, T5,
+T7, T13, T14a). The public API is implemented: the typed `Flow<TPayload,
+TDevice, TStorage>` topology, execution, storage, and status path described in
+[public API contract](docs/public-api.md). CPU and CUDA execution are validated
+on the recorded integrated runs. HIP compiles the full tree for `gfx90a` with
+`amdclang++`, but no AMD device is visible, so HIP execution is not claimed.
+JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
+gateway sharing flag is unknown and the recorded run observed external load
+while the client was stale, so it provides only preliminary CUDA evidence and no
+final H100 claim.
 
 The runner has one non-blocking queue per node, one in-flight batch per node,
 device-derived `C`/`P`/`T`, up to `Q` ready input chunks per transform batch, a
@@ -44,18 +50,31 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 194/194, hal CUDA 246/246. The totals
-include the FrameSpec launch-policy and matrix tests; the CUDA totals also
-include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
-failure-status cases. The typed CUDA tests run the feedback graph,
-exactly-once sink counts, the bounded pool, the generic POD chain, and the
-status/abort paths on the A30. These are the rebased CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
-visible.
+`rosi_v100` is the exclusive validation platform. Current `rosi_v100`
+results: CPU CTest **194/194 passed** (OMP=ON Release); CPU OpenMP with
+`GOMP_SPINCOUNT=0` (passive) at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
+OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
+OMP=2 Q1 23.71 s, OMP=2 Q8 4.46 s. All histogram sums are exact and no
+hangs were observed with passive spinning. The previously recorded counts,
+fwk394 CPU 194/194 and hal CUDA 246/246, are **historical validation on a
+shared host** (`hal` reports `sharing=unknown`) and are **not the final
+current validation**. CUDA V100 `sm_70` on `rosi_v100` is currently
+**blocked by an nvcc 12.6.85 internal compiler error at
+`flow/Execution.hpp:348`** (`check_name_hiding_by_template_parameters`);
+no V100 CUDA test counts are claimed. The CUDA build fails its `[cuda]`
+tests when no NVIDIA GPU is visible.
 
-The public contract is frozen in [public API contract](docs/public-api.md). The typed
-`Flow<T>` execution path runs source, transform, partition, and sink stages. The
-particle-feedback example now declares its graph with `Flow` handles and named outcome
-ports; `ParticleStages.hpp` remains only for the older low-level tests.
+The public API is implemented and documented in
+[public API contract](docs/public-api.md). The typed
+`Flow<TPayload, TDevice, TStorage>` execution path runs source, transform,
+partition, and sink stages. The particle-feedback example declares its graph
+with `Flow<Particle>` handles and named outcome ports in a 121-line user file
+(`ParticleFeedback.hpp`). `ParticleStages.hpp` remains only for the older
+low-level tests. The photon-scattering example runs the same public API
+with slab geometry, five events, `Philox4x32x10` draws, typed failure status,
+CSV and trace output, and plots. The fixed-seed 33-invocation CLI comparison
+that matched the pre-change binary is historical evidence on the previous
+platforms; the `rosi_v100` 33-invocation baseline is not yet recorded.
 
 ## Historical measured baseline
 
@@ -83,16 +102,20 @@ Details and the historical invocations are in
 
 ```text
 include/graphFlow/
-  core/    Chunk.hpp, ChunkPool.hpp, Config.hpp, DevicePolicy.hpp, PoolBudget.hpp,
-           Reservation.hpp, Backend.hpp
-  graph/   Classifier.hpp, ClassifyKernel.hpp, ScatterKernel.hpp, Kernels.hpp,
-           DenseBinTable.hpp, BinTable.hpp, HashClassifyKernel.hpp,
-           HashScatterKernel.hpp, TileDescriptor.hpp
+  core/    Chunk.hpp, ChunkLedger.hpp, ChunkPool.hpp, ChunkStorage.hpp,
+            Config.hpp, DevicePolicy.hpp, LaunchPolicy.hpp,
+            PayloadSlotStorage.hpp, PoolBudget.hpp, Reservation.hpp,
+            Backend.hpp
+  graph/   NodeBase.hpp, RouteTable.hpp, Graph.hpp, GraphBuilder.hpp,
+            Classifier.hpp, ClassifyKernel.hpp, ScatterKernel.hpp, Kernels.hpp,
+            DenseBinTable.hpp, BinTable.hpp, HashClassifyKernel.hpp,
+            HashScatterKernel.hpp, TileDescriptor.hpp
   flow/    Flow.hpp, Execution.hpp, PayloadStorage.hpp, Concepts.hpp,
-           NodeHandle.hpp, Ports.hpp, Tuning.hpp
+            NodeHandle.hpp, Payload.hpp, Ports.hpp, Status.hpp, Tuning.hpp
   sched/   GraphRunner.hpp
   rng/     ParticleRng.hpp
   detail/  QueueProbe.hpp
+  graphFlow.hpp
 examples/particle_feedback/
   Cli.hpp              option parsing and policy resolution
   main.cpp             backend selection, policy output and histogram
@@ -100,13 +123,24 @@ examples/particle_feedback/
   ParticleTypes.hpp    parameters and histogram formatting
   ParticleFeedback.hpp Flow graph construction and run function
   ParticleStages.hpp   deprecated low-level stages kept for older tests
+examples/photon_scattering/
+  Cli.hpp              option parsing
+  main.cpp             backend selection and output dispatch
+  PhotonFunctors.hpp   flight, scatter, and terminal functors
+  PhotonOutput.hpp     CSV and trace writers
+  PhotonScattering.hpp Flow graph construction and run function
+  PhotonTypes.hpp      slab geometry, events, and result types
 tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases,
-                       bin table, Philox mapping, device policy, CUDA kernel
+                        bin table, Philox mapping, device policy, payload storage,
+                        CUDA kernel
 tests/integration/     particle example, batching, dense and hash pipelines,
-                       scripted fixture, pressure, failure paths
+                        scripted fixture, pressure, failure paths, FrameSpec,
+                        generic DAG, typed Flow execution (CPU and CUDA),
+                        photon scattering (CPU and CUDA)
 tests/reference/       scalar oracle with its own Philox mapping
 docs/                  build, architecture, numerics, benchmarks, limitations,
-                       API map, plan, acceptance
+                        API map, plan, acceptance
+tools/                 benchmark matrix driver and photon plot script
 ```
 
 ## Build and test
@@ -256,7 +290,10 @@ Larger statistical diagnostics (`N=200000` forward and `N=100000` isotropic)
 are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
-claimed runtime; CUDA execution is validated on `hal` with `sm_80`.
+claimed runtime. CUDA execution was historically validated on `hal` with
+`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build is currently blocked by an
+nvcc 12.6.85 ICE at `flow/Execution.hpp:348`, so no `rosi_v100` CUDA
+validation is claimed.
 
 ## Semantics
 
@@ -389,8 +426,15 @@ The full design is in [architecture](docs/architecture.md).
   work.
 - One in-flight batch per node.
 - The generic graph API core is host-only and not yet used by the example.
-- No CI runners or `.github/workflows` yet.
-- The hash path is CPU-tested only. The dense/hash threshold is static.
+- CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
+  multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
+  194/194 with OMP=ON.
+- CUDA V100 `sm_70` on `rosi_v100` is blocked by an nvcc 12.6.85 ICE at
+  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed.
+- CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
+- No CI runners or `.github/workflows` yet (PR #4 is a draft).
+- The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun
+  is pending. The dense/hash threshold is static.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The numbers in this README are
   historical and pre-T5/T7.

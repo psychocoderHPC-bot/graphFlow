@@ -7,21 +7,33 @@ This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state, not on the intended final state.
 
-Current validated state:
+Current state at integrated main
+`ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T5):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
-  Policy/docs main is `cb0548cedf81a284e6291a39dee1eeca7256d783`; this work
-  rebases the FrameSpec launch on top of it.
-- Last recorded validation on the rebased FrameSpec revision: 82/82 CTest
-  cases on fwk394 CPU, 86/86 on hal CUDA, per `docs/acceptance.md`. The CUDA
-  totals include the `[cuda]` kernel and FrameSpec matrix cases.
+- **Validation platform:** `rosi_v100` is the exclusive validation platform.
+  Current `rosi_v100` results: CPU CTest **194/194 passed** (OMP=ON Release);
+  CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. CUDA V100
+  `sm_70` is **blocked** by an nvcc 12.6.85 ICE at
+  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed. The
+  previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
+  `sm_80`, are **historical validation on a shared host** (`hal` reports
+  `sharing=unknown`) and are **not the final current validation**.
+- The public API is implemented: `Flow<TPayload, TDevice, TStorage>` with
+  source/partition/transform/sink handles, named ports, `configure(Tuning)`,
+  typed failure `Status`, and `run()`.
+- T1 (device-aware policy), T2 (payload storage), T3 (CUDA kernel test and
+  typed Flow execution), T5 (batching, payload budget, photon scattering),
+  T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
+  foundation), and the `Flow`/particle/photon examples are done.
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
-- CUDA example: `N=1e5` 0.58 s, `N=1e6` 2.24 s, `N=1e8` 187.5 s with an exact
-  histogram sum of 100,000,000.
-- CPU example: `N=1e6` 19.45 s.
-- The CPU and CUDA `N=1e6` histograms are identical by direct row diff.
-- `hal` reports `sharing=unknown`; the throughput is a shared-host baseline.
+- CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
+  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 194/194 with
+  OMP=ON. The previous multi-region pathology is not observed on `rosi_v100`.
+- H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
+  (unknown gateway sharing flag; external load while the client was stale), so
+  no final H100 claim is made. H100 remains blocked/preliminary.
 
 Priority legend: **P0** blocks plan acceptance, **P1** required for plan
 completion, **P2** hardening or optimization. **Blocked** means an external
@@ -33,23 +45,26 @@ resource or decision is missing.
   (default 1) dispatches up to `Q` ready input chunks per transform node, with
   one classify launch and one scatter launch per batch and the adaptive
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
-  Q=1/2/8 with identical sorted histograms across Q. The current tree passes
-  82/82 CPU on fwk394 and 86/86 CUDA on hal. Open refinement:
-  `--batch-chunks Q` has no upper cap beyond the 32-bit parse limit, tracked in
-  Section 7.
+  Q=1/2/8 with identical sorted histograms across Q. The historical tree
+  passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
+  `rosi_v100` CPU CTest passes 194/194 (OMP=ON Release), and the `rosi_v100`
+  CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE. Open
+  refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
+  limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
   `launchPolicy` with `FrameSpec{numFrames, frameExtent}`. `numFrames` is
   `min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)` with
   `frameCap` default 8; the host frame extent is 1 and accelerators use `T`.
   Kernels stride the batch tile list, so a block may process several tiles. The
   FrameSpec unit and matrix tests pass on CPU and CUDA.
-- [ ] **P0: generic graph API.** The host-side
+- [x] **P0: generic graph API.** The public API is implemented. The host-side
   `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is in the tree with
   source/transform/sink roles, per-bin routing, feedback edges, and no device
-  function pointers. The generic DAG acceptance test runs a source, two
-  transforms, a sink, and one feedback edge through `GraphRunner`.
-  Remaining: typed payload contracts beyond `NodeBase` and porting the particle
-  example to the graph core.
+  function pointers. The typed payload contract is `Flow<TPayload, TDevice,
+  TStorage>` over the `Payload` concept, and the particle example is ported to
+  it. The generic DAG acceptance test runs a source, two transforms, a sink,
+  and one feedback edge through `GraphRunner`. Remaining: the host-only generic
+  core is not yet used by the example, which uses the typed `Flow` API.
 - [ ] **P1: multiple in-flight batches per node.** The scheduler currently
   allows one in-flight batch per node. Add a bounded submitted depth per node,
   an event pool, and fair round-robin across ready nodes while preserving
@@ -150,24 +165,27 @@ resource or decision is missing.
   - finite timeouts and artifact upload for logs/JUnit.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
   (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
-  (T14b) and the CI gate that fails on a diff remain open.
+  (T14b) and the CI gate that fails on a diff remain open; T14b is CPU-only
+  work.
 - [x] **P0: REUSE compliance.** The REUSE foundation is in main (PR #5 / T14a):
   `LICENSES/MPL-2.0.txt` and `.reuse/dep5` are present. The tree-wide SPDX sweep
-  (T14b) and the `reuse lint` CI gate remain open.
+  (T14b) and the `reuse lint` CI gate remain open; T14b is CPU-only work.
 - [x] **P1: add the plan to the repository.** Done: `docs/plan.md` is in main
   with an SPDX header.
-- [ ] **P1: complete the documentation set.** Add `docs/build.md` (exact pins,
-  configure/build/test commands, environment scrub), `docs/ci.md`,
-  `docs/architecture.md`, `docs/numerics.md`, `docs/known-limitations.md`, and
-  `docs/benchmarks.md`. Link them from the README.
+- [x] **P1: complete the documentation set.** `docs/build.md` (exact pins,
+  configure/build/test commands, environment scrub), `docs/architecture.md`,
+  `docs/numerics.md`, `docs/known-limitations.md`, `docs/benchmarks.md`, and
+  `docs/public-api.md` are in main and linked from the README. Remaining:
+  `docs/ci.md` is part of the open CI workflow (PR #4 is a draft).
 - [ ] **P1: complete the alpaka API map.** `docs/alpaka-api-map.md` covers the
   main primitives; add an entry for every new accelerator helper, with searched
   symbols, pinned path, selected API, tested backends, and the reason for any
   project-owned code.
 - [ ] **P1: repository policy.** Decide public versus private, enable branch
   protection for `main`, add a CI badge, and document the PR/merge process.
-- [ ] **P1: exact pin record.** Record the alpaka commit and Catch2 version used
-  for validation in `docs/build.md` and the acceptance record; update the pin
+- [x] **P1: exact pin record.** The alpaka commit
+  (`eb677e8d7f70d79b35df25d9002f94ba669b6f44`, alpaka 3.0.0) and Catch2 3.4.0
+  are recorded in `docs/build.md` and `docs/acceptance.md`. Update the pin
   deliberately and re-run CPU/CUDA/HIP probes.
 
 ## 5. Performance and acceptance
@@ -228,13 +246,20 @@ resource or decision is missing.
   compile-only. A real AMD runner is required for the HIP runtime gate and the
   AMD `N=1e8` acceptance.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
-  host or a different runtime/kernel is required.
+  host or a different runtime/kernel is required. The `rosi_v100` TSAN result
+  is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
+  TSAN run.
 - **CI runners:** the workflow needs self-hosted CUDA and AMD runners with known
   labels, credentials, and artifact retention. PR #4 is a draft and no runners
   are provisioned; the repository is public and has no `.github/workflows` on
   main.
 - **Exclusive throughput:** `hal` is shared; the current 187.5 s is a baseline,
-  not an exclusive-hardware acceptance number.
+  not an exclusive-hardware acceptance number. The JURECA `jrc0880.jureca`
+  H100 run is preliminary CUDA evidence only: its gateway sharing flag is
+  unknown and the recorded run observed external load while the client was
+  stale, so no final H100 claim is made.
+- **CPU OMP backend:** CPU execution with the OpenMP backend is blocked and
+  not claimed; only the serial CPU backend has a recorded run.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
   `P=65536` (about 12.9 GB). Decide between a slot-based pool, a smaller default
   `P`, or a memory-budget cap.
@@ -264,13 +289,27 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
-  gate is explicitly recorded as blocked.
+  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 194/194
+  (OMP=ON); the `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc
+  12.6.85 ICE.
 - [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
   HIP remains blocked by the missing AMD runtime device.
-- [ ] `N=1e6` runs in CI; `N=1e8` passes on A30 and AMD with exact histograms.
+- [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
+  used by both examples; the particle example is ported to it and the photon
+  example uses it for slab transport.
+- [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
+  histograms. The `rosi_v100` CPU CTest passes 194/194; the `rosi_v100`
+  33-invocation baseline comparison is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
-- [ ] ASAN/UBSAN/TSAN pass on a compatible host.
-- [ ] Format, REUSE, docs, and the API map are complete and green.
+  `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times
+  are recorded (see `docs/acceptance.md`), but no frozen regression target
+  exists yet. The H100 run is preliminary CUDA evidence only (external load,
+  stale client); no final claim.
+- [ ] ASAN/UBSAN/TSAN pass on a compatible host. The `rosi_v100` sanitizer
+  results are not yet recorded; the CPU CTest pass does not include a sanitizer
+  run.
+- [ ] Format, REUSE, docs, and the API map are complete and green. T14b
+  (tree-wide format and SPDX sweep) is CPU-only work and remains open.
 - [ ] The repository is public or explicitly kept private, with branch
   protection and CI configured.
 - [ ] An independent review confirms the final integrated state and the

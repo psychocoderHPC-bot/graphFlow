@@ -3,8 +3,11 @@
 
 # Numerics
 
-The particle example is integer-only. Random draws come from the public
-`alpaka::rand::engine::Philox4x32x10`; there is no project RNG algorithm.
+The particle example is integer-only. The photon example is floating-point.
+Random draws come from the public `alpaka::rand::engine::Philox4x32x10`
+(RNG4); there is no project RNG algorithm. The draw position is key-based: it
+depends only on seed, item id, visit, and purpose, so batching and scatter
+order do not change the draws.
 
 ## Philox constructor-offset defect
 
@@ -37,16 +40,21 @@ engine stays the only RNG implementation. The workaround is pinned by
 
 ## Draw offsets
 
+The particle mapping reserves `purposesPerVisit = 3` draws per visit; the
+photon mapping reserves four independent draws per completed scatter count.
+
 | Draw | Offset |
 | --- | --- |
-| Property | `0` |
+| Property (particle) | `0` |
 | Filter at visit `v` | `4 * (1 + 3*v + 0)` |
 | Process A at visit `v` | `4 * (1 + 3*v + 1)` |
 | Process B at visit `v` | `4 * (1 + 3*v + 2)` |
+| Photon flight, kind, cosine, azimuth | `4 * (1 + 4*visit + purpose)` for purposes 0 through 3 |
 
 Each decision owns a block of four 32-bit outputs. The property draw uses offset
 zero and the decision blocks start at offset four, so the ranges never overlap.
-`graphFlow::rng::decisionOffset(visit, purpose)` implements the mapping.
+`graphFlow::rng::decisionOffset(visit, purpose, purposesPerVisit)` implements
+the mapping.
 
 `tests/reference/ScalarModel.hpp` does not include the production RNG header. It
 constructs the engine at offset zero, advances locally, and applies the same
