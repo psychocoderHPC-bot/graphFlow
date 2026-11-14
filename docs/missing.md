@@ -31,10 +31,14 @@ diagnostics cases, and the three cross-backend equality cases):
   `rosi_v100` results at validated code main `2ad7d86`, CPU CTest
   **202/202 passed** (OMP=ON Release, pedantic) and CUDA CTest **254/254
   passed** on V100 `sm_70` (CUDA 12.6.85 Release), are historical. The CPU
-  CTest count is 210 (202 plus two source-admission cases, one N=1e6 smoke,
-  two stall diagnostics cases, and three cross-backend equality cases); the
-  device totals for that suite are 264 (CUDA `sm_70`) and 255 (HIP
-  `gfx1100`), and the device full suites were executed at `f3ef355`:
+   CTest count is 210 (202 plus two source-admission cases, one N=1e6 smoke,
+   two stall diagnostics cases, and three cross-backend equality cases).
+   P10 sanitizer evidence at `cf3bc8a` on `gf/p10-sanitizers` (fwk394):
+   ASAN+UBSAN 236/236, error-path leak 1/1, and TSAN 235/235 with 0 reports in
+   the accepted non-PIE, OMP-off, CpuOmpBlocks-off configuration; the hosted
+   `tsan` job and `leak` step runtimes were not observed, and no H100 was
+   used. The device totals for the 210-case suite are 264 (CUDA `sm_70`) and
+   255 (HIP `gfx1100`), and the device full suites were executed at `f3ef355`:
   CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and HIP 255/255 on
   `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the shared `hal`
   host, correctness only. The `f3ef355` CPU CTest is 210/210 on fwk394
@@ -256,12 +260,17 @@ resource or decision is missing.
 - [x] **P0: GitHub Actions workflow.** `.github/workflows/ci.yml` runs on
   GitHub-hosted `ubuntu-latest` runners and public containers:
   - CPU Release and Debug with CTest, JUnit upload, and `--no-tests=error`;
-  - ASAN+UBSAN on CPU;
-  - CUDA compile-only (`sm_70`) and HIP compile-only (`gfx90a`);
-  - `reuse lint`;
-  - finite timeouts and JUnit artifact upload.
-  Still open: TSAN on a host where the runtime mapping check passes, and a CUDA
-  or HIP runtime gate on a device host. The workflow uses no self-hosted runner.
+   - ASAN+UBSAN on CPU plus a dedicated `leak` step over the `[failure]` and
+     `[status]` error-path cases (`GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON`);
+   - a hosted `tsan` job on `ubuntu-latest` (non-PIE Debug, OMP off,
+     CpuOmpBlocks off);
+   - CUDA compile-only (`sm_70`) and HIP compile-only (`gfx90a`);
+   - `reuse lint`;
+   - finite timeouts and JUnit artifact upload.
+   Still open: a CUDA or HIP runtime gate on a device host. The workflow uses
+   no self-hosted runner. The P10 fwk394 evidence at `cf3bc8a` is ASAN+UBSAN
+   236/236, leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan` and `leak`
+   runtimes were not observed, and no H100 was used.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
   (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
   (T14b) is complete, and the hosted `format` job fails on any diff.
@@ -340,12 +349,16 @@ resource or decision is missing.
   `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`. With the default
   CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the
   alpaka async CPU queue; those are upstream alpaka races, not graphFlow races,
-  which is why the clean gate uses the OMP-exec-disabled configuration. The
-  fwk394 non-PIE scheduler/pool subset (14/14) and the hal startup abort
-  (`FATAL: ThreadSanitizer: unexpected memory mapping`, even for a non-PIE
-  binary) are historical context for why this was blocked; `hal` is shared
-  (`sharing=unknown`) and not a usable TSAN host. No TSAN suppressions were
-  used; suppressions are allowed only with evidence and must not hide a race.
+   which is why the clean gate uses the OMP-exec-disabled configuration.
+   Since `gf/p10-sanitizers` (`cf3bc8a`) the same configuration runs as a
+   hosted `tsan` job on `ubuntu-latest`; the P10 fwk394 run is TSAN 235/235
+   with 0 reports, and the hosted job runtime was not observed (no H100 used).
+   The
+   fwk394 non-PIE scheduler/pool subset (14/14) and the hal startup abort
+   (`FATAL: ThreadSanitizer: unexpected memory mapping`, even for a non-PIE
+   binary) are historical context for why this was blocked; `hal` is shared
+   (`sharing=unknown`) and not a usable TSAN host. No TSAN suppressions were
+   used; suppressions are allowed only with evidence and must not hide a race.
 - [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
   and staging exhaustion, feedback cycles, max-visits, abort during in-flight
   work, and repeated runs with generation reuse.
@@ -360,8 +373,13 @@ resource or decision is missing.
   in, so this item does not claim full coverage. On the covered paths leases,
   staging, and events are released exactly once and the process returns
   nonzero.
-- [ ] **P2: sanitizer coverage for the host scheduler.** Keep ASAN/UBSAN/TSAN
-  in CI and add a leak check for the error paths.
+- [x] **P2: sanitizer coverage for the host scheduler.** Closed on
+   `gf/p10-sanitizers` (`cf3bc8a`): hosted CI keeps ASAN+UBSAN, adds a
+   dedicated `leak` step (`graphflow.error_path_leak_check`, the `[failure]`
+   and `[status]` cases in one process under LeakSanitizer), and adds a hosted
+   `tsan` job (non-PIE, OMP off, CpuOmpBlocks off). P10 fwk394 evidence:
+   ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235 with 0 reports; the hosted
+   `tsan` and `leak` runtimes were not observed, and no H100 was used.
 - [ ] **P2: overflow hardening.** Audit `chunkIndex*C`, `chunk*C+offset`,
   `tile*T`, `ceil(n/C)`, and counter arithmetic for 32-bit overflow; add debug
   assertions and document the supported limits.
@@ -378,23 +396,31 @@ resource or decision is missing.
   AMD architectures and the AMD `N=1e8` acceptance remain open; GitHub-hosted
   HIP stays compile-only.
 - **TSAN host:** resolved. The TSAN host is `rosi_v100` (exclusive); the full
-  integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
-  `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
-  `alpaka_DEP_OMP=OFF`). The hal kernel still rejects the TSAN memory mapping
-  and the fwk394 non-PIE subset (14/14) is historical context.
+   integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
+   `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
+   `alpaka_DEP_OMP=OFF`). Since `gf/p10-sanitizers` (`cf3bc8a`) a hosted
+   `tsan` job on `ubuntu-latest` runs the same configuration; the P10 fwk394
+   run is 235/235 with 0 reports, the hosted job runtime was not observed, and
+   no H100 was used. The hal kernel still rejects the TSAN memory mapping
+   and the fwk394 non-PIE subset (14/14) is historical context.
 - **CI status:** on this branch the hosted CPU jobs run the 210-case CPU suite
-  (Release and Debug) and the `sanitizers` job runs ASAN+UBSAN over it, with
-  no skip: the N=1e6 smoke, the two stall diagnostics cases, and the three
-  cross-backend equality cases run in the ordinary CTest job. Hosted CI was
-  green on final main with the historical
-  202-case suite (CPU 202/202 Release and Debug, ASAN+UBSAN Debug 202/202);
-  `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs
-  are compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. TSAN
-  has a recorded clean `rosi_v100` run (210/210, 0 reports, 202.83 s, non-PIE
-  with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`) but stays a
-  local/manual check on that host; hosted CI runs no TSAN job. The CUDA or HIP
-  runtime gate still needs a device host with a known sharing and label
-  configuration; no self-hosted runner is provisioned.
+   (Release and Debug) and the `sanitizers` job runs ASAN+UBSAN over it plus a
+   dedicated `leak` step, with
+   no skip: the N=1e6 smoke, the two stall diagnostics cases, and the three
+   cross-backend equality cases run in the ordinary CTest job; a hosted `tsan`
+   job runs the host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks
+   off). Hosted CI was
+   green on final main with the historical
+   202-case suite (CPU 202/202 Release and Debug, ASAN+UBSAN Debug 202/202);
+   `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs
+   are compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. TSAN
+   has a recorded clean `rosi_v100` run (210/210, 0 reports, 202.83 s, non-PIE
+   with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`) and now also a
+   hosted `tsan` job; the P10 fwk394 run at `cf3bc8a` is ASAN+UBSAN 236/236,
+   leak 1/1, TSAN 235/235 with 0 reports, and the hosted `tsan`/`leak` runtimes
+   were not observed. The CUDA or HIP
+   runtime gate still needs a device host with a known sharing and label
+   configuration; no self-hosted runner is provisioned. No H100 was used.
 - **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
   and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
   host with a known sharing and label configuration; no self-hosted runner is
@@ -484,12 +510,15 @@ These are not missing work; the plan excludes them from v1:
   OpenMP wall times are recorded (see `docs/acceptance.md`). H100 was not
   used; no H100 claim.
 - [x] ASAN/UBSAN/TSAN pass on a compatible host. The `rosi_v100` full
-  integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
-  `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
-  `alpaka_DEP_OMP=OFF`); hosted CI runs ASAN+UBSAN over the same 210-case CPU
-  suite. With the default CpuOmpBlocks plus OpenMP the TSAN suite fails
-  105/210 with reports inside the alpaka async CPU queue (upstream alpaka
-  races, not graphFlow).
+   integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
+   `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
+   `alpaka_DEP_OMP=OFF`); hosted CI runs ASAN+UBSAN over the same 210-case CPU
+   suite, a dedicated `leak` step, and a hosted `tsan` job in the same
+   configuration. P10 fwk394 evidence at `cf3bc8a`: ASAN+UBSAN 236/236,
+   leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan`/`leak` runtimes
+   were not observed, and no H100 was used. With the default CpuOmpBlocks plus
+   OpenMP the TSAN suite fails 105/210 with reports inside the alpaka async
+   CPU queue (upstream alpaka races, not graphFlow).
  - [x] Format, REUSE, docs, and the API map are complete and green. T14b
   (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
   format gate.
