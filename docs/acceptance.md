@@ -12,10 +12,12 @@ revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
 T13, T14a). The current final counts and the historical T13 performance table
 remain below as evidence.
 
-The HIP runtime validation in this record ran at
-`58bb514def3f3c956126ab7c34d0de74a45f679e` on base
-`25fa0927a4e042f229d43229734f50dce8277954`. It is the first record with HIP
-execution on a real AMD GPU; earlier HIP entries are compile-only and are
+The current HIP runtime record is the measured run on
+`b972eaa3bd778b81f2dca505d3662df710792bd9` (245/245, recorded in
+`/home/agent/final-hip-b972eaa/ctest.log`). The earlier HIP runtime total of
+238/238 at `58bb514def3f3c956126ab7c34d0de74a45f679e` on base
+`25fa0927a4e042f229d43229734f50dce8277954` is the first record with HIP
+execution on a real AMD GPU; entries before it were compile-only and are
 labelled historical below.
 
 ## Validation platform
