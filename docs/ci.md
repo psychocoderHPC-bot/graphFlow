@@ -39,7 +39,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, Release and Debug | 202 | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 202 | the hosted `sanitizers` job |
 | CUDA `sm_70` | 254 | `rosi_v100` device run; the hosted job compiles only |
-| HIP `gfx1100` | 245 (43 HIP cases) | `hal` device run; the hosted job compiles only |
+| HIP `gfx1100` | 245 (35 HIP cases) | `hal` device run on `b972eaa`; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
@@ -165,9 +165,10 @@ to the HIP build. The hosted runner has no AMD GPU, so the job stops after the
 build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
-(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 245/245 with 43 HIP cases
-(8 typed Flow, 24 particle CLI, 10 photon CLI, and 1 photon output case), with
-`rocprof` kernel evidence. `hal` reports `sharing=unknown`, so this is a
+(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 245/245 with 35 HIP-tagged
+cases (8 typed Flow, 24 particle CLI, and 3 photon CLI, plus 3 photon output
+cases), measured on `b972eaa3bd778b81f2dca505d3662df710792bd9` and recorded in
+`/home/agent/final-hip-b972eaa/ctest.log`, with `rocprof` kernel evidence. `hal` reports `sharing=unknown`, so this is a
 correctness result and not a performance claim. The GitHub-hosted job makes no
 HIP runtime claim.
 

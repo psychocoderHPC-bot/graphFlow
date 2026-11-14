@@ -7,9 +7,10 @@ This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state, not on the intended final state.
 
-HIP runtime validation is recorded at
-`58bb514def3f3c956126ab7c34d0de74a45f679e` on the previous main
-`25fa0927a4e042f229d43229734f50dce8277954`; the final main is
+HIP runtime validation is measured on `b972eaa3bd778b81f2dca505d3662df710792bd9`
+(HIP runtime merge, PR #35), recorded in
+`/home/agent/final-hip-b972eaa/ctest.log`; the earlier 238/238 at
+`58bb514def3f3c956126ab7c34d0de74a45f679e` is historical. The final main is
 `cb2de187297bb7277b21ea47a6d2a8ed05b909ba`. The `rosi_v100` CPU/CUDA counts
 below are the final main values:
 
@@ -18,9 +19,13 @@ below are the final main values:
   Final `rosi_v100` results: CPU CTest
   **202/202 passed** (OMP=ON Release, pedantic) and CUDA CTest **254/254
   passed** on V100 `sm_70` (CUDA 12.6.85 Release). The explicit
-  concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
-  the RNG main is preserved.
-  CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The
+   concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
+   the RNG main is preserved. The `Debug` build was not re-run on `rosi_v100`
+   after the seven hash cases: the measured `Debug` totals are the pre-hash
+   195/195 CPU and 247/247 CUDA, and 202/202 and 254/254 are the expected
+   (not-yet-re-run) `Debug` totals; hosted CI measures the `Debug` CPU suite at
+   202/202.
+   CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The
   previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
   `sm_80`, are **historical validation on a shared host** (`hal` reports
   `sharing=unknown`) and are **not the final current validation**. CUDA
@@ -37,7 +42,8 @@ below are the final main values:
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
-  245/245 CTest with 43 HIP cases. GitHub-hosted HIP remains compile-only
+  245/245 CTest with 35 HIP cases, measured on `b972eaa`. GitHub-hosted HIP
+  remains compile-only
   because those runners have no AMD GPU; the `gfx90a` compile-only gate is
   historical.
 - CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
@@ -59,8 +65,8 @@ resource or decision is missing.
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
   passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
-  `rosi_v100` CPU CTest passes 202/202 and the V100 `sm_70` CUDA CTest
-  passes 254/254 with the explicit concept-parameter workaround. Open
+  `rosi_v100` CPU CTest passes 202/202 (Release) and the V100 `sm_70` CUDA CTest
+  passes 254/254 (Release) with the explicit concept-parameter workaround. Open
   refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
   limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -150,7 +156,7 @@ resource or decision is missing.
   removed; floating-point draws use `UniformReal` and integer decisions use the
   engine output. The independent scalar oracles use the same mapping without
   the production header. Fixed-seed particle and photon baselines changed once
-  at this commit. V100 CUDA `sm_70` passes 254/254 with the explicit
+  at this commit. V100 CUDA `sm_70` passes 254/254 (Release) with the explicit
   concept-parameter workaround on the RNG main.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
@@ -217,10 +223,12 @@ resource or decision is missing.
 - [x] **P0: CUDA-specific kernel test.** Done (T3):
   `tests/unit/test_cuda_kernel.cpp` runs a real kernel on the selected NVIDIA
   GPU and fails when no GPU is visible rather than skipping.
-- [x] **P0: HIP execution gate.** Done at
-  `58bb514def3f3c956126ab7c34d0de74a45f679e` on `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 43 HIP cases, plus
-  particle and photon CLI/output cases. `rocprof` confirms the device kernels.
+ - [x] **P0: HIP execution gate.** Done at
+   `b972eaa3bd778b81f2dca505d3662df710792bd9` on `hal` with an AMD Radeon RX
+   7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 35 HIP cases, plus
+   particle and photon CLI/output cases, measured and recorded in
+   `/home/agent/final-hip-b972eaa/ctest.log`. `rocprof` confirms the device
+   kernels.
   Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
   `N=1e8` acceptance run, and no performance claim while `hal` reports
   `sharing=unknown`.
@@ -272,7 +280,8 @@ resource or decision is missing.
 
 - **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
   7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 245/245 with
-  43 HIP cases. Other AMD architectures and the AMD `N=1e8` acceptance remain
+  35 HIP cases on `b972eaa`. Other AMD architectures and the AMD `N=1e8`
+  acceptance remain
   open; GitHub-hosted HIP stays compile-only.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
@@ -325,9 +334,10 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
-  XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 43 HIP cases. `rosi_v100`
-  CPU CTest passes 202/202 (OMP=ON) and the CUDA V100 `sm_70` CTest passes
-  254/254 with the explicit concept-parameter workaround.
+  XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 35 HIP cases, measured on
+  `b972eaa`. `rosi_v100` CPU CTest passes 202/202 (OMP=ON Release) and the
+  CUDA V100 `sm_70` CTest passes 254/254 (Release) with the explicit
+  concept-parameter workaround.
 - [x] The example CLI is registered in CTest for the full CPU, CUDA, and HIP
   matrices; the HIP cases run on `hal` with a real AMD GPU.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
