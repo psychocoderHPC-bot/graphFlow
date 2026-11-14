@@ -22,6 +22,8 @@ self-hosted runners, no project GPU labels, and no GitLab pipeline.
 | --- | --- | --- | --- | --- | --- |
 | `cpu` | `ubuntu-latest` | none | CPU | Release and Debug | yes, CTest |
 | `sanitizers` | `ubuntu-latest` | none | CPU | Debug | yes, ASAN+UBSAN |
+| `leak` | step of `sanitizers` | none | CPU | Debug (ASAN+UBSAN) | yes, `graphflow.error_path_leak_check`, `-L leak` |
+| `tsan` | `ubuntu-latest` | none | CPU | Debug, non-PIE | yes, CTest |
 | `cuda-compile` | `ubuntu-latest` | `nvidia/cuda:12.6.3-devel-ubuntu24.04` | CUDA | Release, `sm_70` | no, compile only |
 | `hip-compile` | `ubuntu-latest` | `rocm/dev-ubuntu-24.04:7.2` | HIP | Release, `gfx90a` | no, compile only |
 | `reuse` | `ubuntu-latest` | none | none | none | `reuse lint` |
@@ -39,13 +41,24 @@ oneAPI jobs do the same inside their container; they install `git` before
 | --- | ---: | --- |
 | CPU, Release and Debug | 210 on `gf/cross-backend-equality` (202 at `2ad7d86`); 210 = 202 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 210 on `gf/cross-backend-equality` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
+| CPU, ASAN+UBSAN Debug, fwk394 | 236/236 at `cf3bc8a` on `gf/p10-sanitizers` | local run; the hosted `sanitizers` runtime was not observed |
+| CPU, leak (error-path, `-L leak`) | 1/1 at `cf3bc8a` on `gf/p10-sanitizers` | local run; the hosted `leak` step runtime was not observed |
+| CPU, TSAN Debug non-PIE, no OMP executor | 235/235, 0 reports at `cf3bc8a` on `gf/p10-sanitizers`; 210/210, 0 reports, 202.83 s at main `f3ef355` on `rosi_v100` | local `fwk394` run; the hosted `tsan` runtime was not observed |
 | CUDA `sm_70` | 254 at `2ad7d86` (historical); 264 = 254 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, executed at `f3ef355` | `rosi_v100` device run; the hosted job compiles only. Full CUDA 264/264 at `f3ef355` on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s, correctness only). New `rosi_v100` runs at `f3ef355`: CPU CTest 210/210 and full TSAN CTest 210/210 (0 reports, 202.83 s, non-PIE, `alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`) |
 | HIP `gfx1100` | 245 at `b972eaa` (historical); 255 = 245 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, executed at `f3ef355` | `hal` device run on `b972eaa`; the hosted job compiles only. Full HIP 255/255 at `f3ef355` on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s, correctness only) |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
 both modes. The opt-in `[diagnostics]` photon cases are excluded from the
-default suite. The CUDA and HIP counts are device-run totals, not hosted CTest
+default suite. The `fwk394` sanitizer rows are a local P10 evidence run at
+`cf3bc8a` on `gf/p10-sanitizers` (shared host, no H100): ASAN+UBSAN
+236/236, the error-path leak case 1/1, and TSAN 235/235 with 0 reports in the
+accepted non-PIE, OMP-off, CpuOmpBlocks-off configuration. The 235 TSAN count
+and the 236 ASAN+UBSAN count differ because the error-path leak case registers
+only when `GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK` is on (the sanitizer job),
+so it is part of the ASAN+UBSAN run but not of the separate TSAN build. The
+hosted `sanitizers` (including its `leak` step) and `tsan` job runtimes were
+not observed for this branch. The CUDA and HIP counts are device-run totals, not hosted CTest
 results: the hosted `cuda-compile` and `hip-compile` jobs produce no CTest
 result. The HIP runtime total is the recorded `hal` run; see
 [HIP compile-only](#hip-compile-only).
@@ -135,18 +148,30 @@ cmake -S . -B build -G Ninja \
   -DGRAPHFLOW_ENABLE_OPENMP=OFF \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+  -DGRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON \
   -Dalpaka_COMPILE_PEDANTIC=ON
 cmake --build build -j "$(nproc)"
 ctest --test-dir build --output-on-failure --no-tests=error
+ctest --test-dir build --output-on-failure --no-tests=error -L leak
 ```
 
-ASAN+UBSAN runs the host scheduler tests. The job does not run TSAN: the
-recorded TSAN blocker on hal (runtime mapping failure) is resolved on the
-exclusive `rosi_v100` host, where the full integrated TSAN CTest passes
-210/210 with 0 reports in 202.83 s at main `f3ef355` (non-PIE Debug with
-`alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). Hosted CI still
-runs no TSAN job because hosted runners are shared and have no known-good
-mapping configuration; TSAN remains a local/manual check on `rosi_v100`.
+The `sanitizers` job runs ASAN+UBSAN over the full host scheduler suite, then a
+dedicated `leak` step: `GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON` registers
+`graphflow.error_path_leak_check`, which runs every `[failure]` and `[status]`
+case in one process so LeakSanitizer (already enabled by ASAN) reports at exit.
+`LSAN_OPTIONS=exitcode=66` turns a leak into a nonzero exit.
+
+A separate `tsan` job runs the host scheduler under ThreadSanitizer on
+`ubuntu-latest`: Debug, non-PIE (`-fno-pie`/`-no-pie`),
+`GRAPHFLOW_ENABLE_OPENMP=OFF`, `alpaka_EXEC_CpuOmpBlocks=OFF`, and
+`alpaka_DEP_OMP=OFF`. That is the accepted clean configuration: with
+CpuOmpBlocks plus OpenMP the same suite reports races inside the upstream
+alpaka CPU queue, not in graphFlow. `TSAN_OPTIONS=exitcode=66` makes a report
+fail the job. The recorded blocker on hal (runtime mapping failure) is resolved
+on the exclusive `rosi_v100` host, where the full integrated TSAN CTest passes
+210/210 with 0 reports in 202.83 s at main `f3ef355` in this configuration;
+the P10 run on `fwk394` at `cf3bc8a` is 235/235 with 0 reports, and the
+hosted `tsan` job runtime was not observed on this branch. No H100 was used.
 
 ### Status tests
 
@@ -265,11 +290,7 @@ not change program behavior.
 
 - Self-hosted runners or labels (`fwk394`, `a30`, `rocm`).
 - CUDA or HIP execution; both jobs are compile-only.
-- TSAN on a self-hosted host: the hosted runner has no known-good mapping
-  configuration, so hosted CI runs no TSAN job. A full clean `rosi_v100` TSAN
-  run exists (210/210, 0 reports, 202.83 s at `f3ef355`, non-PIE with
-  `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the hal
-  `unexpected memory mapping` failure is historical context.
+- H100 was not used for the sanitizer evidence, and no H100 claim is made.
 - GitLab CI.
 - H100 or any other specific GPU target: H100 was not used and no final H100
   run has been recorded, so no H100 performance claim is made.
@@ -284,20 +305,23 @@ image and the extra `git` install before checkout.
 ## Status
 
 On `gf/cross-backend-equality` the hosted jobs pass `cpu (Release)`,
-`cpu (Debug)`, `sanitizers (ASAN+UBSAN)`, `cuda-compile`, `hip-compile`,
-`format`, and
+`cpu (Debug)`, `sanitizers (ASAN+UBSAN)`, `tsan`, `cuda-compile`,
+`hip-compile`, `format`, and
 `reuse`. Each CPU job runs 210 CTest cases (Release and Debug), 202 at
 `2ad7d86` plus two source-admission cases, one N=1e6 smoke, two stall
 diagnostics cases, and the three cross-backend equality cases; the
 `sanitizers` job runs ASAN+UBSAN over the same CPU
-suite, and the N=1e6 smoke, the two stall diagnostics cases, and the three
-cross-backend equality cases run in the
+suite plus its `leak` step, and the N=1e6 smoke, the two stall diagnostics
+cases, and the three cross-backend equality cases run in the
 ordinary CTest job without a skip. The `format` job
 enforces the T14b
 sweep with clang-format 20.1.8. The `sm_70` workaround clears the nvcc internal
 compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example
 without a GPU. `hip-compile` builds the HIP sources and the HIP example without
-an AMD GPU. `icpx-cpu` is manual and skipped on push and pull requests. On the
+an AMD GPU. `icpx-cpu` is manual and skipped on push and pull requests. At
+`cf3bc8a` on `gf/p10-sanitizers`, the fwk394 evidence is ASAN+UBSAN 236/236,
+leak 1/1, and TSAN 235/235 with 0 reports (non-PIE, OMP off, CpuOmpBlocks off);
+the hosted `tsan` and `leak` runtimes were not observed, and no H100 was used. On the
 exclusive `rosi_v100` host at `f3ef355` the CPU CTest now measures 210/210 and
 the full integrated TSAN CTest measures 210/210 with 0 reports (202.83 s,
 non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`), so the

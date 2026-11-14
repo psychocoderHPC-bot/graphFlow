@@ -50,11 +50,17 @@ OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
 observed. The previous multi-region pathology is not observed on `rosi_v100`
 with passive spinning.
 
-## TSAN is validated on rosi_v100; hal still cannot run it
+## TSAN is validated on rosi_v100 and runs in hosted CI; hal still cannot run it
 
 The full integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s on
 `rosi_v100` at main `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF`
-and `alpaka_DEP_OMP=OFF`). The remaining limitation is configuration
+and `alpaka_DEP_OMP=OFF`). Since `gf/p10-sanitizers` (at `cf3bc8a`), hosted CI
+runs a dedicated `tsan` job on `ubuntu-latest` with the same accepted
+configuration (non-PIE, `GRAPHFLOW_ENABLE_OPENMP=OFF`,
+`alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`). The P10 fwk394 evidence
+is ASAN+UBSAN 236/236, error-path leak 1/1, and TSAN 235/235 with 0 reports at
+`cf3bc8a`; the hosted `tsan` job runtime was not observed, and no H100 was
+used. The remaining limitation is configuration
 dependent: with the default CpuOmpBlocks plus OpenMP the same suite fails
 105/210 with reports inside the alpaka async CPU queue. Those are upstream
 alpaka races, not graphFlow races, so the clean gate uses the
@@ -254,14 +260,17 @@ used by the example.
 
 CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
 (`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 202
-CPU CTest cases in Release and Debug, and `sanitizers` runs ASAN+UBSAN. The
-CUDA and HIP jobs compile only, because the hosted runners have no NVIDIA or
-AMD GPU; a CUDA or HIP runtime gate needs a device host. TSAN stays a
-local/manual check on hosted runners because they have no known-good mapping
-configuration, but a full clean `rosi_v100` TSAN run exists (210/210,
+CPU CTest cases in Release and Debug (210 on the current branch),
+`sanitizers` runs ASAN+UBSAN plus a dedicated `leak` step over the error
+paths, and a separate `tsan` job runs the host scheduler under TSAN (non-PIE,
+OMP off, CpuOmpBlocks off). The CUDA and HIP jobs compile only, because the
+hosted runners have no NVIDIA or AMD GPU; a CUDA or HIP runtime gate needs a
+device host. TSAN is validated on the exclusive `rosi_v100` host (210/210,
 0 reports, 202.83 s at `f3ef355`, non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF`
-and `alpaka_DEP_OMP=OFF`), so TSAN is validated on the exclusive host. No
-self-hosted runner, project GPU label, or GitLab pipeline is configured. The
+and `alpaka_DEP_OMP=OFF`); the P10 fwk394 run at `cf3bc8a` is ASAN+UBSAN
+236/236, leak 1/1, TSAN 235/235 with 0 reports, and the hosted `tsan` and
+`leak` runtimes were not observed on this branch. No self-hosted runner,
+project GPU label, or GitLab pipeline is configured, and no H100 was used. The
 local commands in `docs/build.md` remain the documented entry points.
 
 ## Accelerator test coverage is partial

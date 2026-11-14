@@ -199,14 +199,42 @@ cmake -S . -B build-asan -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+  -DGRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON
 cmake --build build-asan -j 14
 ctest --test-dir build-asan --output-on-failure --no-tests=error
+ctest --test-dir build-asan --output-on-failure --no-tests=error -L leak
 ```
 
-TSAN is blocked on the hal kernel by `FATAL: ThreadSanitizer: unexpected memory
-mapping`; see `docs/known-limitations.md`. Use a host whose runtime mapping
-passes the TSAN startup check.
+`GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON` registers
+`graphflow.error_path_leak_check`, one process over every `[failure]` and
+`[status]` case; with LeakSanitizer enabled by ASAN, a leak on the error paths
+fails the run. The hosted `sanitizers` job runs this `leak` step after the
+full ASAN+UBSAN suite and retains ASAN+UBSAN.
+
+TSAN on the host scheduler (the hosted `tsan` job configuration):
+
+```sh
+cmake -S . -B build-tsan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace \
+  -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+  -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -fno-pie" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread -no-pie" \
+  -Dalpaka_EXEC_CpuOmpBlocks=OFF \
+  -Dalpaka_DEP_OMP=OFF
+cmake --build build-tsan -j 14
+ctest --test-dir build-tsan --output-on-failure --no-tests=error
+```
+
+The accepted configuration is non-PIE, `GRAPHFLOW_ENABLE_OPENMP=OFF`,
+`alpaka_EXEC_CpuOmpBlocks=OFF`, and `alpaka_DEP_OMP=OFF`; with CpuOmpBlocks
+plus OpenMP the same suite reports races inside the upstream alpaka CPU queue.
+Evidence at `cf3bc8a` on `gf/p10-sanitizers` (fwk394, no H100): ASAN+UBSAN
+236/236, leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan` job and
+`leak` step runtimes were not observed. The hal kernel still aborts
+ThreadSanitizer at startup with `FATAL: ThreadSanitizer: unexpected memory
+mapping` (see `docs/known-limitations.md`); `rosi_v100` runs the suite cleanly.
 
 ## Format and license metadata
 
@@ -244,5 +272,6 @@ The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
 **245/245** with 43 HIP cases, measured on `b972eaa`. The `sm_75` CUDA build still fails with the
 CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`). Format
 and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, the
-`format` job checks clang-format, and the `sanitizers` job runs ASAN+UBSAN over
-the CPU suite.
+`format` job checks clang-format, the `sanitizers` job runs ASAN+UBSAN over the
+CPU suite plus a dedicated `leak` step, and the hosted `tsan` job runs the
+host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off).

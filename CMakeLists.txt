@@ -35,6 +35,11 @@ option(
     "Register the opt-in large photon diagnostics CTest cases"
     OFF
 )
+option(
+    GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK
+    "Register the error-path CTest case that fails when LeakSanitizer reports a leak"
+    OFF
+)
 option(GRAPHFLOW_ENABLE_HIP "Compile the HIP backend (sets alpaka_DEP_HIP=ON)" OFF)
 # Default the debug validation to the build type: ON for CMAKE_BUILD_TYPE=Debug
 # and OFF otherwise. An explicit
@@ -259,6 +264,21 @@ if(GRAPHFLOW_BUILD_TESTS)
             TEST_SPEC "[diagnostics]"
             TEST_PREFIX "diagnostics."
             PROPERTIES LABELS "diagnostics"
+        )
+    endif()
+
+    # Error-path leak check: run every [failure] and [status] case in one process.
+    # LeakSanitizer, enabled by the ASAN build, fails the process at exit if a
+    # failure path leaks. The sanitizer CI job turns this on; the default suite
+    # is unchanged.
+    if(GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK)
+        add_test(NAME graphflow.error_path_leak_check COMMAND graphFlow_tests "[failure],[status]")
+        set_tests_properties(
+            graphflow.error_path_leak_check
+            PROPERTIES
+                LABELS "sanitizer;leak;error-path"
+                ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1;LSAN_OPTIONS=detect_leaks=1:exitcode=66"
+                TIMEOUT 900
         )
     endif()
 
