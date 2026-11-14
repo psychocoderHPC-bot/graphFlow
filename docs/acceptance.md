@@ -3,11 +3,25 @@
 
 # graphFlow acceptance record
 
-Integrated T4 revision: typed Flow execution and the particle example port at
-`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd`. The earlier integrated revision
-was `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13,
-T14a); its counts and historical T13 performance table remain below as
-historical evidence. This docs commit adds no new build or test run.
+Current integrated main: T5 photon scattering at
+`ac89ab558c26b938038035b26ca5dbe6d7ce7727`, building on the typed Flow
+execution and particle example port at
+`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` and the earlier integrated
+revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
+T13, T14a). Their counts and the historical T13 performance table remain below
+as evidence.
+
+Current integrated CTest totals: **194/194 on fwk394 CPU** and **246/246 on
+hal CUDA `sm_80`**. The totals include the photon-scattering CTest cases on
+both backends and the FrameSpec launch-policy and matrix tests. The opt-in
+photon diagnostics (`-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON`, `ctest -L
+diagnostics`) run 2 test cases per backend. H100: the JURECA `jrc0880.jureca`
+(4x H100 PCIe 80GB, SM 9.0) run is preliminary CUDA evidence only: its gateway
+sharing flag is unknown and the recorded run observed external load while the
+client was stale, so no final H100 claim is made. CPU execution with the
+OpenMP backend is blocked and is not claimed. Still open: the tree-wide format
+and SPDX sweep (T14b) is CPU-only work, and CI has no runners (PR #4 is a
+draft). This docs commit adds no new build or test run.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -28,12 +42,13 @@ Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
 
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 170/170 passed at T3b |
-| CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b |
+| CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the current integrated main (T5) |
+| CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the current integrated main (T5) |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
-The T3b totals add twelve status/failure cases: the status/failure unit
+The current integrated main totals (194/194 CPU, 246/246 CUDA) are recorded in
+the T5 section below. The T3b totals add twelve status/failure cases: the status/failure unit
 suite and three typed failure-path integration cases. The CTest totals include
 `tests/unit/test_launch_policy.cpp` and
 `tests/integration/test_framespec.cpp`, which pin the FrameSpec formula, the
@@ -95,7 +110,10 @@ the forward and isotropic samples and wrote `figure1_paths` through
 sample had `transmitted=4097`, `reflected=0`, `absorbed=0`, `capped=0`.
 The isotropic sample had `transmitted=1946`, `reflected=1066`,
 `absorbed=1085`, `capped=0`, summing to 4097. HIP remains compile-only with no
-AMD runtime device; no H100 run is claimed.
+AMD runtime device. H100: the JURECA `jrc0880.jureca` run is preliminary CUDA
+evidence only (unknown gateway sharing flag; the recorded run observed
+external load while the client was stale), so no final H100 claim is made.
+CPU execution with the OpenMP backend is blocked and not claimed.
 
 ### PR-A generic graph API core
 
@@ -105,11 +123,9 @@ The additive graph API core was validated at
 `sm_80` Release**, both with `-Dalpaka_COMPILE_PEDANTIC=ON`. The change adds
 `NodeBase`, `RouteTable`, `Graph`, and `GraphBuilder` over the existing
 `GraphRunner` hooks without changing the example, T5 batching, FrameSpec
-launches, or policy semantics. The particle-feedback example still assembles
-its graph by hand, so the full generic-graph-API item (PR-B example port)
-remains open. No HIP runtime is claimed; the HIP gate remains compile-only.
-This documentation commit records the existing runs and claims no new build or
-test run.
+launches, or policy semantics. No HIP runtime is claimed; the HIP gate remains
+compile-only. This section records the existing runs and claims no new build
+or test run.
 
 ## Historical performance baseline
 

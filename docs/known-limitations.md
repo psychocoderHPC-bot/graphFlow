@@ -21,8 +21,8 @@ Graph kernels launch with `FrameSpec` from `graphFlow/core/LaunchPolicy.hpp`.
 `numFrames` is
 `min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)`; `frameCap`
 defaults to 8, and the host backend uses a unit frame extent. Blocks stride over
-the batch tile list, so several tiles may share a block. The former pending
-FrameSpec item is closed.
+the batch tile list, so several tiles may share a block and no kernel assumes
+one block per tile.
 
 ## AMD execution is blocked
 
@@ -31,6 +31,15 @@ full tree for `gfx90a` with `amdclang++` from ROCm under `/opt/rocm`, but the
 example and the tests do not run. HIP execution, HIP histogram equality, and an
 AMD `N=1e8` acceptance run remain open. The compile-only gate is not an AMD
 result.
+
+## CPU OMP execution is blocked
+
+CPU execution with the OpenMP backend is blocked and not claimed. The recorded
+CPU runs use the serial CPU backend. The OpenMP backend's multi-region
+scheduling shows a pathology that makes it unsuitable for the current
+scheduler; a recorded OMP run is not available. The `GRAPHFLOW_ENABLE_OPENMP`
+option stays available, but no OMP result is claimed until the pathology is
+resolved.
 
 ## TSAN is blocked on hal
 
@@ -53,6 +62,11 @@ is resolved.
 result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
 wall times are shared-host baselines, not exclusive-allocation acceptance
 numbers. There is no variance study and no frozen regression target.
+
+JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
+gateway sharing flag is unknown. The recorded H100 run observed external load
+while the client was stale, so it is preliminary CUDA evidence only: no final
+H100 claim is made, and no H100 baseline is recorded.
 
 ## Pool memory is budget-capped but still fixed-capacity
 
@@ -82,10 +96,11 @@ used by the example.
 
 ## No CI runners
 
-There is no `.github/workflows` and no CI runner pool. The CUDA, HIP, and TSAN
-gates require self-hosted runners with known labels. The local commands in
-`docs/build.md` are documented entry points, not a CI run. The repository is
-private and has no branch-protection or CI badge configuration.
+There is no `.github/workflows` and no CI runner pool on main. The CUDA, HIP,
+and TSAN gates require self-hosted runners with known labels. The local
+commands in `docs/build.md` are documented entry points, not a CI run. PR #4
+is a draft; no runners are provisioned. The repository is public and has no
+branch-protection or CI badge configuration.
 
 ## Accelerator test coverage is partial
 
@@ -103,10 +118,12 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
 
 ## Other open items
 
-- The example binary is registered in CTest as 24 CLI cases per backend
-  (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`) plus one
-  `example.public_api` source-contract case. A CPU build registers 25 example
-  tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract).
+- The example binaries are registered in CTest. The particle example runs 24
+  CLI cases per backend (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`)
+  plus one `example.public_api` source-contract case. The photon example runs
+  its CLI and output cases per backend. A CPU build registers 25 particle
+  example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract). The
+  integrated CTest totals are 194/194 CPU and 246/246 CUDA on the current main.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall
