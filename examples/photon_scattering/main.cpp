@@ -93,6 +93,7 @@ namespace
         std::cout << "# units length=1 coefficient=1/length\n";
         std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
+        std::cout << "# scheduler " << graphFlow::formatSchedulerStats(result.stats) << '\n';
         printResult(result);
 
         if(outputDirectory && !outputDirectory->empty())

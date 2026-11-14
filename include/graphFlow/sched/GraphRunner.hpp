@@ -53,6 +53,11 @@ namespace graphFlow
         using std::runtime_error::runtime_error;
     };
 
+    /** Cheap aggregate scheduler counters and peaks of one `GraphRunner::run()`.
+     *
+     * The peaks are updated from the existing per-node loops, never from a per-particle or
+     * per-chunk scan. They are diagnostic only and do not influence scheduling.
+     */
     struct SchedulerStats
     {
         std::uint64_t completedBatches = 0u;
@@ -61,6 +66,143 @@ namespace graphFlow
         std::uint32_t poolChunks = 0u;
         std::uint32_t peakLiveChunks = 0u;
         std::uint32_t peakReservedChunks = 0u;
+        std::uint32_t peakReadyChunks = 0u;
+        std::uint32_t peakReadyNodes = 0u;
+        std::uint32_t maxReadyDepth = 0u;
+        std::uint32_t peakInflightBatches = 0u;
+        std::uint32_t peakInflightChunks = 0u;
+        std::uint32_t peakEventSlotsInUse = 0u;
+        std::uint64_t sourceParticles = 0u;
+        std::uint64_t sourceGenerated = 0u;
+        std::uint64_t sourceSunk = 0u;
+        std::uint64_t sourceLiveParticles = 0u;
+        std::uint32_t chunkCapacity = 0u;
+    };
+
+    /** One-line aggregate key=value rendering of `SchedulerStats`.
+     *
+     * Examples print this after a run. The string contains counters only, never topology.
+     */
+    [[nodiscard]] inline std::string formatSchedulerStats(SchedulerStats const& stats)
+    {
+        std::ostringstream message;
+        message << "completedBatches=" << stats.completedBatches << " loopIterations=" << stats.loopIterations
+                << " yields=" << stats.yields << " poolChunks=" << stats.poolChunks
+                << " peakLiveChunks=" << stats.peakLiveChunks << " peakReservedChunks=" << stats.peakReservedChunks
+                << " peakReadyChunks=" << stats.peakReadyChunks << " peakReadyNodes=" << stats.peakReadyNodes
+                << " maxReadyDepth=" << stats.maxReadyDepth << " peakInflightBatches=" << stats.peakInflightBatches
+                << " peakInflightChunks=" << stats.peakInflightChunks
+                << " peakEventSlotsInUse=" << stats.peakEventSlotsInUse << " sourceParticles=" << stats.sourceParticles
+                << " sourceGenerated=" << stats.sourceGenerated << " sourceSunk=" << stats.sourceSunk
+                << " sourceLiveParticles=" << stats.sourceLiveParticles << " chunkCapacity=" << stats.chunkCapacity;
+        return message.str();
+    }
+
+    /** Point-in-time aggregate state plus the peak counters of one scheduler run.
+     *
+     * The snapshot deliberately contains no node names, node ids, or route tables. Per-node
+     * detail stays behind `GraphRunner::setDiagnostics()` and its optional detail callback so a
+     * stall message can be logged or compared without leaking the graph topology.
+     */
+    struct SchedulerSnapshot
+    {
+        // Aggregate state at capture time.
+        std::uint32_t readyChunks = 0u;
+        std::uint32_t readyNodes = 0u;
+        std::uint32_t readyDepth = 0u;
+        std::uint32_t inflightBatches = 0u;
+        std::uint32_t inflightChunks = 0u;
+        std::uint32_t reservedChunks = 0u;
+        std::uint32_t eventSlotsInUse = 0u;
+        std::uint32_t freeChunks = 0u;
+
+        // Peaks since the run started.
+        std::uint32_t poolChunks = 0u;
+        std::uint32_t peakLiveChunks = 0u;
+        std::uint32_t peakReservedChunks = 0u;
+        std::uint32_t peakReadyChunks = 0u;
+        std::uint32_t peakReadyNodes = 0u;
+        std::uint32_t maxReadyDepth = 0u;
+        std::uint32_t peakInflightBatches = 0u;
+        std::uint32_t peakInflightChunks = 0u;
+        std::uint32_t peakEventSlotsInUse = 0u;
+
+        // Source progress and storage shape.
+        std::uint64_t sourceParticles = 0u;
+        std::uint64_t sourceGenerated = 0u;
+        std::uint64_t sourceSunk = 0u;
+        std::uint64_t sourceLiveParticles = 0u;
+        std::uint32_t chunkCapacity = 0u;
+
+        // Run counters.
+        std::uint64_t completedBatches = 0u;
+        std::uint64_t loopIterations = 0u;
+        std::uint64_t yields = 0u;
+        std::uint64_t stallTimeoutMs = 0u;
+    };
+
+    namespace detail
+    {
+        /** Aggregate key=value rendering of one snapshot.
+         *
+         * The output contains only aggregate counters. Node names, node ids, and routes never
+         * enter this string; they are available through the diagnostics detail callback.
+         */
+        inline std::string formatSchedulerSnapshot(SchedulerSnapshot const& snapshot)
+        {
+            std::ostringstream message;
+            message << "graphFlow: scheduler stalled"
+                    << " (timeoutMs=" << snapshot.stallTimeoutMs << ", sourceParticles=" << snapshot.sourceParticles
+                    << ", sourceGenerated=" << snapshot.sourceGenerated << ", sourceSunk=" << snapshot.sourceSunk
+                    << ", sourceLiveParticles=" << snapshot.sourceLiveParticles
+                    << ", chunkCapacity=" << snapshot.chunkCapacity << ", poolChunks=" << snapshot.poolChunks
+                    << ", freeChunks=" << snapshot.freeChunks << ", reservedChunks=" << snapshot.reservedChunks
+                    << ", readyChunks=" << snapshot.readyChunks << ", readyNodes=" << snapshot.readyNodes
+                    << ", readyDepth=" << snapshot.readyDepth << ", inflightBatches=" << snapshot.inflightBatches
+                    << ", inflightChunks=" << snapshot.inflightChunks
+                    << ", eventSlotsInUse=" << snapshot.eventSlotsInUse
+                    << ", completedBatches=" << snapshot.completedBatches
+                    << ", loopIterations=" << snapshot.loopIterations << ", yields=" << snapshot.yields
+                    << ", peakLiveChunks=" << snapshot.peakLiveChunks
+                    << ", peakReservedChunks=" << snapshot.peakReservedChunks
+                    << ", peakReadyChunks=" << snapshot.peakReadyChunks
+                    << ", peakReadyNodes=" << snapshot.peakReadyNodes << ", maxReadyDepth=" << snapshot.maxReadyDepth
+                    << ", peakInflightBatches=" << snapshot.peakInflightBatches
+                    << ", peakInflightChunks=" << snapshot.peakInflightChunks
+                    << ", peakEventSlotsInUse=" << snapshot.peakEventSlotsInUse << ')';
+            return message.str();
+        }
+    } // namespace detail
+
+    /** Stall error carrying the aggregate snapshot and an optional topology-free detail string.
+     *
+     * `what()` is the aggregate snapshot rendered as key=value pairs and never contains node
+     * names, node ids, or routes. Per-node detail is exposed through `detail()` only and is
+     * populated when diagnostics are enabled.
+     */
+    class SchedulerStallError : public std::runtime_error
+    {
+    public:
+        SchedulerStallError(SchedulerSnapshot snapshot, std::string detail = {})
+            : std::runtime_error{detail::formatSchedulerSnapshot(snapshot)}
+            , m_snapshot{snapshot}
+            , m_detail{std::move(detail)}
+        {
+        }
+
+        [[nodiscard]] SchedulerSnapshot const& snapshot() const noexcept
+        {
+            return m_snapshot;
+        }
+
+        [[nodiscard]] std::string const& detail() const noexcept
+        {
+            return m_detail;
+        }
+
+    private:
+        SchedulerSnapshot m_snapshot;
+        std::string m_detail;
     };
 
     /** Host-side dataflow scheduler.
@@ -231,6 +373,34 @@ namespace graphFlow
             m_stallTimeout = timeout;
         }
 
+        /** Opt in to per-node stall detail.
+         *
+         * Aggregate counters are always available in `SchedulerStallError::what()` and in
+         * `snapshot()`. Node names and per-node ready/in-flight depth are only collected when
+         * diagnostics are enabled and stay out of `what()`.
+         */
+        void setDiagnostics(bool enabled)
+        {
+            m_diagnostics = enabled;
+        }
+
+        /** Receives the optional per-node stall detail before the stall error is thrown. */
+        void setStallDetailCallback(std::function<void(std::string const&)> callback)
+        {
+            m_stallDetailCallback = std::move(callback);
+        }
+
+        /** Aggregate state of the scheduler.
+         *
+         * The snapshot is built on demand only; the steady-state loop updates cheap counters and
+         * never formats a string. Calling this after a run returns the completed-run peaks with
+         * empty ready/in-flight aggregates.
+         */
+        [[nodiscard]] SchedulerSnapshot snapshot() const
+        {
+            return buildSnapshot();
+        }
+
         SchedulerStats run()
         {
             if(!m_sourceNode)
@@ -244,10 +414,15 @@ namespace graphFlow
                 }
             }
 
-            SchedulerStats stats;
-            std::uint64_t generated = 0u;
-            std::uint64_t sunkParticles = 0u;
-            std::uint32_t reservedTotal = 0u;
+            m_stats = SchedulerStats{};
+            m_generated = 0u;
+            m_sunkParticles = 0u;
+            m_reservedTotal = 0u;
+            m_roundRobin = 0u;
+            SchedulerStats& stats = m_stats;
+            std::uint64_t& generated = m_generated;
+            std::uint64_t& sunkParticles = m_sunkParticles;
+            std::uint32_t& reservedTotal = m_reservedTotal;
             std::uint64_t idleSpins = 0u;
             auto lastProgress = std::chrono::steady_clock::now();
 
@@ -359,6 +534,7 @@ namespace graphFlow
                         }
                         progress = true;
                     }
+                    observePeaks(stats);
 
                     // 2) Admit the next source chunk. The admission decision is the configured
                     //    particle budget P (chunk form ceil(P/C)); the free-list comparison is only
@@ -403,6 +579,7 @@ namespace graphFlow
                         enqueueEvent(source);
                         progress = true;
                     }
+                    observePeaks(stats);
 
                     // 3) Dispatch ready work. Sinks run first under storage pressure because they
                     //    release chunks without reserving outputs. Otherwise fair round-robin.
@@ -533,6 +710,7 @@ namespace graphFlow
                     if(dispatched)
                         progress = true;
                     ++m_roundRobin;
+                    observePeaks(stats);
 
                     // 4) Termination: source exhausted, every ready list and in-flight batch empty,
                     //    and no output-chunk reservation outstanding.
@@ -559,7 +737,7 @@ namespace graphFlow
                         }
                         auto const idle = std::chrono::steady_clock::now() - lastProgress;
                         if(idleSpins > 200'000'000u || idle > m_stallTimeout)
-                            throw std::runtime_error{stallMessage(generated, sunkParticles, reservedTotal)};
+                            throw stallError();
                     }
                     else
                     {
@@ -596,6 +774,11 @@ namespace graphFlow
 
             stats.poolChunks = m_storage.numChunks();
             stats.peakLiveChunks = m_storage.peakLive();
+            stats.sourceParticles = m_sourceParticles;
+            stats.sourceGenerated = generated;
+            stats.sourceSunk = sunkParticles;
+            stats.sourceLiveParticles = generated - sunkParticles;
+            stats.chunkCapacity = m_storage.chunkCapacity();
             return stats;
         }
 
@@ -687,22 +870,116 @@ namespace graphFlow
             return false;
         }
 
-        [[nodiscard]] std::string stallMessage(
-            std::uint64_t generated,
-            std::uint64_t sunkParticles,
-            std::uint32_t reservedTotal) const
+        /** Fold the current per-node aggregate into the peak counters.
+         *
+         * This runs at the three points where state changes (retirement, admission, dispatch) and
+         * only reads the small node vector. It never inspects chunks or particles.
+         */
+        void observePeaks(SchedulerStats& stats) const
         {
-            std::ostringstream message;
-            message << "graphFlow: scheduler made no progress for " << m_stallTimeout.count()
-                    << " ms (generated=" << generated << ", sunk=" << sunkParticles
-                    << ", liveParticles=" << (generated - sunkParticles) << ", free=" << m_storage.freeCount()
-                    << ", reserved=" << reservedTotal << ')';
+            std::uint32_t readyChunks = 0u;
+            std::uint32_t readyNodes = 0u;
+            std::uint32_t maxReadyDepth = 0u;
+            std::uint32_t inflightBatches = 0u;
+            std::uint32_t inflightChunks = 0u;
+            std::uint32_t eventSlots = 0u;
             for(auto const& nodePtr : m_nodes)
             {
-                message << "; node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
+                Node const& node = *nodePtr;
+                auto const depth = static_cast<std::uint32_t>(node.ready.size());
+                readyChunks += depth;
+                if(depth != 0u)
+                    ++readyNodes;
+                maxReadyDepth = std::max(maxReadyDepth, depth);
+                if(node.inflight)
+                {
+                    ++inflightBatches;
+                    inflightChunks += static_cast<std::uint32_t>(node.inflight->chunks.size());
+                }
+                if(node.armed)
+                    ++eventSlots;
+            }
+
+            stats.peakReadyChunks = std::max(stats.peakReadyChunks, readyChunks);
+            stats.peakReadyNodes = std::max(stats.peakReadyNodes, readyNodes);
+            stats.maxReadyDepth = std::max(stats.maxReadyDepth, maxReadyDepth);
+            stats.peakInflightBatches = std::max(stats.peakInflightBatches, inflightBatches);
+            stats.peakInflightChunks = std::max(stats.peakInflightChunks, inflightChunks);
+            stats.peakEventSlotsInUse = std::max(stats.peakEventSlotsInUse, eventSlots);
+        }
+
+        /** Build the aggregate snapshot of the current scheduler state and run peaks. */
+        [[nodiscard]] SchedulerSnapshot buildSnapshot() const
+        {
+            SchedulerSnapshot snapshot;
+            for(auto const& nodePtr : m_nodes)
+            {
+                Node const& node = *nodePtr;
+                auto const depth = static_cast<std::uint32_t>(node.ready.size());
+                snapshot.readyChunks += depth;
+                if(depth != 0u)
+                    ++snapshot.readyNodes;
+                snapshot.readyDepth = std::max(snapshot.readyDepth, depth);
+                if(node.inflight)
+                {
+                    ++snapshot.inflightBatches;
+                    snapshot.inflightChunks += static_cast<std::uint32_t>(node.inflight->chunks.size());
+                }
+                if(node.armed)
+                    ++snapshot.eventSlotsInUse;
+            }
+
+            snapshot.reservedChunks = m_reservedTotal;
+            snapshot.freeChunks = m_storage.freeCount();
+            snapshot.poolChunks = m_storage.numChunks();
+            snapshot.peakLiveChunks = m_storage.peakLive();
+            snapshot.peakReservedChunks = m_stats.peakReservedChunks;
+            snapshot.peakReadyChunks = m_stats.peakReadyChunks;
+            snapshot.peakReadyNodes = m_stats.peakReadyNodes;
+            snapshot.maxReadyDepth = m_stats.maxReadyDepth;
+            snapshot.peakInflightBatches = m_stats.peakInflightBatches;
+            snapshot.peakInflightChunks = m_stats.peakInflightChunks;
+            snapshot.peakEventSlotsInUse = m_stats.peakEventSlotsInUse;
+            snapshot.completedBatches = m_stats.completedBatches;
+            snapshot.loopIterations = m_stats.loopIterations;
+            snapshot.yields = m_stats.yields;
+            snapshot.sourceParticles = m_sourceParticles;
+            snapshot.sourceGenerated = m_generated;
+            snapshot.sourceSunk = m_sunkParticles;
+            snapshot.sourceLiveParticles = m_generated - m_sunkParticles;
+            snapshot.chunkCapacity = m_storage.chunkCapacity();
+            snapshot.stallTimeoutMs = static_cast<std::uint64_t>(m_stallTimeout.count());
+            return snapshot;
+        }
+
+        /** Per-node detail, collected only when diagnostics are enabled. */
+        [[nodiscard]] std::string diagnosticsDetail() const
+        {
+            std::ostringstream message;
+            bool first = true;
+            for(auto const& nodePtr : m_nodes)
+            {
+                if(!first)
+                    message << "; ";
+                first = false;
+                message << "node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
                         << " inflight=" << (nodePtr->inflight ? 1 : 0);
             }
             return message.str();
+        }
+
+        /** Create the stall error and optionally publish the per-node detail first. */
+        [[nodiscard]] SchedulerStallError stallError() const
+        {
+            SchedulerSnapshot const snapshot = buildSnapshot();
+            std::string detail;
+            if(m_diagnostics)
+            {
+                detail = diagnosticsDetail();
+                if(m_stallDetailCallback)
+                    m_stallDetailCallback(detail);
+            }
+            return SchedulerStallError{snapshot, std::move(detail)};
         }
 
         /** Release every chunk the runner still owns after a hook or routing error.
@@ -766,6 +1043,12 @@ namespace graphFlow
         std::size_t m_roundRobin = 0u;
         std::uint32_t m_batchChunks = 1u;
         std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
+        std::function<void(std::string const&)> m_stallDetailCallback;
         std::chrono::milliseconds m_stallTimeout{120000};
+        SchedulerStats m_stats;
+        std::uint64_t m_generated = 0u;
+        std::uint64_t m_sunkParticles = 0u;
+        std::uint32_t m_reservedTotal = 0u;
+        bool m_diagnostics = false;
     };
 } // namespace graphFlow

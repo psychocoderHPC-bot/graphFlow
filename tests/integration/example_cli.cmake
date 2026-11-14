@@ -85,6 +85,42 @@ if(particle_position EQUAL -1)
     )
 endif()
 
+# Post-run aggregate scheduler line. It must contain the P1 stall-diagnostic counters and
+# must not carry any per-node topology.
+string(FIND "${run_stdout}" "# scheduler " scheduler_position)
+if(scheduler_position EQUAL -1)
+    message(
+        FATAL_ERROR
+        "example_cli.cmake: no '# scheduler' aggregate line for backend=${BACKEND}.\n"
+        "stdout:\n${run_stdout}\n"
+        "stderr:\n${run_stderr}"
+    )
+endif()
+foreach(token
+    "peakReadyChunks="
+    "peakReadyNodes="
+    "maxReadyDepth="
+    "peakInflightBatches="
+    "peakInflightChunks="
+    "peakReservedChunks="
+    "peakEventSlotsInUse="
+    "sourceParticles="
+    "sourceGenerated="
+    "sourceSunk="
+    "sourceLiveParticles="
+    "chunkCapacity="
+)
+    string(FIND "${run_stdout}" "${token}" scheduler_token_position)
+    if(scheduler_token_position EQUAL -1)
+        message(
+            FATAL_ERROR
+            "example_cli.cmake: '# scheduler' line misses '${token}' for backend=${BACKEND}.\n"
+            "stdout:\n${run_stdout}\n"
+            "stderr:\n${run_stderr}"
+        )
+    endif()
+endforeach()
+
 # Parse the histogram rows after the "# weight,count" header. Comment lines
 # (including the optional non-terminating count) are ignored.
 string(REPLACE "\r" "" run_stdout "${run_stdout}")

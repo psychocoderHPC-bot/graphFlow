@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -44,6 +45,9 @@ namespace graphFlow
         /** Opt-in scheduler diagnostics of the concrete runner. */
         bool diagnostics = false;
 
+        /** Maximum scheduler quiet time before `Flow::run` reports a stall. */
+        std::optional<std::chrono::milliseconds> stallTimeout;
+
         /** Reject present zero values before they reach the scheduler or the pool. */
         void validate() const
         {
@@ -60,6 +64,8 @@ namespace graphFlow
             validateNonZero(policyMaxChunkCapacity, "policyMaxChunkCapacity");
             validateNonZero(policyLiveParticlesPerChunk, "policyLiveParticlesPerChunk");
             validateNonZero(policyMemoryBudgetBytes, "policyMemoryBudgetBytes");
+            if(stallTimeout.has_value() && stallTimeout->count() <= 0)
+                throw std::invalid_argument{"graphFlow::Tuning: stallTimeout must be positive"};
         }
 
     private:

@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <stdexcept>
@@ -331,6 +332,7 @@ TEST_CASE("tuning rejects zero-valued knobs", "[unit][flow][tuning]")
     reject([](graphFlow::Tuning& tuning) { tuning.policyMaxChunkCapacity = 0u; });
     reject([](graphFlow::Tuning& tuning) { tuning.policyLiveParticlesPerChunk = 0u; });
     reject([](graphFlow::Tuning& tuning) { tuning.policyMemoryBudgetBytes = 0u; });
+    reject([](graphFlow::Tuning& tuning) { tuning.stallTimeout = std::chrono::milliseconds{0}; });
 
     graphFlow::Tuning valid;
     valid.chunkCapacity = 16u;
@@ -341,9 +343,11 @@ TEST_CASE("tuning rejects zero-valued knobs", "[unit][flow][tuning]")
     valid.frameCap = 1u;
     valid.poolPayloadBudgetBytes = 1u << 20;
     valid.diagnostics = true;
+    valid.stallTimeout = std::chrono::milliseconds{1000};
     CHECK_NOTHROW(flow.configure(valid));
     CHECK(flow.tuning().chunkCapacity == 16u);
     CHECK(flow.tuning().diagnostics);
+    CHECK(flow.tuning().stallTimeout == std::chrono::milliseconds{1000});
 }
 
 TEST_CASE("a flow is movable and its handles follow the graph", "[unit][flow][move]")

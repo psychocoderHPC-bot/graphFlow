@@ -49,9 +49,16 @@ Every other `Tuning` field is optional and empty by default, so the device
 policy supplies the derived value: batching (`batchChunks`,
 `chunkCapacity`), storage and pool limits (`liveParticles`, `tileSize`,
 `numChunks`, `poolPayloadBudgetBytes`), the launch frame cap (`frameCap`),
-device-policy knobs, and the opt-in `diagnostics` flag. It never changes
-payload semantics or routes; tuning is not an argument of the minimal calls
-above.
+device-policy knobs, the opt-in `diagnostics` flag, and an optional
+`stallTimeout` (`std::chrono::milliseconds`). It never changes payload semantics
+or routes; tuning is not an argument of the minimal calls above.
+
+`run()` returns `SchedulerStats` with aggregate peaks (`peakReadyChunks`,
+`peakReadyNodes`, `maxReadyDepth`, `peakInflightBatches`, `peakInflightChunks`,
+`peakReservedChunks`, `peakEventSlotsInUse`) and source counters
+(`sourceParticles`, `sourceGenerated`, `sourceSunk`, `sourceLiveParticles`,
+`chunkCapacity`). A stall throws `SchedulerStallError`; `snapshot()` on the
+runner and on the error exposes the same aggregate state without topology.
 
 ## Failure status
 

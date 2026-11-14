@@ -90,6 +90,16 @@ namespace graphFlow
             return m_tuning;
         }
 
+        /** Receives the per-node stall detail when `Tuning::diagnostics` is enabled.
+         *
+         * The callback is debug-only: the thrown `SchedulerStallError::what()` always contains
+         * aggregate counters and never node names, node ids, or routes.
+         */
+        void setStallDetailCallback(std::function<void(std::string const&)> callback)
+        {
+            m_stallDetailCallback = std::move(callback);
+        }
+
         /** Register the single source node. */
         template<typename TFunctor>
         requires SourceFor<TFunctor, TPayload>
@@ -277,6 +287,10 @@ namespace graphFlow
             }
             runner->setSource(static_cast<std::uint32_t>(*m_sourceKey), itemCount, config.liveParticles);
             runner->setBatchChunks(config.batchChunks);
+            if(m_tuning.stallTimeout.has_value())
+                runner->setStallTimeout(*m_tuning.stallTimeout);
+            runner->setDiagnostics(m_tuning.diagnostics);
+            runner->setStallDetailCallback(m_stallDetailCallback);
 
             Stats stats = runner->run();
             return stats;
@@ -291,6 +305,7 @@ namespace graphFlow
                 m_sourceKey = std::move(other.m_sourceKey);
                 m_nodes = std::move(other.m_nodes);
                 m_tuning = std::move(other.m_tuning);
+                m_stallDetailCallback = std::move(other.m_stallDetailCallback);
             }
             return *this;
         }
@@ -545,5 +560,6 @@ namespace graphFlow
         std::optional<NodeId> m_sourceKey;
         std::vector<NodeRecord> m_nodes;
         Tuning m_tuning;
+        std::function<void(std::string const&)> m_stallDetailCallback;
     };
 } // namespace graphFlow

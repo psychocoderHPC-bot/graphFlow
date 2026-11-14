@@ -118,10 +118,13 @@ resource or decision is missing.
 - [x] **P1: chunk-fill policy tests.** Done: `tests/integration/test_admission.cpp`
   pins `min(C, P, remaining)` for `P<C`, `P==C`, `P==0`, the tail, and `N>>P`,
   and rejects one-particle source chunks with a mutation-style assertion.
-- [ ] **P1: scheduler state and stall diagnostics.** The stall timeout and state
-  dump exist; expose the remaining counters (ready depth per node, in-flight
-  depth, reserved credits, event-pool use, source budget) in the example output
-  and in failure messages.
+- [x] **P1: scheduler state and stall diagnostics.** Done: `SchedulerStats`
+  exposes aggregate ready, in-flight, reserved, event-slot, source and capacity
+  peaks; `SchedulerSnapshot` and `SchedulerStallError` report the aggregate
+  state on stall or end; `Tuning::stallTimeout` and `Tuning::diagnostics` are
+  wired through `Flow::run`; the examples print one `# scheduler` summary line
+  and the photon metadata records it. Per-node detail stays behind the opt-in
+  diagnostics callback and never enters `what()`.
 
 ## 2. Execution pipeline
 
