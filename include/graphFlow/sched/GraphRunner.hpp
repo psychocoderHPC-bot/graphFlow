@@ -154,9 +154,7 @@ namespace graphFlow
             m_failureHook = std::move(hook);
         }
 
-        GraphRunner(TDevice device, TStorage& storage)
-            : m_device{device}
-            , m_storage{storage}
+        GraphRunner(TDevice device, TStorage& storage) : m_device{device}, m_storage{storage}
         {
         }
 
@@ -313,8 +311,8 @@ namespace graphFlow
                                     int const dst = node.route[output.bin];
                                     if(dst < 0)
                                         throw std::runtime_error{
-                                            "graphFlow: node '" + node.name + "' bin "
-                                            + std::to_string(output.bin) + " has no route"};
+                                            "graphFlow: node '" + node.name + "' bin " + std::to_string(output.bin)
+                                            + " has no route"};
                                     m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                 }
                                 catch(...)
@@ -375,12 +373,10 @@ namespace graphFlow
                     // round trip. With a configured budget P, require min(C, P, remaining)
                     // particles; otherwise wait for the sinks to release the budget. A tail or a
                     // deliberately small P still gets a smaller chunk.
-                    std::uint64_t const minFill
-                        = configuredLive == 0u
-                              ? std::min(capacity, remaining)
-                              : std::min(std::min(capacity, configuredLive), remaining);
-                    bool const withinAdmission
-                        = configuredLive == 0u || liveParticles < configuredLive;
+                    std::uint64_t const minFill = configuredLive == 0u
+                                                      ? std::min(capacity, remaining)
+                                                      : std::min(std::min(capacity, configuredLive), remaining);
+                    bool const withinAdmission = configuredLive == 0u || liveParticles < configuredLive;
                     bool const enoughBudget
                         = configuredLive == 0u
                           || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
@@ -388,10 +384,9 @@ namespace graphFlow
                        && m_storage.freeCount() > reservedTotal)
                     {
                         std::uint64_t budget = remaining;
-                        std::uint32_t const fillCap
-                            = configuredLive == 0u
-                                  ? m_storage.chunkCapacity()
-                                  : static_cast<std::uint32_t>(configuredLive - liveParticles);
+                        std::uint32_t const fillCap = configuredLive == 0u
+                                                          ? m_storage.chunkCapacity()
+                                                          : static_cast<std::uint32_t>(configuredLive - liveParticles);
                         if(budget > fillCap)
                             budget = fillCap;
                         if(budget > m_storage.chunkCapacity())
@@ -425,8 +420,7 @@ namespace graphFlow
                         // cannot leave an un-armed batch in the slot or let the same chunk be owned
                         // by `ready` and `inflight` at the same time.
                         bool const batchable = node.role == NodeRole::transform;
-                        std::size_t wanted
-                            = batchable ? std::min<std::size_t>(m_batchChunks, node.ready.size()) : 1u;
+                        std::size_t wanted = batchable ? std::min<std::size_t>(m_batchChunks, node.ready.size()) : 1u;
                         std::uint32_t reserve = 0u;
                         if(batchable)
                         {
@@ -663,9 +657,7 @@ namespace graphFlow
          * also for a hash partition. The single-chunk pool bound `K*R` stays in place; a batch
          * that does not fit shrinks its chunk prefix rather than the pool.
          */
-        [[nodiscard]] std::uint32_t checkedReserveBound(
-            std::uint64_t particles,
-            std::uint32_t maxBins) const
+        [[nodiscard]] std::uint32_t checkedReserveBound(std::uint64_t particles, std::uint32_t maxBins) const
         {
             return checkedOutputChunkBound(
                 particles,
@@ -703,8 +695,8 @@ namespace graphFlow
             std::ostringstream message;
             message << "graphFlow: scheduler made no progress for " << m_stallTimeout.count()
                     << " ms (generated=" << generated << ", sunk=" << sunkParticles
-                    << ", liveParticles=" << (generated - sunkParticles)
-                    << ", free=" << m_storage.freeCount() << ", reserved=" << reservedTotal << ')';
+                    << ", liveParticles=" << (generated - sunkParticles) << ", free=" << m_storage.freeCount()
+                    << ", reserved=" << reservedTotal << ')';
             for(auto const& nodePtr : m_nodes)
             {
                 message << "; node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
@@ -774,6 +766,6 @@ namespace graphFlow
         std::size_t m_roundRobin = 0u;
         std::uint32_t m_batchChunks = 1u;
         std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
-        std::chrono::milliseconds m_stallTimeout{120'000};
+        std::chrono::milliseconds m_stallTimeout{120000};
     };
 } // namespace graphFlow

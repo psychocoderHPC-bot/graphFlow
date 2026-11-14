@@ -59,7 +59,7 @@ namespace
         {
             if((id == 1u || id == 3u) && visit == 0u)
                 return 1u; // feedback
-            return 0u;     // sink
+            return 0u; // sink
         }
 
         template<typename TAcc>
@@ -119,37 +119,24 @@ namespace
 
         std::uint64_t const particles = 4u;
         std::uint32_t const live = graphFlow::particle::defaultLiveParticles(particles, capacity);
-        std::uint32_t const numChunks
-            = graphFlow::particle::derivePoolSize(particles, capacity, live, 2u);
+        std::uint32_t const numChunks = graphFlow::particle::derivePoolSize(particles, capacity, live, 2u);
 
         graphFlow::ChunkPool pool{device, numChunks, capacity};
         auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
         auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
         {
             auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
-            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEADBEEFu});
+            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEAD'BEEFu});
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
         graphFlow::particle::GenerateStage<Device> generate{device, pool, 42u, 128u};
-        graphFlow::particle::TransformStage<Device, ScriptedFilterPolicy> filter{
-            device,
-            pool,
-            ScriptedFilterPolicy{},
-            capped,
-            128u};
-        graphFlow::particle::TransformStage<Device, ScriptedAPolicy> processA{
-            device,
-            pool,
-            ScriptedAPolicy{},
-            capped,
-            128u};
-        graphFlow::particle::TransformStage<Device, ScriptedBPolicy> processB{
-            device,
-            pool,
-            ScriptedBPolicy{},
-            capped,
-            128u};
+        graphFlow::particle::TransformStage<Device, ScriptedFilterPolicy>
+            filter{device, pool, ScriptedFilterPolicy{}, capped, 128u};
+        graphFlow::particle::TransformStage<Device, ScriptedAPolicy>
+            processA{device, pool, ScriptedAPolicy{}, capped, 128u};
+        graphFlow::particle::TransformStage<Device, ScriptedBPolicy>
+            processB{device, pool, ScriptedBPolicy{}, capped, 128u};
         graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         graphFlow::GraphRunner<Device> runner{device, pool};
@@ -165,18 +152,10 @@ namespace
             2u,
             {2, 3},
             graphFlow::particle::hooksOf<Device>(filter));
-        runner.addNode(
-            "A",
-            graphFlow::NodeRole::transform,
-            2u,
-            {4, 1},
-            graphFlow::particle::hooksOf<Device>(processA));
-        runner.addNode(
-            "B",
-            graphFlow::NodeRole::transform,
-            2u,
-            {4, 1},
-            graphFlow::particle::hooksOf<Device>(processB));
+        runner
+            .addNode("A", graphFlow::NodeRole::transform, 2u, {4, 1}, graphFlow::particle::hooksOf<Device>(processA));
+        runner
+            .addNode("B", graphFlow::NodeRole::transform, 2u, {4, 1}, graphFlow::particle::hooksOf<Device>(processB));
         runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
         runner.setSource(source, particles, live);
         runner.run();
@@ -192,11 +171,7 @@ namespace
 
 TEST_CASE("scripted routing fixture matches the plan section 9.3 rows", "[integration][scripted]")
 {
-    std::vector<graphFlow::particle::HistogramRow> const expected{
-        {0u, 1u},
-        {1u, 1u},
-        {1000u, 1u},
-        {1001u, 1u}};
+    std::vector<graphFlow::particle::HistogramRow> const expected{{0u, 1u}, {1u, 1u}, {1000u, 1u}, {1001u, 1u}};
 
     for(std::uint32_t const capacity : {1u, 3u})
     {

@@ -36,8 +36,8 @@ namespace
 
     using graphFlow::photon::Event;
     using graphFlow::photon::Parameters;
-    using graphFlow::photon::ScatterMode;
     using graphFlow::photon::ScatteringResult;
+    using graphFlow::photon::ScatterMode;
 
     std::uint64_t countEvent(ScatteringResult const& result, Event event)
     {
@@ -144,12 +144,12 @@ TEST_CASE("CUDA photon isotropic and absorbing runs match closed forms", "[photo
     double const uncollidedExpected = std::exp(-1.0);
     double const uncollidedSigma
         = std::sqrt(uncollidedExpected * (1.0 - uncollidedExpected) / static_cast<double>(photons));
-    CHECK(static_cast<double>(uncollided) / static_cast<double>(photons)
-          == Catch::Approx(uncollidedExpected).margin(6.0 * uncollidedSigma));
+    CHECK(
+        static_cast<double>(uncollided) / static_cast<double>(photons)
+        == Catch::Approx(uncollidedExpected).margin(6.0 * uncollidedSigma));
     for(auto const& record : scattered.terminal)
     {
-        double const norm = record.direction.x * record.direction.x
-                            + record.direction.y * record.direction.y
+        double const norm = record.direction.x * record.direction.x + record.direction.y * record.direction.y
                             + record.direction.z * record.direction.z;
         CHECK(norm == Catch::Approx(1.0).margin(1e-12));
     }
@@ -170,8 +170,8 @@ TEST_CASE("CUDA photon isotropic and absorbing runs match closed forms", "[photo
     checkTerminalAccounting(absorbed, photons);
     CHECK(countEvent(absorbed, Event::reflected) == 0u);
     CHECK(countEvent(absorbed, Event::capped) == 0u);
-    double const transmission = static_cast<double>(countEvent(absorbed, Event::transmitted))
-                                / static_cast<double>(photons);
+    double const transmission
+        = static_cast<double>(countEvent(absorbed, Event::transmitted)) / static_cast<double>(photons);
     double const expected = std::exp(-1.0);
     double const sigma = std::sqrt(expected * (1.0 - expected) / static_cast<double>(photons));
     CHECK(transmission == Catch::Approx(expected).margin(6.0 * sigma));
@@ -216,9 +216,10 @@ TEST_CASE("CUDA photon vacuum and cap outcomes stay distinct", "[photon][cuda][c
     auto const capResult = graphFlow::photon::runPhotonScattering(device, capped);
     checkTerminalAccounting(capResult, photons);
     CHECK(capResult.capped > 0u);
-    CHECK(countEvent(capResult, Event::transmitted) + countEvent(capResult, Event::reflected)
-              + countEvent(capResult, Event::absorbed)
-          == photons - capResult.capped);
+    CHECK(
+        countEvent(capResult, Event::transmitted) + countEvent(capResult, Event::reflected)
+            + countEvent(capResult, Event::absorbed)
+        == photons - capResult.capped);
     for(auto const& record : capResult.terminal)
     {
         if(record.event == Event::capped)

@@ -45,30 +45,13 @@ TEST_CASE("graph builder assigns stable node ids and exposes topology", "[unit][
     DummyNode second;
     DummyNode sink;
 
-    auto const sourceId = builder.addNode(
-        graphFlow::NodeRole::source,
-        "source",
-        1u,
-        graphFlow::RouteTable{{1u}},
-        source);
-    auto const firstId = builder.addNode(
-        graphFlow::NodeRole::transform,
-        "first",
-        2u,
-        graphFlow::RouteTable{{2u, 2u}},
-        first);
-    auto const secondId = builder.addNode(
-        graphFlow::NodeRole::transform,
-        "second",
-        2u,
-        graphFlow::RouteTable{{3u, 1u}},
-        second);
-    auto const sinkId = builder.addNode(
-        graphFlow::NodeRole::sink,
-        "sink",
-        0u,
-        graphFlow::RouteTable{},
-        sink);
+    auto const sourceId
+        = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+    auto const firstId
+        = builder.addNode(graphFlow::NodeRole::transform, "first", 2u, graphFlow::RouteTable{{2u, 2u}}, first);
+    auto const secondId
+        = builder.addNode(graphFlow::NodeRole::transform, "second", 2u, graphFlow::RouteTable{{3u, 1u}}, second);
+    auto const sinkId = builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
 
     CHECK(sourceId == 0u);
     CHECK(firstId == 1u);
@@ -102,12 +85,8 @@ TEST_CASE("a built graph is an immutable snapshot", "[unit][graph][builder]")
     DummyNode source;
     DummyNode sink;
 
-    auto const sourceId = builder.addNode(
-        graphFlow::NodeRole::source,
-        "source",
-        1u,
-        graphFlow::RouteTable{{1u}},
-        source);
+    auto const sourceId
+        = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
     builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
     builder.setSource(sourceId, 7u);
 
@@ -152,18 +131,10 @@ TEST_CASE("graph builder validates the configured source", "[unit][graph][builde
     DummyNode transform;
     DummyNode sink;
 
-    auto const sourceId = builder.addNode(
-        graphFlow::NodeRole::source,
-        "source",
-        1u,
-        graphFlow::RouteTable{{1u}},
-        source);
-    auto const transformId = builder.addNode(
-        graphFlow::NodeRole::transform,
-        "transform",
-        1u,
-        graphFlow::RouteTable{{2u}},
-        transform);
+    auto const sourceId
+        = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+    auto const transformId
+        = builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{2u}}, transform);
     builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
 
     CHECK_THROWS_AS(builder.setSource(transformId, 1u), std::invalid_argument);
@@ -178,24 +149,15 @@ TEST_CASE("graph builder rejects missing or ambiguous source", "[unit][graph][bu
     {
         graphFlow::GraphBuilder<Device> builder;
         DummyNode transform;
-        builder.addNode(
-            graphFlow::NodeRole::transform,
-            "transform",
-            1u,
-            graphFlow::RouteTable{{0u}},
-            transform);
+        builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{0u}}, transform);
         CHECK_THROWS_AS(builder.build(), std::logic_error); // no source
     }
     {
         graphFlow::GraphBuilder<Device> builder;
         DummyNode source;
         DummyNode sink;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{1u}},
-            source);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         CHECK_THROWS_AS(builder.build(), std::logic_error); // setSource() missing
         builder.setSource(sourceId, 0u);
@@ -206,18 +168,9 @@ TEST_CASE("graph builder rejects missing or ambiguous source", "[unit][graph][bu
         DummyNode source;
         DummyNode secondSource;
         DummyNode sink;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{3u}},
-            source);
-        builder.addNode(
-            graphFlow::NodeRole::source,
-            "second-source",
-            1u,
-            graphFlow::RouteTable{{3u}},
-            secondSource);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{3u}}, source);
+        builder.addNode(graphFlow::NodeRole::source, "second-source", 1u, graphFlow::RouteTable{{3u}}, secondSource);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::logic_error); // two source nodes
@@ -230,12 +183,8 @@ TEST_CASE("graph builder rejects invalid route destinations", "[unit][graph][bui
         graphFlow::GraphBuilder<Device> builder;
         DummyNode source;
         DummyNode sink;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{3u}},
-            source);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{3u}}, source);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::invalid_argument); // destination out of range
@@ -245,12 +194,8 @@ TEST_CASE("graph builder rejects invalid route destinations", "[unit][graph][bui
         DummyNode source;
         DummyNode transform;
         DummyNode sink;
-        auto const sourceId = builder.addNode(
-            graphFlow::NodeRole::source,
-            "source",
-            1u,
-            graphFlow::RouteTable{{1u}},
-            source);
+        auto const sourceId
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
         builder.addNode(
             graphFlow::NodeRole::transform,
             "transform",
@@ -273,18 +218,9 @@ TEST_CASE("graph attaches to a fresh runner through the existing hooks path", "[
     DummyNode sink;
 
     graphFlow::GraphBuilder<Device> builder;
-    auto const sourceId = builder.addNode(
-        graphFlow::NodeRole::source,
-        "source",
-        1u,
-        graphFlow::RouteTable{{1u}},
-        source);
-    builder.addNode(
-        graphFlow::NodeRole::transform,
-        "transform",
-        1u,
-        graphFlow::RouteTable{{2u}},
-        transform);
+    auto const sourceId
+        = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+    builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{2u}}, transform);
     builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
     builder.setSource(sourceId, 0u, 0u);
     auto const graph = builder.build();

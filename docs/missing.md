@@ -190,11 +190,10 @@ resource or decision is missing.
   or HIP runtime gate on a device host. The workflow uses no self-hosted runner.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
   (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
-  (T14b) and the CI gate that fails on a diff remain open; T14b is CPU-only
-  work.
+  (T14b) is complete, and the hosted `format` job fails on any diff.
 - [x] **P0: REUSE compliance.** The REUSE foundation is in main (PR #5 / T14a):
-  `LICENSES/MPL-2.0.txt` and `.reuse/dep5` are present. The tree-wide SPDX sweep
-  (T14b) remains open; hosted CI runs `reuse lint`. T14b is CPU-only work.
+  `LICENSES/MPL-2.0.txt` and `.reuse/dep5` are present. The tree is compliant,
+  and hosted CI runs `reuse lint`.
 - [x] **P1: add the plan to the repository.** Done: `docs/plan.md` is in main
   with an SPDX header.
 - [x] **P1: complete the documentation set.** `docs/build.md` (exact pins,
@@ -340,7 +339,8 @@ These are not missing work; the plan excludes them from v1:
   results are not yet recorded; the CPU CTest pass does not include a sanitizer
   run.
 - [ ] Format, REUSE, docs, and the API map are complete and green. T14b
-  (tree-wide format and SPDX sweep) is CPU-only work and remains open.
+  (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
+  format gate.
 - [ ] The repository is public or explicitly kept private, with branch
   protection and CI configured.
 - [ ] An independent review confirms the final integrated state and the

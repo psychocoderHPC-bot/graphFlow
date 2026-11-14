@@ -4,7 +4,6 @@
 
 #include "Cli.hpp"
 #include "ParticleFeedback.hpp"
-
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/detail/QueueProbe.hpp"
 
@@ -41,16 +40,11 @@ namespace
 
         std::cout << "# graphFlow_particle_feedback backend=" << graphFlow::backendName(backend)
                   << " device=" << parameters.deviceIndex << " device-name=" << deviceName
-                  << " particles=" << parameters.numParticles
-                  << " chunk-size=" << parameters.chunkSize
-                  << " live-particles=" << result.liveParticles
-                  << " tile-size=" << parameters.tileSize
-                  << " batch-chunks=" << parameters.batchChunks
-                  << " frame-cap=" << parameters.frameCap
-                  << " seed=" << parameters.seed
-                  << " max-visits=" << parameters.maxVisits << '\n';
-        std::cout << "# pool-chunks=" << result.stats.poolChunks
-                  << " peak-live-chunks=" << result.stats.peakLiveChunks
+                  << " particles=" << parameters.numParticles << " chunk-size=" << parameters.chunkSize
+                  << " live-particles=" << result.liveParticles << " tile-size=" << parameters.tileSize
+                  << " batch-chunks=" << parameters.batchChunks << " frame-cap=" << parameters.frameCap
+                  << " seed=" << parameters.seed << " max-visits=" << parameters.maxVisits << '\n';
+        std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';
         std::cout << "# weight,count\n";
         printHistogram(result, parameters.numParticles);
@@ -100,14 +94,12 @@ int main(int argc, char** argv)
                 graphFlow::cli::ResolvedOptions const resolved
                     = graphFlow::cli::resolveOptions(options, device.getDeviceProperties());
                 std::cout << "# selected-backend=" << graphFlow::backendName(selected)
-                          << " selected-device=" << options.deviceIndex
-                          << " device-name=" << deviceName << '\n';
+                          << " selected-device=" << options.deviceIndex << " device-name=" << deviceName << '\n';
                 std::cout << "# policy " << resolved.policy.description << '\n';
                 graphFlow::QueueProbeResult const probe = graphFlow::probeQueueIndependence(device);
                 std::cout << "# queue-probe overlap=" << graphFlow::toString(probe.overlap)
                           << " queues-alias=" << (probe.queuesAlias ? "yes" : "no")
-                          << " second-before-first="
-                          << (probe.secondCompletedWhileFirstInFlight ? "yes" : "no")
+                          << " second-before-first=" << (probe.secondCompletedWhileFirstInFlight ? "yes" : "no")
                           << " poll-us=" << probe.pollDurationUs << '\n';
                 return run(resolved, selected, device, deviceName);
             });

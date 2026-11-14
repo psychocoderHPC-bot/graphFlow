@@ -25,6 +25,7 @@ self-hosted runners, no project GPU labels, and no GitLab pipeline.
 | `cuda-compile` | `ubuntu-latest` | `nvidia/cuda:12.6.3-devel-ubuntu24.04` | CUDA | Release, `sm_70` | no, compile only |
 | `hip-compile` | `ubuntu-latest` | `rocm/dev-ubuntu-24.04:7.2` | HIP | Release, `gfx90a` | no, compile only |
 | `reuse` | `ubuntu-latest` | none | none | none | `reuse lint` |
+| `format` | `ubuntu-latest` | none | none | none | `clang-format --dry-run --Werror` |
 | `icpx-cpu` | `ubuntu-latest` | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` | CPU | Release | manual dispatch only |
 
 The CPU and sanitizer jobs install `cmake`, `ninja-build`, `g++`, and `catch2`
@@ -39,7 +40,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, Release and Debug | 202 | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 202 | the hosted `sanitizers` job |
 | CUDA `sm_70` | 254 | `rosi_v100` device run; the hosted job compiles only |
-| HIP `gfx1100` | 238 (43 HIP cases) | `hal` device run; the hosted job compiles only |
+| HIP `gfx1100` | 245 (45 HIP cases) | `hal` device run; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
@@ -48,6 +49,11 @@ default suite. The CUDA and HIP counts are device-run totals, not hosted CTest
 results: the hosted `cuda-compile` and `hip-compile` jobs produce no CTest
 result. The HIP runtime total is the recorded `hal` run; see
 [HIP compile-only](#hip-compile-only).
+
+T14b re-ran all three suites on the formatted tree: CPU Release 202/202 on
+`rosi_v100`, CUDA `sm_70` 254/254 on `rosi_v100`, and HIP `gfx1100` 245/245 on
+`hal`. The format sweep changed whitespace, line breaks, include and `using`
+order, and configured numeric separators only.
 
 ## Pins
 
@@ -61,6 +67,7 @@ result. The HIP runtime total is the recorded `hal` run; see
 | CUDA | 12.6.3 | `nvidia/cuda:12.6.3-devel-ubuntu24.04` |
 | ROCm | 7.2 | `rocm/dev-ubuntu-24.04:7.2` |
 | oneAPI | 2025.3 | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` |
+| clang-format | 20.1.8 | `pip install clang-format==20.1.8` |
 | REUSE | 6.3.0 | `pip install reuse==6.3.0` |
 
 The checkout step verifies that the cloned alpaka `HEAD` equals the pin before
@@ -165,11 +172,11 @@ to the HIP build. The hosted runner has no AMD GPU, so the job stops after the
 build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
-(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 238/238 with 43 HIP cases
-(8 typed Flow, 24 particle CLI, 10 photon CLI, and 1 photon output case), with
-`rocprof` kernel evidence. `hal` reports `sharing=unknown`, so this is a
-correctness result and not a performance claim. The GitHub-hosted job makes no
-HIP runtime claim.
+(`gfx1100`) and ROCm 7.2, the HIP CTest run passes 245/245 with 45 HIP cases
+(8 typed Flow, 24 particle CLI, 12 photon CLI, and 1 photon output case). An
+earlier run captured `rocprof` kernel evidence. `hal` reports
+`sharing=unknown`, so this is a correctness result and not a performance claim.
+The GitHub-hosted job makes no HIP runtime claim.
 
 ## REUSE
 
@@ -191,13 +198,28 @@ Intel's host compiler in a oneAPI container. It runs only when a maintainer
 starts `workflow_dispatch` with `run_icpx` enabled; it is not part of the
 push/PR gate.
 
-## Format is pending T14b
+## Format
 
-The workflow has no format job. `.clang-format` and the SPDX/REUSE foundation
-are in `main`, but the tree-wide format and SPDX sweep (T14b) is still open.
-Wiring `clang-format --dry-run --Werror` now would fail on the current tree.
-Add the format job after T14b lands, and keep it non-required until the first
-clean run.
+The tree is formatted with clang-format 20.1.8 and the repository
+`.clang-format`. The `format` job checks tracked `.cpp` and `.hpp` files under
+`include/`, `examples/`, and `tests/`:
+
+```sh
+python -m pip install --upgrade pip clang-format==20.1.8
+mapfile -t files < <(
+  git ls-files 'include/**/*.cpp' 'include/**/*.hpp' \
+    'examples/**/*.cpp' 'examples/**/*.hpp' \
+    'tests/**/*.cpp' 'tests/**/*.hpp'
+)
+clang-format --dry-run --Werror "${files[@]}"
+```
+
+The job fails on any diff and asserts the installed version string, so a newer
+or older clang-format cannot silently change the result. The T14b sweep applied
+this configuration to the tree; `main` is clean for the file list above.
+Formatting is mechanical: it changes whitespace, line breaks, include and
+`using` order, and numeric separators as configured by `.clang-format`. It does
+not change program behavior.
 
 ## Not included
 

@@ -40,7 +40,7 @@ namespace
 
         // The sentinel would survive any particle that never reached the sink.
         for(std::uint32_t const weight : result.weights)
-            CHECK(weight != 0xDEADBEEFu);
+            CHECK(weight != 0xDEAD'BEEFu);
     }
 } // namespace
 

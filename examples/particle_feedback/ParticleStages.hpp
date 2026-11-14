@@ -590,11 +590,7 @@ namespace graphFlow::particle
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
             std::uint64_t const particles = static_cast<std::uint64_t>(capacity) * batchChunks;
-            return checkedOutputChunkBound(
-                particles,
-                capacity,
-                maxBins,
-                "graphFlow: batch output-chunk bound");
+            return checkedOutputChunkBound(particles, capacity, maxBins, "graphFlow: batch output-chunk bound");
         }
 
         void planAndScatter(Queue const& queue, Batch const& batch, std::uint32_t& allocated)

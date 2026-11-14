@@ -92,9 +92,8 @@ namespace
         std::uint64_t const reserve = graphFlow::outputChunkBound(capacity, capacity, Bin64Policy::maxBins);
         // With a bounded P the pool only needs P data chunks plus this graph's single transform
         // reserve; without P the historical generous sizing applies.
-        std::uint64_t const poolChunks = liveParticles == 0u
-                                             ? particles / capacity + 2u * reserve + 8u + 2u
-                                             : static_cast<std::uint64_t>(liveParticles) + reserve;
+        std::uint64_t const poolChunks = liveParticles == 0u ? particles / capacity + 2u * reserve + 8u + 2u
+                                                             : static_cast<std::uint64_t>(liveParticles) + reserve;
         auto const numChunks = static_cast<std::uint32_t>(poolChunks);
 
         graphFlow::ChunkPool pool{device, numChunks, capacity};
@@ -126,7 +125,7 @@ namespace
             graphFlow::particle::hooksOf<Device>(transform));
         runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
         runner.setSource(source, particles, liveParticles);
-        runner.setStallTimeout(std::chrono::milliseconds{10'000});
+        runner.setStallTimeout(std::chrono::milliseconds{10000});
         auto const stats = runner.run();
 
         Dense64Outcome outcome;
@@ -203,6 +202,7 @@ TEST_CASE("dense pipeline tiles a chunk larger than T", "[integration][dense]")
         std::uint64_t particles;
         std::uint32_t capacity;
     };
+
     for(Case const& testCase : {Case{1024u, 1024u}, Case{1000u, 1000u}})
     {
         CAPTURE(testCase.particles, testCase.capacity);
@@ -213,9 +213,7 @@ TEST_CASE("dense pipeline tiles a chunk larger than T", "[integration][dense]")
         std::vector<std::uint32_t> host = outcome.weights;
         std::sort(host.begin(), host.end());
         CHECK(host == expected); // multiset equality, independent of tile order
-        CHECK(
-            graphFlow::particle::histogramOf(outcome.weights)
-            == graphFlow::particle::histogramOf(expected));
+        CHECK(graphFlow::particle::histogramOf(outcome.weights) == graphFlow::particle::histogramOf(expected));
     }
 }
 

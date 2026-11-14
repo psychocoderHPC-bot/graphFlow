@@ -117,7 +117,7 @@ The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
 the particle and photon CLI/output cases for the HIP backend. It passes
-238/238 with 43 HIP cases.
+245/245 with 45 HIP cases.
 
 ```sh
 export ROCM_PATH=/opt/rocm
@@ -208,9 +208,20 @@ passes the TSAN startup check.
 
 The tree contains `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
 `LICENSES/MPL-2.0.txt`. Run `reuse lint` with reuse 6.3.0 to check the license
-metadata. A format check needs clang-format 20.1.8 and the project
-`.clang-format`; the exact file list is a CI policy decision. The `reuse` job
-runs `reuse lint`; a format job stays out of the workflow until T14b lands.
+metadata. The format policy covers tracked `.cpp` and `.hpp` files under
+`include/`, `examples/`, and `tests/`; check it with clang-format 20.1.8:
+
+```sh
+mapfile -t files < <(
+  git ls-files 'include/**/*.cpp' 'include/**/*.hpp' \
+    'examples/**/*.cpp' 'examples/**/*.hpp' \
+    'tests/**/*.cpp' 'tests/**/*.hpp'
+)
+clang-format --dry-run --Werror "${files[@]}"
+```
+
+The hosted `format` job runs the same command, and `reuse` runs `reuse lint`;
+see [CI](ci.md).
 
 ## CI on hosted runners
 
@@ -225,7 +236,8 @@ CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
 The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passed
-**238/238** with 43 HIP cases. The `sm_75` CUDA build still fails with the
+**245/245** with 45 HIP cases. The `sm_75` CUDA build still fails with the
 CUDA 12.5 nvcc internal compiler error (`docs/known-limitations.md`). Format
-and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, and
-the `sanitizers` job runs ASAN+UBSAN over the CPU suite.
+and REUSE metadata are present; the hosted `reuse` job checks `reuse lint`, the
+`format` job checks clang-format, and the `sanitizers` job runs ASAN+UBSAN over
+the CPU suite.

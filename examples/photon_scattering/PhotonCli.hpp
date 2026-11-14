@@ -5,7 +5,6 @@
 #pragma once
 
 #include "PhotonTypes.hpp"
-
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
@@ -84,8 +83,7 @@ namespace graphFlow::photon::cli
         }
         catch(std::exception const& error)
         {
-            throw std::invalid_argument{
-                std::string{flag} + ": invalid value '" + value + "' (" + error.what() + ")"};
+            throw std::invalid_argument{std::string{flag} + ": invalid value '" + value + "' (" + error.what() + ")"};
         }
     }
 
@@ -113,8 +111,7 @@ namespace graphFlow::photon::cli
         }
         catch(std::exception const& error)
         {
-            throw std::invalid_argument{
-                std::string{flag} + ": invalid value '" + value + "' (" + error.what() + ")"};
+            throw std::invalid_argument{std::string{flag} + ": invalid value '" + value + "' (" + error.what() + ")"};
         }
     }
 
@@ -195,11 +192,7 @@ namespace graphFlow::photon::cli
 
         // The generic payload storage charges sizeof(Photon) per slot, not the particle SoA size.
         policyConfig.slotBytes = sizeof(graphFlow::photon::Photon);
-        resolved.policy = graphFlow::makeDevicePolicy(
-            properties,
-            options.numPhotons,
-            overrides,
-            policyConfig);
+        resolved.policy = graphFlow::makeDevicePolicy(properties, options.numPhotons, overrides, policyConfig);
         resolved.liveParticlesExplicit = resolved.policy.liveParticlesExplicit;
 
         resolved.parameters.numPhotons = options.numPhotons;

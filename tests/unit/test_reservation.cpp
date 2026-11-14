@@ -203,21 +203,16 @@ TEST_CASE("hash reserve covers Q=1/2/8 and partial batches", "[reservation][hash
                 for(std::uint32_t bin = 0u; bin < maxBins && remaining != 0u; ++bin, --remaining)
                     totals[bin] = 1u;
                 CHECK(exactChunkCount(totals, capacity) <= bound);
-                CHECK(
-                    graphFlow::planDenseBins(totals, capacity).numOutputChunks
-                    == exactChunkCount(totals, capacity));
+                CHECK(graphFlow::planDenseBins(totals, capacity).numOutputChunks == exactChunkCount(totals, capacity));
 
                 // A bin just over C forces a second chunk while the rest stays fragmented.
                 std::fill(totals.begin(), totals.end(), 0u);
-                std::uint32_t const head
-                    = static_cast<std::uint32_t>(std::min<std::uint64_t>(n, capacity + 1u));
+                std::uint32_t const head = static_cast<std::uint32_t>(std::min<std::uint64_t>(n, capacity + 1u));
                 totals[0] = head;
                 if(n > head)
                     totals[1] = static_cast<std::uint32_t>(n - head);
                 CHECK(exactChunkCount(totals, capacity) <= bound);
-                CHECK(
-                    graphFlow::planDenseBins(totals, capacity).numOutputChunks
-                    == exactChunkCount(totals, capacity));
+                CHECK(graphFlow::planDenseBins(totals, capacity).numOutputChunks == exactChunkCount(totals, capacity));
             }
         }
     }
@@ -228,10 +223,6 @@ TEST_CASE("checked output credit reports 32-bit overflow", "[reservation]")
     std::uint64_t const over32 = std::uint64_t{std::numeric_limits<std::uint32_t>::max()} + 10u;
     CHECK_THROWS_AS(checkedOutputChunkBound(over32, 1u, 1u, "test"), std::overflow_error);
     CHECK_THROWS_AS(
-        checkedOutputChunkBound(
-            std::numeric_limits<std::uint64_t>::max(),
-            1u,
-            2u,
-            "test"),
+        checkedOutputChunkBound(std::numeric_limits<std::uint64_t>::max(), 1u, 2u, "test"),
         std::overflow_error);
 }

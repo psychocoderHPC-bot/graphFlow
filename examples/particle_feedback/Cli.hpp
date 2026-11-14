@@ -5,11 +5,10 @@
 #pragma once
 
 #include "ParticleTypes.hpp"
-
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/core/Config.hpp"
-#include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
+#include "graphFlow/core/LaunchPolicy.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -35,10 +34,10 @@ namespace graphFlow::cli
         bool help = false;
         std::string backend = "cpu";
         std::uint64_t numParticles = 0u;
-        std::optional<std::uint32_t> chunkSize;     // C, absent means policy
+        std::optional<std::uint32_t> chunkSize; // C, absent means policy
         std::optional<std::uint32_t> liveParticles; // P, absent means policy
-        std::optional<std::uint32_t> tileSize;      // T, absent means policy
-        std::uint32_t batchChunks = 1u;             // Q
+        std::optional<std::uint32_t> tileSize; // T, absent means policy
+        std::uint32_t batchChunks = 1u; // Q
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;

@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+#include "HookAdapters.hpp"
 #include "ParticleFeedback.hpp"
 #include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
-#include "HookAdapters.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/graph/Classifier.hpp"
@@ -122,8 +122,7 @@ namespace
     using IdRange = std::pair<std::uint64_t, std::uint32_t>; // (firstId, fill)
 
     /** Per-bin particle totals of one batch, from the id ranges its chunks cover. */
-    std::array<std::uint64_t, QuarterPolicy::maxBins> binTotals(
-        std::vector<IdRange> const& ranges)
+    std::array<std::uint64_t, QuarterPolicy::maxBins> binTotals(std::vector<IdRange> const& ranges)
     {
         std::array<std::uint64_t, QuarterPolicy::maxBins> totals{};
         for(IdRange const& range : ranges)
@@ -135,9 +134,7 @@ namespace
     }
 
     /** Plan the exact per-bin output fills of one batch. */
-    std::vector<FillLevel> expectedFills(
-        std::vector<IdRange> const& ranges,
-        std::uint32_t capacity)
+    std::vector<FillLevel> expectedFills(std::vector<IdRange> const& ranges, std::uint32_t capacity)
     {
         std::array<std::uint64_t, QuarterPolicy::maxBins> const totals = binTotals(ranges);
         std::vector<FillLevel> fills;
@@ -191,10 +188,7 @@ namespace
      * one classify stage, one scatter stage, then `finish`. Explicit `fills` allow partial chunks
      * and chunk sizes that are not a multiple of the tile width.
      */
-    DirectOutcome runDirect(
-        std::uint32_t capacity,
-        std::uint32_t batchChunks,
-        std::vector<std::uint32_t> const& fills)
+    DirectOutcome runDirect(std::uint32_t capacity, std::uint32_t batchChunks, std::vector<std::uint32_t> const& fills)
     {
         auto device = graphFlow::test::makeCpuDevice();
         using Device = ALPAKA_TYPEOF(device);
@@ -206,10 +200,8 @@ namespace
         // Inputs stay live and every batch's outputs stay live too, so this test-only pool holds
         // both. It is not the production pool bound; the direct driver never releases outputs.
         std::uint64_t const batchCount = (numChunks + batchChunks - 1u) / batchChunks;
-        std::uint64_t const maxOutputsPerBatch = outputChunkBound(
-            static_cast<std::uint64_t>(batchChunks) * capacity,
-            capacity,
-            QuarterPolicy::maxBins);
+        std::uint64_t const maxOutputsPerBatch
+            = outputChunkBound(static_cast<std::uint64_t>(batchChunks) * capacity, capacity, QuarterPolicy::maxBins);
         std::uint64_t const poolChunks = numChunks + batchCount * maxOutputsPerBatch + 8u;
         REQUIRE(poolChunks <= std::numeric_limits<std::uint32_t>::max());
         graphFlow::ChunkPool<Device> pool{device, static_cast<std::uint32_t>(poolChunks), capacity};
@@ -234,13 +226,8 @@ namespace
         }
         alpaka::onHost::wait(initQueue);
 
-        graphFlow::particle::TransformStage<Device, QuarterPolicy> stage{
-            device,
-            pool,
-            QuarterPolicy{},
-            capped,
-            128u,
-            batchChunks};
+        graphFlow::particle::TransformStage<Device, QuarterPolicy>
+            stage{device, pool, QuarterPolicy{}, capped, 128u, batchChunks};
         auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
 
         DirectOutcome outcome;
@@ -346,25 +333,15 @@ namespace
         auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
         {
             auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
-            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEADBEEFu});
+            alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEAD'BEEFu});
             alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
         }
 
         graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
-        graphFlow::particle::TransformStage<Device, Mod8Policy> split{
-            device,
-            pool,
-            Mod8Policy{},
-            capped,
-            128u,
-            batchChunks};
-        graphFlow::particle::TransformStage<Device, Mod8Policy> join{
-            device,
-            pool,
-            Mod8Policy{},
-            capped,
-            128u,
-            batchChunks};
+        graphFlow::particle::TransformStage<Device, Mod8Policy>
+            split{device, pool, Mod8Policy{}, capped, 128u, batchChunks};
+        graphFlow::particle::TransformStage<Device, Mod8Policy>
+            join{device, pool, Mod8Policy{}, capped, 128u, batchChunks};
         graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
         PipelineOutcome outcome;
@@ -401,7 +378,7 @@ namespace
         runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(sinkHooks));
         runner.setSource(source, numParticles, liveParticles);
         runner.setBatchChunks(batchChunks);
-        runner.setStallTimeout(std::chrono::milliseconds{20'000});
+        runner.setStallTimeout(std::chrono::milliseconds{20000});
         runner.run();
 
         outcome.joinBatches = runner.nodeCompleted(joinNode);
@@ -451,8 +428,7 @@ TEST_CASE("batched transform plans exact batch-wide output fills", "[integration
             // A single-chunk batch cannot cross an output chunk boundary; batched ones must.
             CHECK(crossed == (batchChunks > 1u));
 
-            std::vector<graphFlow::particle::HistogramRow> const histogram
-                = checkDirectOutcome(outcome, particles);
+            std::vector<graphFlow::particle::HistogramRow> const histogram = checkDirectOutcome(outcome, particles);
             if(reference.empty())
                 reference = histogram;
             else
@@ -494,14 +470,16 @@ TEST_CASE("scheduler batches ready chunks with one classify and one scatter laun
         for(std::size_t id = 0u; id < host.size(); ++id)
             REQUIRE(host[id] == static_cast<std::uint32_t>(id % Mod8Policy::maxBins));
         std::sort(host.begin(), host.end());
-        CHECK(host == [&]
-        {
-            std::vector<std::uint32_t> expected(static_cast<std::size_t>(particles));
-            for(std::size_t id = 0u; id < expected.size(); ++id)
-                expected[id] = static_cast<std::uint32_t>(id % Mod8Policy::maxBins);
-            std::sort(expected.begin(), expected.end());
-            return expected;
-        }());
+        CHECK(
+            host ==
+            [&]
+            {
+                std::vector<std::uint32_t> expected(static_cast<std::size_t>(particles));
+                for(std::size_t id = 0u; id < expected.size(); ++id)
+                    expected[id] = static_cast<std::uint32_t>(id % Mod8Policy::maxBins);
+                std::sort(expected.begin(), expected.end());
+                return expected;
+            }());
     }
 }
 
@@ -523,8 +501,7 @@ TEST_CASE("batched transform handles partial chunks and non-aligned tile tails",
         REQUIRE(outcome.classifyLaunches == outcome.batches.size());
         REQUIRE(outcome.scatterLaunches == outcome.batches.size());
         CHECK(
-            outcome.maxBatchChunks
-            == std::min<std::uint32_t>(batchChunks, static_cast<std::uint32_t>(fills.size())));
+            outcome.maxBatchChunks == std::min<std::uint32_t>(batchChunks, static_cast<std::uint32_t>(fills.size())));
 
         bool crossed = false;
         for(DrivenBatch const& batch : outcome.batches)
@@ -535,8 +512,7 @@ TEST_CASE("batched transform handles partial chunks and non-aligned tile tails",
         }
         CHECK(crossed);
 
-        std::vector<graphFlow::particle::HistogramRow> const histogram
-            = checkDirectOutcome(outcome, particles);
+        std::vector<graphFlow::particle::HistogramRow> const histogram = checkDirectOutcome(outcome, particles);
         if(reference.empty())
             reference = histogram;
         else
@@ -553,12 +529,11 @@ TEST_CASE("bounded P dispatches a Q=8 batch inside S=P+K*R(C)", "[integration][b
     constexpr std::uint32_t batchChunks = 8u;
     constexpr std::uint64_t particles = 1024u;
     constexpr std::uint32_t liveParticles = 1024u;
-    std::uint32_t const perTransform = static_cast<std::uint32_t>(
-        outputChunkBound(capacity, capacity, Mod8Policy::maxBins));
+    std::uint32_t const perTransform
+        = static_cast<std::uint32_t>(outputChunkBound(capacity, capacity, Mod8Policy::maxBins));
     std::uint32_t const poolChunks = liveParticles + 2u * perTransform;
 
-    PipelineOutcome const outcome
-        = runPipeline(capacity, batchChunks, particles, liveParticles, poolChunks);
+    PipelineOutcome const outcome = runPipeline(capacity, batchChunks, particles, liveParticles, poolChunks);
 
     CHECK(outcome.poolChunks == poolChunks);
     CHECK(outcome.joinBatches != 0u);
@@ -584,8 +559,7 @@ TEST_CASE("credit pressure shrinks a Q=8 batch to the largest fitting prefix", "
     constexpr std::uint32_t liveParticles = 8u;
     constexpr std::uint32_t tightPool = 12u; // below S = P + K*R(C); test-only credit pressure
 
-    PipelineOutcome const outcome
-        = runPipeline(capacity, batchChunks, particles, liveParticles, tightPool);
+    PipelineOutcome const outcome = runPipeline(capacity, batchChunks, particles, liveParticles, tightPool);
 
     CHECK(outcome.poolChunks == tightPool);
     CHECK(outcome.joinMaxBatchChunks == 4u);
@@ -612,8 +586,7 @@ TEST_CASE("single-chunk pool bound completes N much larger than P with Q=8", "[i
     parameters.maxVisits = 64u;
     parameters.batchChunks = 8u;
 
-    graphFlow::particle::FeedbackResult const result
-        = graphFlow::particle::runParticleFeedback(device, parameters);
+    graphFlow::particle::FeedbackResult const result = graphFlow::particle::runParticleFeedback(device, parameters);
     graphFlow::test::ScalarOutcome const reference
         = graphFlow::test::runScalarModel(parameters.seed, parameters.numParticles, parameters.maxVisits);
     CHECK(result.histogram == graphFlow::particle::histogramOf(reference.weights));

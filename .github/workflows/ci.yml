@@ -257,6 +257,36 @@ jobs:
       - name: Lint license metadata
         run: reuse lint
 
+  format:
+    name: clang-format (20.1.8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out graphFlow
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install clang-format
+        run: python -m pip install --upgrade pip clang-format==20.1.8
+
+      # The format policy covers tracked C++ headers and sources under
+      # include/, examples/, and tests/. Everything else is out of scope.
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(
+            git ls-files 'include/**/*.cpp' 'include/**/*.hpp' \
+              'examples/**/*.cpp' 'examples/**/*.hpp' \
+              'tests/**/*.cpp' 'tests/**/*.hpp'
+          )
+          test "${#files[@]}" -gt 0
+          test "$(clang-format --version)" = "clang-format version 20.1.8"
+          clang-format --dry-run --Werror "${files[@]}"
+
   # Optional and manual only. graphFlow has no SYCL backend, so this job does
   # not enable one: it builds and tests the CPU backend with Intel's host
   # compiler. It is not part of the push/PR gate.

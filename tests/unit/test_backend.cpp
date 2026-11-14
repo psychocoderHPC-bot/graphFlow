@@ -3,7 +3,6 @@
  */
 
 #include "TestDevice.hpp"
-
 #include "graphFlow/core/Backend.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
@@ -52,9 +51,7 @@ TEST_CASE("unknown backend names are rejected", "[backend]")
     using namespace graphFlow;
 
     CHECK_THROWS_AS(requireBackend("tpu"), BackendError);
-    CHECK_THROWS_WITH(
-        requireBackend("tpu"),
-        Catch::Matchers::ContainsSubstring("unknown backend 'tpu'"));
+    CHECK_THROWS_WITH(requireBackend("tpu"), Catch::Matchers::ContainsSubstring("unknown backend 'tpu'"));
 }
 
 TEST_CASE("uncompiled backends report the matching CMake option", "[backend]")
@@ -93,15 +90,13 @@ TEST_CASE("queue independence probe runs on the CPU backend", "[backend][queue]"
     using namespace graphFlow;
 
     auto device = test::makeCpuDevice();
-    QueueProbeResult const result
-        = probeQueueIndependence(device, 20'000'000u, std::chrono::milliseconds{10'000});
+    QueueProbeResult const result = probeQueueIndependence(device, 20'000'000u, std::chrono::milliseconds{10000});
 
     // Reporting is part of the contract: the caller records the overlap verdict.
     std::cout << "# queue-probe overlap=" << toString(result.overlap)
               << " queues-alias=" << (result.queuesAlias ? "yes" : "no")
               << " second-before-first=" << (result.secondCompletedWhileFirstInFlight ? "yes" : "no")
-              << " delay-iterations=" << result.delayIterations
-              << " poll-us=" << result.pollDurationUs << '\n';
+              << " delay-iterations=" << result.delayIterations << " poll-us=" << result.pollDurationUs << '\n';
 
     CHECK(result.delayIterations == 20'000'000u);
     CHECK(result.overlap != QueueOverlap::unknown);
@@ -115,8 +110,8 @@ namespace
     /** Policy memory invariant: the payload of the live-particle working set fits the budget. */
     bool policyFitsPayloadBudget(graphFlow::DevicePolicy const& policy)
     {
-        std::uint64_t const bytes = std::uint64_t{policy.liveParticles} * policy.chunkCapacity
-                                    * graphFlow::payloadBytesPerParticle;
+        std::uint64_t const bytes
+            = std::uint64_t{policy.liveParticles} * policy.chunkCapacity * graphFlow::payloadBytesPerParticle;
         return bytes <= policy.memoryBudgetBytes;
     }
 } // namespace
@@ -211,7 +206,7 @@ TEST_CASE("device policy derives the budget from the reported device memory", "[
     auto properties = test::makeCpuDevice().getDeviceProperties();
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
-    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
     properties.multiProcessorCount = 108u;
 
     properties.globalMemCapacityBytes = 24ull * 1024ull * 1024ull * 1024ull;
@@ -277,7 +272,7 @@ TEST_CASE("device policy preserves explicit overrides", "[policy]")
     moderate.memoryBudgetBytes = 8ull * 1024ull * 1024ull;
     DevicePolicyOverrides bigChunk;
     bigChunk.chunkCapacity = 8192u;
-    DevicePolicy const squeezed = makeDevicePolicy(properties, 100'000u, bigChunk, moderate);
+    DevicePolicy const squeezed = makeDevicePolicy(properties, 100000u, bigChunk, moderate);
     CHECK(squeezed.chunkCapacity == 8192u);
     CHECK(squeezed.liveParticles <= 8ull * 1024ull * 1024ull / (8192ull * 24ull));
     CHECK(policyFitsPayloadBudget(squeezed));
@@ -335,7 +330,7 @@ TEST_CASE("device policy rejects impossible overrides", "[policy]")
     DevicePolicyOverrides both;
     both.chunkCapacity = 4096u;
     both.liveParticles = 1024u;
-    CHECK_THROWS_AS(makeDevicePolicy(properties, 100'000u, both, smallBudget), std::invalid_argument);
+    CHECK_THROWS_AS(makeDevicePolicy(properties, 100000u, both, smallBudget), std::invalid_argument);
 
     // Explicit C that cannot hold even one live particle.
     DevicePolicyConfig noRoom;

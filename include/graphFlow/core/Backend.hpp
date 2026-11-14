@@ -95,8 +95,7 @@ namespace graphFlow
     {
         auto const parsed = parseBackend(name);
         if(!parsed)
-            throw BackendError{
-                "graphFlow: unknown backend '" + std::string{name} + "' (expected cpu, cuda or hip)"};
+            throw BackendError{"graphFlow: unknown backend '" + std::string{name} + "' (expected cpu, cuda or hip)"};
         return *parsed;
     }
 
@@ -105,13 +104,11 @@ namespace graphFlow
         switch(backend)
         {
         case Backend::cuda:
-            throw BackendUnavailable{
-                "graphFlow: backend 'cuda' is not compiled into this build; reconfigure with "
-                "-DGRAPHFLOW_ENABLE_CUDA=ON and a CUDA toolkit"};
+            throw BackendUnavailable{"graphFlow: backend 'cuda' is not compiled into this build; reconfigure with "
+                                     "-DGRAPHFLOW_ENABLE_CUDA=ON and a CUDA toolkit"};
         case Backend::hip:
-            throw BackendUnavailable{
-                "graphFlow: backend 'hip' is not compiled into this build; reconfigure with "
-                "-DGRAPHFLOW_ENABLE_HIP=ON and a HIP toolkit"};
+            throw BackendUnavailable{"graphFlow: backend 'hip' is not compiled into this build; reconfigure with "
+                                     "-DGRAPHFLOW_ENABLE_HIP=ON and a HIP toolkit"};
         case Backend::cpu:
             break;
         }
@@ -137,8 +134,7 @@ namespace graphFlow
         std::uint32_t const count = selector.getDeviceCount();
         std::string const label{backendName(backend)};
         if(!selector.isAvailable() || count == 0u)
-            throw BackendUnavailable{
-                "graphFlow: backend '" + label + "' is compiled but no device is available"};
+            throw BackendUnavailable{"graphFlow: backend '" + label + "' is compiled but no device is available"};
         if(deviceIndex >= count)
             throw std::out_of_range{
                 "graphFlow: device " + std::to_string(deviceIndex) + " is out of range for backend '" + label

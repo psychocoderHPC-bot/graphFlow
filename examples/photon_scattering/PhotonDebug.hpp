@@ -5,7 +5,6 @@
 #pragma once
 
 #include "PhotonTypes.hpp"
-
 #include "graphFlow/flow/Debug.hpp"
 
 #include <alpaka/alpaka.hpp>

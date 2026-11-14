@@ -46,9 +46,9 @@ Release has no per-event checks; Debug compiles them in. Host setup validates
 the configuration once, and genuine physics failures stay on the `StatusCode`
 channel in both builds. The five former `[status]` tests that tripped the RNG
 stream-id assertion on Debug builds now pass in both builds.
-The hash-path rerun, CI, and the tree-wide format/SPDX sweep (T14b) remain
-open. CUDA 13.4/`sm_80`, fwk394, and H100 were not re-run in this validation,
-so no claim is updated beyond the recorded `rosi_v100` run.
+The hash-path rerun remains open. CUDA 13.4/`sm_80`, fwk394, and H100 were not
+re-run in this validation, so no claim is updated beyond the recorded
+`rosi_v100` run.
 
 The previously recorded counts, fwk394 CPU 194/194 and hal CUDA 246/246, are
 **historical validation on a shared host** (`hal` reports `sharing=unknown`)
@@ -57,11 +57,10 @@ and are **not the final current validation**.
 H100: the JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run is
 preliminary CUDA evidence only: its gateway sharing flag is unknown and the
 recorded run observed external load while the client was stale, so no final
-H100 claim is made. H100 remains blocked/preliminary. Still open: the
-tree-wide format and SPDX sweep (T14b) is CPU-only work. Hosted CI runs the
-CPU CTest suite and `reuse lint`, with compile-only CUDA and HIP. This docs
-commit records the existing `rosi_v100` and HIP `hal` results; it adds no new
-build or test run.
+H100 claim is made. H100 remains blocked/preliminary. Hosted CI runs the CPU
+CTest suite, `reuse lint`, and the format gate, with compile-only CUDA and HIP.
+This docs commit records the existing `rosi_v100` and HIP `hal` results; it
+adds no new build or test run.
 
 Environment for the historical recorded runs: fwk394 for the CPU host and hal
 for CUDA, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3,
@@ -332,7 +331,7 @@ design without changing the `P` plus registered-node-reserve progress bound.
 
 `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
 `LICENSES/MPL-2.0.txt` are present, so the format/REUSE foundation is in main.
-The tree-wide format and SPDX sweep (T14b) remains open. Hosted CI is
+The tree-wide format sweep (T14b) is complete. Hosted CI is
 `.github/workflows/ci.yml` and is documented in `docs/ci.md`: CPU CTest and
-ASAN+UBSAN run there, CUDA and HIP are compile-only, and `reuse lint` runs. No
-format job is wired in until T14b lands.
+ASAN+UBSAN run there, CUDA and HIP are compile-only, and `reuse lint` and the
+`format` gate run.

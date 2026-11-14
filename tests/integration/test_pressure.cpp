@@ -24,8 +24,7 @@ TEST_CASE("bounded pool completes with N much larger than P", "[integration][pre
     parameters.seed = 42u;
     parameters.maxVisits = 64u;
 
-    graphFlow::particle::FeedbackResult const result
-        = graphFlow::particle::runParticleFeedback(device, parameters);
+    graphFlow::particle::FeedbackResult const result = graphFlow::particle::runParticleFeedback(device, parameters);
 
     // The acceptance contract still holds under the bounded working set.
     graphFlow::test::ScalarOutcome const reference
@@ -62,7 +61,8 @@ namespace
                 recorded = batch.chunk().handle;
                 base.launch(queue, batch);
             },
-            [&, base](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
+            [&,
+             base](typename Runner::Queue const& queue, typename Runner::Batch const& batch, std::uint32_t& allocated)
             {
                 CHECK(pool.isLive(recorded));
                 return base.advance(queue, batch, allocated);
@@ -92,7 +92,7 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
     auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
     {
         auto initQueue = device.makeQueue(alpaka::queueKind::blocking);
-        alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEADBEEFu});
+        alpaka::onHost::fill(initQueue, result, std::uint32_t{0xDEAD'BEEFu});
         alpaka::onHost::memset(initQueue, capped, std::uint8_t{0});
     }
 
@@ -102,12 +102,8 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
 
     graphFlow::particle::GenerateStage<Device> generate{device, pool, parameters.seed, 128u};
     graphFlow::particle::ProcessBPolicy policy{parameters.seed, parameters.maxVisits};
-    graphFlow::particle::TransformStage<Device, graphFlow::particle::ProcessBPolicy> transform{
-        device,
-        pool,
-        policy,
-        capped,
-        128u};
+    graphFlow::particle::TransformStage<Device, graphFlow::particle::ProcessBPolicy>
+        transform{device, pool, policy, capped, 128u};
     graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
 
     graphFlow::ChunkHandle recorded{};
@@ -126,7 +122,7 @@ TEST_CASE("input chunks stay live until their scatter completes", "[integration]
         checkedHooks<Device>(pool, transform, recorded));
     runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
     runner.setSource(source, particles, live);
-    runner.setStallTimeout(std::chrono::milliseconds{10'000});
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
     runner.run();
 
     CHECK(pool.freeCount() == pool.numChunks());

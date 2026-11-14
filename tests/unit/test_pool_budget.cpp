@@ -6,7 +6,6 @@
 #include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
-
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
@@ -32,9 +31,7 @@ TEST_CASE("pool payload bytes are derived from the pool arrays", "[pool][budget]
     CHECK(requiredPayloadBytes(3u, 7u) == std::uint64_t{3u} * 7u * payloadBytesPerSlot);
 
     // Both multiplications are checked; wrapping would silently produce a small "required" size.
-    CHECK_THROWS_AS(
-        requiredPayloadBytes(std::numeric_limits<std::uint64_t>::max(), 2u),
-        std::overflow_error);
+    CHECK_THROWS_AS(requiredPayloadBytes(std::numeric_limits<std::uint64_t>::max(), 2u), std::overflow_error);
     CHECK_THROWS_AS(
         requiredPayloadBytes(std::numeric_limits<std::uint64_t>::max() / payloadBytesPerSlot + 1u, 1u),
         std::overflow_error);
@@ -68,8 +65,7 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
         DevicePolicy const policy = makeDevicePolicy(cpuProperties, numParticles);
         std::uint64_t const chunks
             = particle::derivePoolSize(numParticles, policy.chunkCapacity, policy.liveParticles, particle::FlowBins);
-        std::uint64_t const budget
-            = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
+        std::uint64_t const budget = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
 
         INFO("N=" << numParticles << " C=" << policy.chunkCapacity << " P=" << policy.liveParticles);
         CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) <= budget);
@@ -81,7 +77,7 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
     auto properties = cpuProperties;
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
-    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
     properties.multiProcessorCount = 108u;
     properties.globalMemCapacityBytes = 24ull * 1024ull * 1024ull * 1024ull;
 
@@ -89,13 +85,9 @@ TEST_CASE("policy-derived pool defaults fit the payload budget", "[pool][budget]
     CHECK(policy.chunkCapacity == 8192u);
     CHECK(policy.liveParticles == 16384u);
 
-    std::uint64_t const chunks = particle::derivePoolSize(
-        100'000'000u,
-        policy.chunkCapacity,
-        policy.liveParticles,
-        particle::FlowBins);
-    std::uint64_t const budget
-        = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
+    std::uint64_t const chunks
+        = particle::derivePoolSize(100'000'000u, policy.chunkCapacity, policy.liveParticles, particle::FlowBins);
+    std::uint64_t const budget = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
     CHECK_NOTHROW(validatePayloadBudget(chunks, policy.chunkCapacity, budget));
     // The budget replaces the former ~12.9 GB default with the documented pool default.
     CHECK(requiredPayloadBytes(chunks, policy.chunkCapacity) < defaultPoolPayloadBudgetBytes);
@@ -113,7 +105,7 @@ TEST_CASE("A30 usable memory limits the default P to 16128", "[pool][budget][pol
     auto properties = test::makeCpuDevice().getDeviceProperties();
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
-    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
     properties.multiProcessorCount = 56u; // A30
     properties.globalMemCapacityBytes = usableBytes;
 
@@ -136,9 +128,7 @@ TEST_CASE("A30 usable memory limits the default P to 16128", "[pool][budget][pol
 
     // The former default pair is the exact rejection this clamp fixes.
     CHECK(requiredPayloadBytes(16384u, 8192u) == 3'221'225'472ull);
-    CHECK_THROWS_AS(
-        validatePayloadBudget(16384u, 8192u, policy.memoryBudgetBytes),
-        std::invalid_argument);
+    CHECK_THROWS_AS(validatePayloadBudget(16384u, 8192u, policy.memoryBudgetBytes), std::invalid_argument);
 
     // applyDevicePolicy + derivePoolSize + Config::validate must accept the clamped default.
     Config config;
@@ -153,8 +143,7 @@ TEST_CASE("A30 usable memory limits the default P to 16128", "[pool][budget][pol
     CHECK(requiredPayloadBytes(config.numChunks, config.chunkCapacity) <= config.poolPayloadBudgetBytes);
 
     // The CLI path adds the exact K*R(C) reserve instead of Config::poolOutputReserveChunks.
-    std::uint64_t const cliBudget
-        = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
+    std::uint64_t const cliBudget = particle::poolPayloadBudgetBytes(policy.memoryBudgetBytes, policy.chunkCapacity);
     CHECK_NOTHROW(validatePayloadBudget(config.numChunks, config.chunkCapacity, cliBudget));
 }
 
@@ -165,7 +154,7 @@ TEST_CASE("explicit P over the A30 budget is rejected", "[pool][budget][policy]"
     auto properties = test::makeCpuDevice().getDeviceProperties();
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
-    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
     properties.multiProcessorCount = 56u;
     properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
 
@@ -182,9 +171,7 @@ TEST_CASE("explicit P over the A30 budget is rejected", "[pool][budget][policy]"
     DevicePolicyOverrides overOld;
     overOld.chunkCapacity = 8192u;
     overOld.liveParticles = 65536u;
-    CHECK_THROWS_AS(
-        makeDevicePolicy(properties, 100'000'000u, overOld),
-        std::invalid_argument);
+    CHECK_THROWS_AS(makeDevicePolicy(properties, 100'000'000u, overOld), std::invalid_argument);
 
     // The largest feasible explicit P still passes and builds a valid pool.
     DevicePolicyOverrides fitting;
@@ -215,7 +202,7 @@ TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[po
     auto properties = test::makeCpuDevice().getDeviceProperties();
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
-    properties.maxBlocksPerGrid = 0x7FFFFFFFu;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
     properties.multiProcessorCount = 108u;
     properties.globalMemCapacityBytes = 24ull * 1024ull * 1024ull * 1024ull;
 
@@ -226,15 +213,15 @@ TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[po
     Config config;
     applyDevicePolicy(config, policy);
     config.numParticles = 100'000'000u;
-    config.numChunks
-        = particle::derivePoolSize(config.numParticles, config.chunkCapacity, config.liveParticles, particle::FlowBins);
+    config.numChunks = particle::derivePoolSize(
+        config.numParticles,
+        config.chunkCapacity,
+        config.liveParticles,
+        particle::FlowBins);
     CHECK(config.poolPayloadBudgetBytes >= policy.memoryBudgetBytes);
     CHECK(
         config.poolPayloadBudgetBytes
-        == payloadBudgetWithReserve(
-            policy.memoryBudgetBytes,
-            policy.chunkCapacity,
-            config.poolOutputReserveChunks));
+        == payloadBudgetWithReserve(policy.memoryBudgetBytes, policy.chunkCapacity, config.poolOutputReserveChunks));
     CHECK_NOTHROW(config.validate());
 
     // A default Config that only copies the policy values also fits the documented default.
@@ -242,19 +229,18 @@ TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[po
     direct.chunkCapacity = policy.chunkCapacity;
     direct.liveParticles = policy.liveParticles;
     direct.numParticles = 100'000'000u;
-    direct.numChunks
-        = particle::derivePoolSize(direct.numParticles, direct.chunkCapacity, direct.liveParticles, particle::FlowBins);
+    direct.numChunks = particle::derivePoolSize(
+        direct.numParticles,
+        direct.chunkCapacity,
+        direct.liveParticles,
+        particle::FlowBins);
     CHECK_NOTHROW(direct.validate());
 
     // The former C=8192, P=65536 pair still exceeds the default budget.
     Config old;
     old.chunkCapacity = 8192u;
     old.liveParticles = 65536u;
-    old.numChunks = particle::derivePoolSize(
-        100'000'000u,
-        old.chunkCapacity,
-        old.liveParticles,
-        particle::FlowBins);
+    old.numChunks = particle::derivePoolSize(100'000'000u, old.chunkCapacity, old.liveParticles, particle::FlowBins);
     CHECK_THROWS_AS(old.validate(), std::invalid_argument);
 }
 
@@ -304,8 +290,7 @@ TEST_CASE("pool size keeps S=P+K*R for small P and N >> P", "[pool][budget]")
 
     // N=0 keeps the header-only one-chunk pool and stays inside the default budget.
     CHECK(particle::derivePoolSize(0u, 128u, 0u, particle::FlowBins) == std::uint64_t{1u});
-    CHECK(
-        requiredPayloadBytes(1u, 128u) == std::uint64_t{128u} * payloadBytesPerSlot);
+    CHECK(requiredPayloadBytes(1u, 128u) == std::uint64_t{128u} * payloadBytesPerSlot);
     CHECK_NOTHROW(validatePayloadBudget(1u, 128u, defaultPoolPayloadBudgetBytes));
 }
 
@@ -354,9 +339,7 @@ TEST_CASE("pool budget arithmetic accepts a generic slot size", "[pool][budget][
         Catch::Matchers::ContainsSubstring("96 bytes"));
 
     CHECK(payloadBudgetWithReserve(1024u, 4u, 2u, 96u) == 1024u + std::uint64_t{2u} * 4u * 96u);
-    CHECK(
-        payloadBudgetWithReserve(1024u, 4u)
-        == 1024u + defaultPoolOutputReserveChunks * 4u * payloadBytesPerSlot);
+    CHECK(payloadBudgetWithReserve(1024u, 4u) == 1024u + defaultPoolOutputReserveChunks * 4u * payloadBytesPerSlot);
 }
 
 TEST_CASE("device policy honors the configured slot size", "[pool][budget][policy][slot]")
@@ -428,10 +411,8 @@ TEST_CASE("hash output credits use maxBins and the pool budget rejects an under-
     std::uint64_t const reserve = transformNodes * perTransform;
     std::uint64_t const liveParticles = 256u;
     std::uint64_t const chunks = liveParticles + reserve;
-    std::uint64_t const budget = payloadBudgetWithReserve(
-        requiredPayloadBytes(liveParticles, capacity),
-        capacity,
-        reserve);
+    std::uint64_t const budget
+        = payloadBudgetWithReserve(requiredPayloadBytes(liveParticles, capacity), capacity, reserve);
 
     CHECK_NOTHROW(validatePayloadBudget(chunks, capacity, budget));
     CHECK_THROWS_AS(validatePayloadBudget(chunks, capacity, budget - 1u), std::invalid_argument);
@@ -476,9 +457,7 @@ TEST_CASE("hash transform reserve does not grow with Q", "[pool][budget][hash]")
     std::uint64_t const liveParticles = 1024u;
     std::uint64_t const reserve = 3u * perTransform;
     std::uint64_t const chunks = liveParticles + reserve;
-    std::uint64_t const budget = payloadBudgetWithReserve(
-        requiredPayloadBytes(liveParticles, capacity),
-        capacity,
-        reserve);
+    std::uint64_t const budget
+        = payloadBudgetWithReserve(requiredPayloadBytes(liveParticles, capacity), capacity, reserve);
     CHECK_NOTHROW(validatePayloadBudget(chunks, capacity, budget));
 }

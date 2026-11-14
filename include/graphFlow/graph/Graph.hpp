@@ -125,12 +125,8 @@ namespace graphFlow
                         throw std::overflow_error{"graphFlow: route destination exceeds int range"};
                     route.push_back(static_cast<int>(destination));
                 }
-                std::uint32_t const assigned = runner.addNode(
-                    node.name,
-                    node.role,
-                    node.bins,
-                    std::move(route),
-                    makeNodeHooks(*node.node));
+                std::uint32_t const assigned
+                    = runner.addNode(node.name, node.role, node.bins, std::move(route), makeNodeHooks(*node.node));
                 if(assigned != id)
                     throw std::logic_error{"graphFlow: GraphRunner assigned an unexpected node id"};
             }
@@ -138,11 +134,7 @@ namespace graphFlow
         }
 
     private:
-        Graph(
-            std::vector<NodeSpec> nodes,
-            NodeId source,
-            std::uint64_t numParticles,
-            std::uint32_t liveParticles)
+        Graph(std::vector<NodeSpec> nodes, NodeId source, std::uint64_t numParticles, std::uint32_t liveParticles)
             : m_nodes{std::move(nodes)}
             , m_source{source}
             , m_numParticles{numParticles}

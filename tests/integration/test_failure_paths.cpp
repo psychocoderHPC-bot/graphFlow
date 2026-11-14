@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
-#include "ParticleFeedback.hpp"
 #include "HookAdapters.hpp"
+#include "ParticleFeedback.hpp"
 #include "ParticleStages.hpp"
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
