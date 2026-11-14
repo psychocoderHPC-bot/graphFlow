@@ -114,6 +114,14 @@ if(GRAPHFLOW_BUILD_EXAMPLES)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback
     )
     alpaka_finalize(graphFlow_particle_feedback)
+
+    add_executable(graphFlow_photon_scattering examples/photon_scattering/main.cpp)
+    target_link_libraries(graphFlow_photon_scattering PRIVATE graphFlow::graphFlow)
+    target_include_directories(
+        graphFlow_photon_scattering
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering
+    )
+    alpaka_finalize(graphFlow_photon_scattering)
 endif()
 
 if(GRAPHFLOW_BUILD_TESTS)
@@ -149,6 +157,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
+        tests/integration/test_photon_scattering.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
         target_sources(
@@ -156,6 +165,7 @@ if(GRAPHFLOW_BUILD_TESTS)
             PRIVATE
                 tests/unit/test_cuda_kernel.cpp
                 tests/integration/test_flow_execution_cuda.cpp
+                tests/integration/test_photon_scattering_cuda.cpp
         )
     endif()
     if(GRAPHFLOW_ENABLE_HIP)
@@ -167,6 +177,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         graphFlow_tests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/reference
     )
@@ -242,4 +253,68 @@ if(GRAPHFLOW_BUILD_TESTS)
             endif()
         endforeach()
     endforeach()
+
+    add_test(
+        NAME example.photon_public_api
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DEXAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/photon_scattering"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_photon_public_api.cmake"
+    )
+    set_tests_properties(example.photon_public_api PROPERTIES LABELS "example;api;photon")
+
+    if(TARGET graphFlow_photon_scattering)
+        set(
+            GRAPHFLOW_PHOTON_CLI_BINARY
+            "$<TARGET_FILE:graphFlow_photon_scattering>"
+        )
+    else()
+        set(
+            GRAPHFLOW_PHOTON_CLI_BINARY
+            "${CMAKE_CURRENT_BINARY_DIR}/graphFlow_photon_scattering${CMAKE_EXECUTABLE_SUFFIX}"
+        )
+    endif()
+
+    function(graphflow_add_photon_cli_test backend photons chunk_size mode sigma_s sigma_a cap seed)
+        set(
+            test_name
+            "example.photon.${backend}.N${photons}.C${chunk_size}.${mode}.S${sigma_s}.A${sigma_a}.K${cap}"
+        )
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DBINARY=${GRAPHFLOW_PHOTON_CLI_BINARY}"
+                "-DBACKEND=${backend}"
+                "-DPHOTONS=${photons}"
+                "-DCHUNK_SIZE=${chunk_size}"
+                "-DSEED=${seed}"
+                "-DSIGMA_S=${sigma_s}"
+                "-DSIGMA_A=${sigma_a}"
+                "-DMODE=${mode}"
+                "-DCAP=${cap}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_photon_cli.cmake"
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                TIMEOUT 300
+                LABELS "example;cli;photon;${backend}"
+        )
+    endfunction()
+
+    foreach(photons IN ITEMS 0 1 127 4097)
+        foreach(chunk_size IN ITEMS 1 127)
+            graphflow_add_photon_cli_test(cpu ${photons} ${chunk_size} forward 1.0 0.0 64 42)
+            if(GRAPHFLOW_ENABLE_CUDA)
+                graphflow_add_photon_cli_test(cuda ${photons} ${chunk_size} forward 1.0 0.0 64 42)
+            endif()
+        endforeach()
+    endforeach()
+    graphflow_add_photon_cli_test(cpu 4097 31 isotropic 0.7 0.3 256 7)
+    graphflow_add_photon_cli_test(cpu 512 31 forward 1.0 0.0 2 42)
+    if(GRAPHFLOW_ENABLE_CUDA)
+        graphflow_add_photon_cli_test(cuda 4097 31 isotropic 0.7 0.3 256 7)
+        graphflow_add_photon_cli_test(cuda 512 31 forward 1.0 0.0 2 42)
+    endif()
 endif()
