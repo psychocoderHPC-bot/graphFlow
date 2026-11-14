@@ -163,10 +163,20 @@ resource or decision is missing.
   round trip still dominates after batching, implement a device-side output
   planning variant (global prefix over bin totals) and compare; otherwise
   document why the host path stays.
-- [ ] **P1: error and abort coverage.** Add tests for invalid classifier
-  results, hash-table full, counter overflow, weight overflow, pool exhaustion,
-  async enqueue failure, and abort during in-flight work. Assert no partial
-  output is published and all leases are released.
+- [ ] **P1: error and abort coverage.** Host tests cover invalid classifier and
+  updater results, counter and weight overflow, a full hash table, pool
+  exhaustion, an injected completion-event enqueue failure, and abort during
+  in-flight work. The CUDA/HIP cases added at `e6e1a97`
+  (`tests/integration/FailurePaths.hpp`) cover invalid classifier and updater
+  results, a full hash table, pool exhaustion, and an injected enqueue failure,
+  and they fail rather than skip when no device is visible. The injection hook
+  is test-only: no production path calls `GraphRunner::setFailureHook`, and the
+  hook raises a host exception at a named scheduler point instead of injecting
+  a driver fault. Real mid-run CUDA/HIP out-of-memory, ECC, and context-loss
+  faults are not covered and remain an open gap (see
+  [known-limitations.md](known-limitations.md#failure-injection-is-test-only)).
+  The covered paths assert no partial output is published and every lease is
+  released.
 - [ ] **P2: counters and validation.** In debug or validation builds, check
   conservation (`next[bin]==total[bin]`), input conservation, output chunk fill
   levels, and exactly-once sink delivery; keep these off the hot path. The
@@ -325,9 +335,17 @@ resource or decision is missing.
 - [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
   and staging exhaustion, feedback cycles, max-visits, abort during in-flight
   work, and repeated runs with generation reuse.
-- [ ] **P1: asynchronous failure propagation.** Test enqueue failures, device
-  errors, OOM, and `wait` failures; ensure leases, staging, and events are
-  released exactly once and the process returns nonzero.
+- [ ] **P1: asynchronous failure propagation.** Enqueue-failure and abort paths
+  are exercised by the host failure tests and by the CUDA/HIP failure cases
+  added at `e6e1a97` (invalid classifier and updater results, full hash table,
+  pool exhaustion, injected event-enqueue failure). The injection hook is
+  test-only and cannot raise real mid-run CUDA/HIP OOM, ECC, or context-loss
+  errors from the device or runtime; pool exhaustion exercises the pool
+  allocator's capacity, not a driver allocation failure. `wait` failures and
+  real-driver faults remain an open gap and no fault-injection driver is wired
+  in, so this item does not claim full coverage. On the covered paths leases,
+  staging, and events are released exactly once and the process returns
+  nonzero.
 - [ ] **P2: sanitizer coverage for the host scheduler.** Keep ASAN/UBSAN/TSAN
   in CI and add a leak check for the error paths.
 - [ ] **P2: overflow hardening.** Audit `chunkIndex*C`, `chunk*C+offset`,
