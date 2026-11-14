@@ -109,11 +109,17 @@ resource or decision is missing.
   it. The generic DAG acceptance test runs a source, two transforms, a sink,
   and one feedback edge through `GraphRunner`. Remaining: the host-only generic
   core is not yet used by the example, which uses the typed `Flow` API.
-- [ ] **P1: multiple in-flight batches per node.** The scheduler currently
-  allows one in-flight batch per node. Add a bounded submitted depth per node,
-  an event pool, and fair round-robin across ready nodes while preserving
-  exactly-once completion and lease release. Acceptance: depth >1 overlaps
-  independent work, event-pool exhaustion backpressures, no double retire.
+- [x] **P1: multiple in-flight batches per node.** Done (PR #46):
+  `Tuning::inflightBatches` sets a bounded submitted depth per node; the default
+  of 1 preserves the historical one-batch-per-node scheduling. The scheduler
+  keeps fair round-robin across ready nodes, one event per submitted-depth lane,
+  and backpressures by refusing to submit when every lane of a node is in flight.
+  `Flow::run` creates one typed stage per lane, so per-lane device staging is
+  replicated at a depth above 1. Acceptance tests (`tests/integration/test_async_execution.cpp`)
+  cover depth-1 and depth-4 runs with a forced 50 ms in-flight delay: `maxInflight
+  == depth`, `duplicateDeliveries == 0`, `maxReadyDepth >= 1` (lane exhaustion
+  backpressures), and the full particle-feedback histogram is identical across
+  every `(batchChunks, inflightBatches)` pair in `{1,2,8} x {1,2,4}`.
 - [ ] **P1: exploit or document queue overlap.** The CUDA queue probe reports
   distinct queues but `overlap=no`; the CPU probe reports overlap. Investigate
   whether the CUDA probe's kernels or the shared A30 prevent overlap, and either
@@ -125,11 +131,19 @@ resource or decision is missing.
   payload budget of 3,171,090,432 B (needs 3,221,225,472 B), so the T13 `N=1e8`
   run used an explicit `P=16128`. The auto-derived policy now clamps `P` to
   16,128; an explicit over-budget `P` still fails clearly.
-- [ ] **P1: reduce pool memory.** `S=P+K*R` at `C=8192`, `P=65536` allocates
-  about 12.9 GB of payload storage while observed peak live is under 1000
-  chunks. Implement a slot-based pool or a documented smaller `P`/memory budget
-  without breaking the fragmentation bound or progress guarantee. Acceptance:
-  peak memory falls while `N >> P` still completes and the histogram is exact.
+- [x] **P1: reduce pool memory.** Done (PR #47): `ChunkPool` and
+  `PayloadSlotStorage` clamp a requested chunk count that exceeds the
+  `poolPayloadBudgetBytes` (default 4 GiB) to the largest fitting physical
+  count; `numChunks()` reports the clamped value. An explicit budget above
+  4 GiB is honored. `Config::validate` still rejects an explicitly over-budget
+  pool size with a clear error. The pool also rejects a total slot count that
+  exceeds `UINT32_MAX`, so the 32-bit kernel slot index cannot wrap. The
+  `ChunkPool` in-class generation and lease counters are checked on every
+  increment and raise on 32-bit overflow. `ChunkLedger` (used by
+  `PayloadSlotStorage`) does not yet apply the same checked increment; its
+  generation and lease counters can wrap after 2^32 cycles per chunk
+  (theoretical, not reachable in a single run). Remaining: a slot-based pool
+  would allow the live particle count to exceed the physical chunk count.
 - [x] **P1: chunk-fill policy tests.** Done: `tests/integration/test_admission.cpp`
   pins `min(C, P, remaining)` for `P<C`, `P==C`, `P==0`, the tail, and `N>>P`,
   and rejects one-particle source chunks with a mutation-style assertion.

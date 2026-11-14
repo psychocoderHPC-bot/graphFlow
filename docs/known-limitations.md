@@ -126,21 +126,52 @@ baseline is recorded. H100 remains preliminary. The earlier JURECA
 `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run observed external load while
 the client was stale, so it is preliminary CUDA evidence only.
 
-## Pool memory is budget-capped but still fixed-capacity
+## Pool memory is budget-capped and clamped to a physical chunk count
 
-The pool is the source capacity `P` plus one output bound per registered node,
-and its payload arrays are capped by `poolPayloadBudgetBytes`. `Flow` uses the
-policy memory budget plus the exact registered-node reserve; the programmatic
-default is 4 GiB. The former `C=8192`, `P=65536` pair is rejected because it
-exceeds the budget. The fixed allocation still reserves one chunk per live
-particle plus the output credits, so a slot-based pool remains the next memory
-optimization.
+The pool size is `S = P + K*R`, where `P` is the source capacity in particles
+and `K*R` is the output-credit reserve for the registered transform nodes.
+The pool's payload arrays are bounded by `poolPayloadBudgetBytes`;
+`Flow` uses the policy memory budget plus the exact registered-node reserve.
 
-## One in-flight batch per node
+The programmatic default is 4 GiB (`defaultPoolPayloadBudgetBytes`). The pool
+constructor applies a clamp: a request for more chunks than the budget can hold
+is reduced to the largest fitting count, and `numChunks()` reports that physical
+count. A request that fits the budget keeps its exact size, so small pools and
+their free-list order are unchanged. An explicit `Config` or `Tuning` value for
+`poolPayloadBudgetBytes` greater than 4 GiB is honored without any further cap;
+the 4 GiB constant is only the default, not a ceiling. The former `C=8192`,
+`P=65536` pair (about 12.9 GB of payload storage) is clamped to the largest
+chunk count that fits the default budget rather than being allocated as-is.
 
-Each node has one in-flight batch. A transform batch can carry up to Q chunks,
-but independent batches of the same node do not overlap. A bounded submitted
-depth per node is not implemented.
+The chunk generation and the per-chunk reader-lease count are 32-bit counters
+that are checked on every increment: the storage rejects the increment that
+would wrap either counter. `ChunkPool` enforces this in its own in-class
+implementation. The shared `ChunkLedger` (used by `PayloadSlotStorage`) does
+not currently apply the same check; its generation and lease counters can wrap
+after 2^32 increments per chunk. This is a theoretical limit: 2^32 release
+cycles of a single chunk in one run is not reachable in practice, but it is a
+documented divergence between the two implementations. A slot-based pool
+remains the next memory optimization.
+
+## In-flight depth is opt-in
+
+`Tuning::inflightBatches` sets the maximum number of concurrently in-flight
+batches per node. When unset the default depth is 1, which reproduces the
+historical one-batch-per-node scheduling and uses no extra device memory.
+
+When the depth is above 1 the scheduler submits several independent batches of
+the same node before the first completes, overlapping host planning with device
+work. Each submitted-depth lane gets its own typed stage and its own event;
+`Flow::run` creates one stage instance per lane, so the per-lane device
+staging, status and histogram buffers are replicated for every lane. The
+replicated buffers are the memory cost of a depth above 1.
+
+A node dispatches new work only while a free lane exists; when every lane is
+occupied by an in-flight batch the scheduler stops submitting further batches
+for that node until a completion event frees a lane. The accepted work is
+therefore bounded by the per-node lane count, the batch size and the chunk pool,
+not by an unbounded queue. `Tuning::inflightBatches` rejects a zero value with
+`std::invalid_argument`; `GraphRunner` rejects a zero depth for the same reason.
 
 ## Queue overlap is advisory and the CUDA probe is timing-sensitive
 
@@ -173,9 +204,11 @@ and submission pattern, so the CUDA `no` is not caused by the kernels, the
 shared A30, or the scheduler. Do not use a single committed-probe `no` as
 evidence that CUDA streams are serialized.
 
-The scheduler keeps one in-flight batch per node and relies on full-chunk
-pipelining, not cross-queue overlap, for progress. A device whose queues alias
-or run sequentially follows the same path.
+At the default depth of 1 the scheduler keeps one in-flight batch per node and
+relies on full-chunk pipelining, not cross-queue overlap, for progress. With
+`Tuning::inflightBatches` above 1, several independent batches of the same
+node overlap and the per-lane events bound the in-flight work. A device whose
+queues alias or run sequentially follows the same path.
 
 ## Host planning stays; batching amortizes the round trip
 
