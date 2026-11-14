@@ -151,12 +151,12 @@ cross-backend equality cases added on `gf/cross-backend-equality`, which all
 run in the ordinary CTest job without a skip). `rosi_v100` is unreachable, so
 the measured totals below are the last recorded values. `rosi_v100` at
 `2ad7d86` measured CPU **202/202 passed** and CUDA **254/254 passed** on V100
-`sm_70` (CUDA 12.6.85 Release). The two stall diagnostics cases register on
-every compiled backend, so the device totals rise by two as well: **256** for
-the CUDA `sm_70` suite and **247** for the HIP `gfx1100` suite; the three
-cross-backend equality cases register the same way, so the current expected
-device totals are **259** for the CUDA `sm_70` suite and **250** for the HIP
-`gfx1100` suite; those device runs are not re-recorded here. The `Debug` build
+`sm_70` (CUDA 12.6.85 Release). The two source-admission cases, the one N=1e6 smoke, the two stall
+diagnostics cases, and the three cross-backend equality cases register on
+every compiled backend, so the device totals rise by the same ten: the current
+expected device totals are **264** for the CUDA `sm_70` suite and **255** for
+the HIP `gfx1100` suite (254 and 245 plus ten respectively); those device runs
+are not re-recorded here. The `Debug` build
 was not re-run on
 `rosi_v100` after the seven hash cases, so the measured `Debug` totals are the
 pre-hash **195/195** CPU and **247/247** CUDA, with 202/202 and 254/254 the
@@ -225,7 +225,7 @@ diagnostic is not a numeric result. These counts are historical. The
 `gf/stall-diagnostics`, 205/205 on
 `gf/p1-admission-smoke`) and the V100
 `sm_70` CUDA CTest passes 254/254 in Release with the explicit
-concept-parameter workaround (259 on `gf/cross-backend-equality`, not re-run);
+concept-parameter workaround (264 on `gf/cross-backend-equality`, not re-run);
 the `rosi_v100` 33-invocation baseline comparison is not yet recorded.
 
 ### T5 photon scattering output and diagnostics
@@ -352,15 +352,18 @@ real `graphFlow_particle_feedback` binary once per compiled backend with
 identical seed/N/C/P/Q, sort the `weight,count` rows, and require exact row
 equality against the first backend plus a count sum of N per backend. CUDA and
 HIP cases register only when their backend is compiled, and a compiled backend
-without a usable device fails the case instead of being skipped. Measured CPU
-total at `751c8a8`: 210/210 (OMP=ON Release, pedantic), with all three Q cases
-passing exact-row equality. On `hal` (AMD Radeon RX 7900 XTX `gfx1100`, ROCm
-7.2), the three Q cases ran 3/3: each run compared the CUDA and HIP outputs
-against the CPU reference with the same seed, `N`, `C`, `P`, and `Q`, the
-sorted `weight,count` rows were identical, and every count sum equaled `N`.
-The expected full-suite totals on the branch are 259 (CUDA `sm_70`) and 250
-(HIP `gfx1100`); the full device suites have not been re-run, so those counts
-are not claimed as executed and the recorded `rosi_v100`/`hal` totals remain
+without a usable device fails the case instead of being skipped. This is the
+evidence for P0 cross-backend equality, which is done. It comes from two
+device build pairs, not one three-backend run: CUDA and HIP are mutually
+exclusive in a single build, and the CPU backend stays enabled in accelerator
+builds. The CPU+CUDA build pair and the CPU+HIP build pair each ran the three
+Q cases 3/3 with exact row equality against the CPU reference: same seed,
+`N`, `C`, `P`, and `Q`, sorted `weight,count` rows identical, and every count
+sum equaled `N`. Measured CPU total at `751c8a8`: 210/210 (OMP=ON Release,
+pedantic), with all three Q cases passing exact-row equality. The expected
+full-suite totals on the branch are 264 (CUDA `sm_70`) and 255 (HIP
+`gfx1100`); the full device suites have not been re-run, so those counts are
+not claimed as executed and the recorded `rosi_v100`/`hal` totals remain
 the measured values.
 
 fwk394, CPU, `C=1024`, `P=512`, `Q=1`: `N=1e6` took 52.75 s, histogram sum

@@ -29,8 +29,8 @@ diagnostics cases, and the three cross-backend equality cases):
   historical pre-P1 suite and no longer the current total. The current CPU
   CTest is **210/210 passed** (202 plus two source-admission cases, one
   N=1e6 smoke, two stall diagnostics cases, and three cross-backend equality
-  cases); the expected device totals for that suite are 259 (CUDA `sm_70`) and
-  250 (HIP `gfx1100`), and the device full suites have not been re-run, so the
+  cases); the expected device totals for that suite are 264 (CUDA `sm_70`) and
+  255 (HIP `gfx1100`), and the device full suites have not been re-run, so the
   measured `rosi_v100`/`hal` totals above stay the recorded values. The
    explicit
    concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
@@ -57,7 +57,7 @@ diagnostics cases, and the three cross-backend equality cases):
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
-  245/245 CTest with 43 HIP cases, measured on `b972eaa` (250 is the expected
+  245/245 CTest with 43 HIP cases, measured on `b972eaa` (255 is the expected
   total on `gf/cross-backend-equality`, not re-run). GitHub-hosted HIP
   remains compile-only
   because those runners have no AMD GPU; the `gfx90a` compile-only gate is
@@ -86,7 +86,7 @@ resource or decision is missing.
    `rosi_v100` CPU CTest passes 202/202 (Release) at validated main `2ad7d86`
    (historical; 210/210 on this branch) and the V100 `sm_70` CUDA CTest
    passes 254/254 (Release) with the explicit concept-parameter workaround
-   (259 on this branch, not re-run). Open
+   (264 on this branch, not re-run). Open
    refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
    limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -198,12 +198,16 @@ resource or decision is missing.
   compiled, and a compiled backend without a usable device fails the case
   instead of being skipped, so the CPU-only hosted build still runs the case.
   Measured at `751c8a8`: CPU 210/210 (OMP=ON Release, pedantic), with the three
-  Q cases exact; on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) all three Q cases
-  ran 3/3 with CUDA and HIP row comparisons exact against the CPU reference
-  (same seed/N/C/P/Q, sorted `weight,count` rows identical, count sum N for
-  every backend). CUDA 259 and HIP 250 are the expected full-suite totals for
-  the branch (256 and 247 plus the three cases); the full device suites have
-  not been re-run, so those counts are not claimed as executed.
+  Q cases exact. The device evidence is two build pairs, not one three-backend
+  run: CUDA and HIP are mutually exclusive in a single build, and the CPU
+  backend stays enabled in accelerator builds, so the CPU+CUDA pair and the
+  CPU+HIP pair each ran the three Q cases 3/3 with the device output compared
+  against the CPU reference (same seed/N/C/P/Q, sorted `weight,count` rows
+  identical, count sum N for every backend). CUDA 264 and HIP 255 are the
+  expected full-suite totals for the branch (254 and 245 plus the two
+  source-admission cases, the one N=1e6 smoke, the two stall diagnostics
+  cases, and the three cross-backend equality cases); the full device suites
+  have not been re-run, so those counts are not claimed as executed.
 - [x] **P1: device-dependent default `C`/`P`.** Done (policy PR #11): the
   device-aware policy derives `C`/`P`/`T`, auto-clamps `P` to the usable-memory
   budget, and rejects an explicit over-budget `P`. The example prints the
@@ -299,11 +303,13 @@ resource or decision is missing.
 
 ## 6. Robustness and hardening
 
-- [ ] **P0: TSAN validation.** Blocked: the non-PIE scheduler/pool subset is
-  clean on fwk394 (14/14), but `hal` is blocked by `unexpected memory
-  mapping` even for a non-PIE binary, `rosi_v100` is unreachable, and no full
-  integrated TSAN run is claimed. Run TSAN on a
-  suppression only with evidence and do not hide a race.
+- [ ] **P0: TSAN validation.** Blocked: `rosi_v100` is unreachable, the non-PIE
+  scheduler/pool subset is clean on fwk394 (14/14), and `hal` aborts TSAN at
+  startup with `FATAL: ThreadSanitizer: unexpected memory mapping` even for a
+  non-PIE binary, so no full integrated TSAN run is claimed. `hal` is shared
+  (`sharing=unknown`), so it is not a usable exclusive TSAN host either. Run
+  TSAN on a compatible host; suppressions are allowed only with evidence and
+  must not hide a race.
 - [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
   and staging exhaustion, feedback cycles, max-visits, abort during in-flight
   work, and repeated runs with generation reuse.
@@ -321,8 +327,10 @@ resource or decision is missing.
 - **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
   7900 XTX (`gfx1100`, ROCm 7.2) and the HIP runtime gate passes 245/245 with
   43 HIP cases on `b972eaa`; the expected HIP total on
-  `gf/cross-backend-equality` is 250 (247 plus the three cross-backend
-  equality cases), and the full HIP suite has not been re-run on `hal`. Other
+  `gf/cross-backend-equality` is 255 (245 plus the two source-admission cases,
+  the one N=1e6 smoke, the two stall diagnostics cases, and the three
+  cross-backend equality cases), and the full HIP suite has not been re-run on
+  `hal`. Other
   AMD architectures and the AMD `N=1e8` acceptance remain open; GitHub-hosted
   HIP stays compile-only.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping and
@@ -387,7 +395,7 @@ These are not missing work; the plan excludes them from v1:
    `b972eaa`. `rosi_v100` CPU CTest passes 210/210 (OMP=ON Release) on this
    branch (202/202 historical at validated main `2ad7d86`) and the
    CUDA V100 `sm_70` CTest passes 254/254 (Release) with the explicit
-   concept-parameter workaround (259 on this branch, not re-run).
+   concept-parameter workaround (264 on this branch, not re-run).
 - [x] The example CLI is registered in CTest for the full CPU, CUDA, and HIP
   matrices; the HIP cases run on `hal` with a real AMD GPU.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
@@ -405,7 +413,7 @@ These are not missing work; the plan excludes them from v1:
    sorted histogram rows for `N=1e6` across every compiled backend with a
    fail-not-skip contract, measured CPU 210/210 at
    `751c8a8cbad9de1a2e71cef57b81147ff071dd51` (device full suites not
-   re-run; CUDA 259 and HIP 250 are the expected totals for the current
+   re-run; CUDA 264 and HIP 255 are the expected totals for the current
    suite).
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
   Blocked: `rosi_v100` is unreachable and no final H100 run has been recorded.

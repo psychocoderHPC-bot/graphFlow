@@ -39,8 +39,8 @@ oneAPI jobs do the same inside their container; they install `git` before
 | --- | ---: | --- |
 | CPU, Release and Debug | 210 on `gf/cross-backend-equality` (202 at `2ad7d86`); 210 = 202 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 210 on `gf/cross-backend-equality` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
-| CUDA `sm_70` | 254 at `2ad7d86` (historical); 259 = 256 + 3 cross-backend equality cases (256 adds the two `gf/stall-diagnostics` stall diagnostics cases), not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only |
-| HIP `gfx1100` | 245 at `b972eaa` (historical); 250 = 247 + 3 cross-backend equality cases (247 adds the two `gf/stall-diagnostics` stall diagnostics cases), not re-run on `hal` | `hal` device run on `b972eaa`; the hosted job compiles only |
+| CUDA `sm_70` | 254 at `2ad7d86` (historical); 264 = 254 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only |
+| HIP `gfx1100` | 245 at `b972eaa` (historical); 255 = 245 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, not re-run on `hal` | `hal` device run on `b972eaa`; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
@@ -74,7 +74,7 @@ no-progress stall asserts that the thrown `SchedulerStallError` reports
 aggregate key=value counters with no node names, ids, or routes, and a
 completed run asserts the `SchedulerStats` peak invariants and the empty
 end-of-run aggregate. The same two cases register on CUDA and HIP, so their
-device totals rise by two as well (256 and 247); the recorded device runs above
+device totals rise by two as well (258 and 249); the recorded device runs above
 pre-date the stall work.
 
 T14b re-ran all three suites on the formatted tree: CPU Release 202/202 on
@@ -83,9 +83,9 @@ source-admission cases and the N=1e6 smoke added on
 `gf/p1-admission-smoke`; 207/207 adds the two stall diagnostics cases on
 `gf/stall-diagnostics`; 210/210 adds the three cross-backend equality cases on
 `gf/cross-backend-equality`, measured on that branch, not re-run on
-`rosi_v100`), CUDA `sm_70` 254/254 on `rosi_v100` (256 on
-`gf/stall-diagnostics`, 259 on `gf/cross-backend-equality`, not re-run), and
-HIP `gfx1100` 245/245 on `hal` (247 on `gf/stall-diagnostics`, 250 on
+`rosi_v100`), CUDA `sm_70` 254/254 on `rosi_v100` (258 on
+`gf/stall-diagnostics`, 264 on `gf/cross-backend-equality`, not re-run), and
+HIP `gfx1100` 245/245 on `hal` (249 on `gf/stall-diagnostics`, 255 on
 `gf/cross-backend-equality`, not re-run). The format sweep changed whitespace,
 line breaks, include and `using` order, and configured numeric separators only.
 

@@ -156,8 +156,11 @@ each compiled backend runs the same seed/N/C/P/Q and the cases require exact
 sorted `weight,count` row equality against the first backend plus a count sum
 of `N`, so a compiled backend without a usable device fails the case instead
 of skipping. Measured CPU 210/210 at `751c8a8` with all three Q cases exact,
-and on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) all three Q cases ran 3/3 with
-the row comparisons exact against the CPU reference. CUDA 259 and HIP 250 are
+the device evidence is two build pairs, not one three-backend run: CUDA and
+HIP are mutually exclusive in a single build, and the CPU backend stays
+enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair each
+ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with the
+row comparisons exact against the CPU reference. CUDA 264 and HIP 255 are
 the expected full-suite totals for the branch; the full device suites were not
 re-run, so those counts are not claimed as executed.
 
