@@ -76,8 +76,7 @@ namespace
         sourceHooks.abort = [] {};
 
         typename Runner::Hooks sinkHooks;
-        sinkHooks.launch =
-            [observation](Queue const& queue, Batch const&)
+        sinkHooks.launch = [observation](Queue const& queue, Batch const&)
         {
             ++observation->launches;
             ++observation->inflight;
@@ -108,10 +107,8 @@ namespace
         };
 
         Runner runner{device, pool};
-        auto const source
-            = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
-        auto const sink
-            = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(sinkHooks), depth);
+        auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
+        auto const sink = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(sinkHooks), depth);
         runner.setSource(source, static_cast<std::uint64_t>(numChunks) * capacity, 0u);
         runner.setStallTimeout(std::chrono::milliseconds{30000});
         graphFlow::SchedulerStats const stats = runner.run();
@@ -179,8 +176,7 @@ TEST_CASE("batch-level batching and submitted depth preserve the histogram", "[i
         for(std::uint32_t const depth : {1u, 2u, 4u})
         {
             CAPTURE(batchChunks, depth);
-            graphFlow::particle::FeedbackResult const result
-                = runFeedback(8192u, 1024u, 512u, batchChunks, depth);
+            graphFlow::particle::FeedbackResult const result = runFeedback(8192u, 1024u, 512u, batchChunks, depth);
             CHECK(result.sunkParticles == 8192u);
             if(referenceHistogram.empty())
             {

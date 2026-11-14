@@ -530,8 +530,8 @@ namespace graphFlow
                                         int const dst = node.route[output.bin];
                                         if(dst < 0)
                                             throw std::runtime_error{
-                                                "graphFlow: node '" + node.name + "' bin "
-                                                + std::to_string(output.bin) + " has no route"};
+                                                "graphFlow: node '" + node.name + "' bin " + std::to_string(output.bin)
+                                                + " has no route"};
                                         m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                     }
                                     catch(...)
