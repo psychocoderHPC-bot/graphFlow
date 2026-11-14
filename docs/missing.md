@@ -11,13 +11,14 @@ Current state at integrated main
 `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (T5):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
-- **Validation platform:** `rosi_v100` is the exclusive validation platform
-  from now on. The CPU/CUDA CTest counts and the CPU OpenMP result on
-  `rosi_v100` are **not yet recorded**; they are placeholders in
-  `docs/acceptance.md` until the `rosi_v100` run reports. The previously
-  recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA `sm_80`, are
-  **historical validation on a shared host** (`hal` reports `sharing=unknown`)
-  and are **not the final current validation**.
+- **Validation platform:** `rosi_v100` is the exclusive validation platform.
+  Current `rosi_v100` results: CPU CTest **194/194 passed** (OMP=ON Release);
+  CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. CUDA V100
+  `sm_70` is **blocked** by an nvcc 12.6.85 ICE at
+  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed. The
+  previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
+  `sm_80`, are **historical validation on a shared host** (`hal` reports
+  `sharing=unknown`) and are **not the final current validation**.
 - The public API is implemented: `Flow<TPayload, TDevice, TStorage>` with
   source/partition/transform/sink handles, named ports, `configure(Tuning)`,
   typed failure `Status`, and `run()`.
@@ -27,8 +28,9 @@ Current state at integrated main
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
-- CPU execution with the OpenMP backend: the result on `rosi_v100` is not yet
-  recorded; no OMP claim is made until it reports.
+- CPU execution with the OpenMP backend: the `rosi_v100` run (passive,
+  `GOMP_SPINCOUNT=0`) works with no hangs; CPU CTest passes 194/194 with
+  OMP=ON. The previous multi-region pathology is not observed on `rosi_v100`.
 - H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
   (unknown gateway sharing flag; external load while the client was stale), so
   no final H100 claim is made. H100 remains blocked/preliminary.
@@ -44,9 +46,11 @@ resource or decision is missing.
   one classify launch and one scatter launch per batch and the adaptive
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The historical tree
-  passed 194/194 CPU on fwk394 and 246/246 CUDA on hal; the `rosi_v100`
-  totals are not yet recorded. Open refinement: `--batch-chunks Q` has no
-  upper cap beyond the 32-bit parse limit, tracked in Section 7.
+  passed 194/194 CPU on fwk394 and 246/246 CUDA on hal (historical); the
+  `rosi_v100` CPU CTest passes 194/194 (OMP=ON Release), and the `rosi_v100`
+  CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE. Open
+  refinement: `--batch-chunks Q` has no upper cap beyond the 32-bit parse
+  limit, tracked in Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
   `launchPolicy` with `FrameSpec{numFrames, frameExtent}`. `numFrames` is
   `min(ceil(work/T), maxBlocksPerGrid, frameCap*multiProcessorCount)` with
@@ -243,7 +247,8 @@ resource or decision is missing.
   AMD `N=1e8` acceptance.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required. The `rosi_v100` TSAN result
-  is not yet recorded.
+  is not yet recorded; the CPU CTest pass on `rosi_v100` does not include a
+  TSAN run.
 - **CI runners:** the workflow needs self-hosted CUDA and AMD runners with known
   labels, credentials, and artifact retention. PR #4 is a draft and no runners
   are provisioned; the repository is public and has no `.github/workflows` on
@@ -284,21 +289,25 @@ These are not missing work; the plan excludes them from v1:
 
 - [ ] All P0 items above are implemented and covered by tests.
 - [ ] CPU, CUDA, and HIP build; HIP execution is validated on an AMD GPU or the
-  gate is explicitly recorded as blocked. The `rosi_v100` CPU OMP result is
-  not yet recorded; no OMP claim is made until it reports.
+  gate is explicitly recorded as blocked. `rosi_v100` CPU CTest passes 194/194
+  (OMP=ON); the `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc
+  12.6.85 ICE.
 - [x] The example CLI is registered in CTest for the full CPU/CUDA matrix;
   HIP remains blocked by the missing AMD runtime device.
 - [x] The public API (`Flow<TPayload, TDevice, TStorage>`) is implemented and
   used by both examples; the particle example is ported to it and the photon
   example uses it for slab transport.
 - [ ] `N=1e6` runs in CI; `N=1e8` passes on the validation platform with exact
-  histograms. The `rosi_v100` baseline is not yet recorded.
+  histograms. The `rosi_v100` CPU CTest passes 194/194; the `rosi_v100`
+  33-invocation baseline comparison is not yet recorded.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
-  `rosi_v100` is the exclusive validation platform; its throughput is not yet
-  recorded. The H100 run is preliminary CUDA evidence only (external load,
+  `rosi_v100` is the exclusive validation platform; the CPU OpenMP wall times
+  are recorded (see `docs/acceptance.md`), but no frozen regression target
+  exists yet. The H100 run is preliminary CUDA evidence only (external load,
   stale client); no final claim.
 - [ ] ASAN/UBSAN/TSAN pass on a compatible host. The `rosi_v100` sanitizer
-  results are not yet recorded.
+  results are not yet recorded; the CPU CTest pass does not include a sanitizer
+  run.
 - [ ] Format, REUSE, docs, and the API map are complete and green. T14b
   (tree-wide format and SPDX sweep) is CPU-only work and remains open.
 - [ ] The repository is public or explicitly kept private, with branch

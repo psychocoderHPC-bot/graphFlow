@@ -32,15 +32,15 @@ example and the tests do not run. HIP execution, HIP histogram equality, and an
 AMD `N=1e8` acceptance run remain open. The compile-only gate is not an AMD
 result.
 
-## CPU OMP execution is blocked
+## CPU OMP execution
 
-CPU execution with the OpenMP backend is blocked and not claimed. The recorded
-CPU runs use the serial CPU backend. The OpenMP backend's multi-region
-scheduling shows a pathology that makes it unsuitable for the current
-scheduler; a recorded OMP run is not available. The `rosi_v100` CPU OMP result
-is not yet recorded; no OMP claim is made until the `rosi_v100` run reports.
-The `GRAPHFLOW_ENABLE_OPENMP` option stays available, but no OMP result is
-claimed until the pathology is resolved and the `rosi_v100` run reports.
+CPU execution with the OpenMP backend works on `rosi_v100` with passive
+spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 194/194 with
+OMP=ON Release. CPU OpenMP wall times at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
+OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
+OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
+observed. The previous multi-region pathology is not observed on `rosi_v100`
+with passive spinning.
 
 ## TSAN is blocked on hal
 
@@ -57,6 +57,14 @@ CUDA 12.5 nvcc hits an internal compiler error while compiling
 CUDA compiler. Do not pin CUDA 12.5 for this project until the compiler failure
 is resolved.
 
+## CUDA V100 `sm_70` build is blocked on `rosi_v100`
+
+The `rosi_v100` CUDA V100 `sm_70` build is currently blocked by an nvcc
+12.6.85 internal compiler error at `flow/Execution.hpp:348`
+(`check_name_hiding_by_template_parameters`). No V100 CUDA test counts are
+claimed. This is a compiler bug, not a project defect; the same tree compiles
+on CUDA 13.4.
+
 ## Throughput is a shared-host baseline
 
 `hal` reports `sharing=unknown` and fwk394 is shared. The historical `N=1e8`
@@ -64,10 +72,11 @@ result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
 wall times are shared-host baselines, not exclusive-allocation acceptance
 numbers. There is no variance study and no frozen regression target.
 
-`rosi_v100` is the exclusive validation platform from now on. Its throughput
-and CTest counts are not yet recorded; they are placeholders until the
-`rosi_v100` run reports. No `rosi_v100` measurement is claimed by this docs
-commit.
+`rosi_v100` is the exclusive validation platform. Current `rosi_v100`
+results: CPU CTest 194/194 (OMP=ON Release); CPU OpenMP wall times recorded
+(passive, `GOMP_SPINCOUNT=0`). CUDA V100 `sm_70` is blocked by the nvcc
+12.6.85 ICE; no V100 CUDA test counts are claimed. No frozen regression
+target exists yet.
 
 JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
 gateway sharing flag is unknown. The recorded H100 run observed external load
@@ -116,12 +125,13 @@ Most Catch2 cases construct the CPU device. The CUDA build adds
 GPU and fails when no GPU is visible. HIP has no runtime test. There is no
 automated CPU/CUDA/HIP histogram equality test.
 
-## Hash path evidence is CPU-only
+## Hash path evidence is CPU-only (low-level)
 
 The dense path is the correctness reference and the only path the example uses.
-The shared-memory hash path is exercised by CPU integration tests. It compiles
-for CUDA and HIP, but no hash-path accelerator execution is recorded. The
-dense/hash threshold is the static 1024-bin limit, not a measured crossover.
+The shared-memory hash path is exercised by CPU integration tests (low-level
+only). It compiles for CUDA and HIP, but no hash-path accelerator execution is
+recorded. The `rosi_v100` hash-path rerun is pending. The dense/hash threshold
+is the static 1024-bin limit, not a measured crossover.
 
 ## Other open items
 
@@ -131,8 +141,8 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract). The
   historical integrated CTest totals are 194/194 CPU on fwk394 and 246/246
-  CUDA on hal. The `rosi_v100` CTest totals are not yet recorded; they are
-  placeholders until the `rosi_v100` run reports.
+  CUDA on hal. The `rosi_v100` CPU CTest passes 194/194 (OMP=ON Release); the
+  `rosi_v100` CUDA V100 `sm_70` build is blocked by the nvcc 12.6.85 ICE.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall

@@ -30,8 +30,7 @@ on the recorded integrated runs. HIP compiles the full tree for `gfx90a` with
 JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
 gateway sharing flag is unknown and the recorded run observed external load
 while the client was stale, so it provides only preliminary CUDA evidence and no
-final H100 claim. CPU execution with the OpenMP backend is blocked and not
-claimed.
+final H100 claim.
 
 The runner has one non-blocking queue per node, one in-flight batch per node,
 device-derived `C`/`P`/`T`, up to `Q` ready input chunks per transform batch, a
@@ -51,14 +50,19 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-`rosi_v100` is the exclusive validation platform from now on. The CPU/CUDA
-CTest counts and the CPU OpenMP result on `rosi_v100` are not yet recorded;
-this docs commit leaves those as placeholders until the `rosi_v100` run
-reports. The previously recorded counts, fwk394 CPU 194/194 and hal CUDA
-246/246, are historical validation on a shared host (`hal` reports
-`sharing=unknown`) and are not the final current validation. The CUDA build
-fails its `[cuda]` tests when no NVIDIA GPU is visible. The CPU OpenMP result
-on `rosi_v100` is also pending; no OMP claim is made until it reports.
+`rosi_v100` is the exclusive validation platform. Current `rosi_v100`
+results: CPU CTest **194/194 passed** (OMP=ON Release); CPU OpenMP with
+`GOMP_SPINCOUNT=0` (passive) at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
+OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
+OMP=2 Q1 23.71 s, OMP=2 Q8 4.46 s. All histogram sums are exact and no
+hangs were observed with passive spinning. The previously recorded counts,
+fwk394 CPU 194/194 and hal CUDA 246/246, are **historical validation on a
+shared host** (`hal` reports `sharing=unknown`) and are **not the final
+current validation**. CUDA V100 `sm_70` on `rosi_v100` is currently
+**blocked by an nvcc 12.6.85 internal compiler error at
+`flow/Execution.hpp:348`** (`check_name_hiding_by_template_parameters`);
+no V100 CUDA test counts are claimed. The CUDA build fails its `[cuda]`
+tests when no NVIDIA GPU is visible.
 
 The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
@@ -70,7 +74,7 @@ low-level tests. The photon-scattering example runs the same public API
 with slab geometry, five events, `Philox4x32x10` draws, typed failure status,
 CSV and trace output, and plots. The fixed-seed 33-invocation CLI comparison
 that matched the pre-change binary is historical evidence on the previous
-platforms; the `rosi_v100` baseline is not yet recorded.
+platforms; the `rosi_v100` 33-invocation baseline is not yet recorded.
 
 ## Historical measured baseline
 
@@ -287,7 +291,9 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
 claimed runtime. CUDA execution was historically validated on `hal` with
-`sm_80`; the `rosi_v100` CUDA validation is not yet recorded.
+`sm_80`; the `rosi_v100` CUDA V100 `sm_70` build is currently blocked by an
+nvcc 12.6.85 ICE at `flow/Execution.hpp:348`, so no `rosi_v100` CUDA
+validation is claimed.
 
 ## Semantics
 
@@ -420,11 +426,15 @@ The full design is in [architecture](docs/architecture.md).
   work.
 - One in-flight batch per node.
 - The generic graph API core is host-only and not yet used by the example.
-- CPU execution with the OpenMP backend is blocked; only the serial CPU backend
-  has a recorded run.
+- CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
+  multi-region pathology is not observed. CPU CTest on `rosi_v100` passes
+  194/194 with OMP=ON.
+- CUDA V100 `sm_70` on `rosi_v100` is blocked by an nvcc 12.6.85 ICE at
+  `flow/Execution.hpp:348`; no V100 CUDA test counts are claimed.
 - CPU-only work that remains open: the tree-wide format and SPDX sweep (T14b).
 - No CI runners or `.github/workflows` yet (PR #4 is a draft).
-- The hash path is CPU-tested only. The dense/hash threshold is static.
+- The hash path is CPU-tested only (low-level); a `rosi_v100` hash-path rerun
+  is pending. The dense/hash threshold is static.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The numbers in this README are
   historical and pre-T5/T7.
