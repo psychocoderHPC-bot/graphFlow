@@ -36,10 +36,13 @@ labelled historical below.
 `rosi_v100` is the exclusive validation platform. Current `rosi_v100`
 results (CPU at `2ad7d86` is the historical validated-main total; the current
 CPU CTest on `gf/cross-backend-equality` is **210/210**; `rosi_v100` is
-unreachable, so the measured totals below are the last recorded values):
+reachable again and the new runs below are at main `f3ef355`):
 
 | Configuration | Result |
 | --- | --- |
+| CPU CTest on `rosi_v100` (OMP=ON Release) at `f3ef355` | **210/210 passed** |
+| TSAN CTest on `rosi_v100` (non-PIE Debug, `alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`) at `f3ef355` | **210/210 passed, 0 reports**, 202.83 s; with the default CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the alpaka async CPU queue (upstream alpaka races, not graphFlow) |
+| CUDA `N=1e8` acceptance on `rosi_v100` (V100 SXM2-32GB `sm_70`, CUDA 12.6.85 Release) at `f3ef355` | Q1 194.685 s, Q2 9.093 s, Q8 7.676 s; 1.30e7 particles/s at Q8; 260 rows, sum 100,000,000; sorted-histogram SHA-256 `89dc7fb9962e898fe2f1fe0116ad98fe2df9dceb77d33aa890a56467615d02e9`; peak 5702 MiB; 3 reps; `C=8192`, `P=16384`, `T=128`, seed 42, max-visits 64 |
 | CPU CTest on `rosi_v100` (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 210/210 on `gf/cross-backend-equality` (205 on `gf/p1-admission-smoke`, 207/207 on `gf/stall-diagnostics`) |
 | CPU CTest on `rosi_v100` (OMP=ON Debug) | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | CUDA CTest on `rosi_v100` (V100 `sm_70`, CUDA 12.6.85 Release) | **254/254 passed** |
@@ -72,15 +75,16 @@ The previously recorded counts, fwk394 CPU 194/194 and hal CUDA 246/246, are
 **historical validation on a shared host** (`hal` reports `sharing=unknown`)
 and are **not the final current validation**.
 
-H100: blocked. `rosi_v100` is unreachable and no final H100 run has been
-recorded; the earlier JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run
-is preliminary CUDA evidence only (its gateway sharing flag is unknown and the
-recorded run observed external load while the client was stale), so no H100
-performance claim is made. H100 remains blocked/preliminary. Hosted CI runs
-the CPU CTest suite, `reuse lint`, and the format gate, with compile-only CUDA
-and HIP.
-This docs commit records the existing `rosi_v100` and HIP `hal` results; it
-adds no new build or test run.
+H100: not used for this validation; no final H100 run has been recorded. The
+earlier JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run is preliminary
+CUDA evidence only (its gateway sharing flag is unknown and the recorded run
+observed external load while the client was stale), so no H100 performance
+claim is made. H100 remains preliminary. Hosted CI runs the CPU CTest suite,
+`reuse lint`, and the format gate, with compile-only CUDA and HIP.
+This doc set records the new `rosi_v100` runs at `f3ef355` (CPU CTest
+210/210, full TSAN CTest 210/210 with 0 reports, and the `N=1e8` CUDA
+acceptance run) as supplied evidence, together with the historical
+`rosi_v100` and HIP `hal` results.
 
 Environment for the historical recorded runs: fwk394 for the CPU host and hal
 for CUDA, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3,
@@ -140,7 +144,7 @@ historical build records below are from the previous platforms.
 | Historical HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passed; no AMD runtime device was visible, so execution was blocked at that revision |
 | HIP Release on hal (`gfx1100`, AMD Radeon RX 7900 XTX, ROCm 7.2) | configure, build, and CTest 245/245 pass (measured on `b972eaa`, `ctest.log`) |
 | ASAN+UBSAN Debug (hosted CI) | the `sanitizers` job runs ASAN+UBSAN over the CPU CTest; 210/210 on `gf/cross-backend-equality` (202/202 historical at `2ad7d86`); the N=1e6 smoke, the two stall diagnostics cases, and the three cross-backend equality cases run in the suite without a skip |
-| TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
+| TSAN Debug | `rosi_v100` full integrated TSAN CTest 210/210, 0 reports, 202.83 s at `f3ef355` (non-PIE, `alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`); with the default CpuOmpBlocks plus OpenMP the suite fails 105/210 with reports inside the alpaka async CPU queue (upstream alpaka, not graphFlow); fwk394 14/14 subset and hal `unexpected memory mapping` are historical context |
 
 ## Tests
 
@@ -148,8 +152,11 @@ Current CPU CTest on `gf/cross-backend-equality` is **210/210 passed** (202 at
 validated main `2ad7d86` plus two source-admission cases, the N=1e6 smoke, the
 two stall diagnostics cases added on `gf/stall-diagnostics`, and the three
 cross-backend equality cases added on `gf/cross-backend-equality`, which all
-run in the ordinary CTest job without a skip). `rosi_v100` is unreachable, so
-the measured totals below are the last recorded values. `rosi_v100` at
+run in the ordinary CTest job without a skip). The `rosi_v100` CPU CTest at
+`f3ef355` measured **210/210 passed** (OMP=ON Release) and the full integrated
+TSAN CTest at `f3ef355` measured **210/210 passed with 0 reports** (non-PIE
+Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`, 202.83 s).
+`rosi_v100` at
 `2ad7d86` measured CPU **202/202 passed** and CUDA **254/254 passed** on V100
 `sm_70` (CUDA 12.6.85 Release). The two source-admission cases, the one N=1e6 smoke, the two stall
 diagnostics cases, and the three cross-backend equality cases register on
@@ -169,6 +176,8 @@ are from the previous platforms.
 
 | Configuration | Result |
 | --- | --- |
+| `rosi_v100` CPU CTest (OMP=ON Release) at `f3ef355` | **210/210 passed** |
+| `rosi_v100` TSAN CTest (non-PIE Debug, `alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`) at `f3ef355` | **210/210 passed, 0 reports**, 202.83 s |
 | `rosi_v100` CPU CTest (OMP=ON Release) | **202/202 passed** at `2ad7d86` (historical); current 210/210 on `gf/cross-backend-equality` (207/207 on `gf/stall-diagnostics`, 205/205 on `gf/p1-admission-smoke`) |
 | `rosi_v100` CPU CTest (OMP=ON Debug) | **195/195 passed** (measured, pre-hash-fix); expected 202/202 after the seven hash cases (not re-run) |
 | `rosi_v100` CUDA CTest (V100 `sm_70`, Release) | **254/254 passed** |
@@ -266,12 +275,10 @@ sample had `transmitted=4097`, `reflected=0`, `absorbed=0`, `capped=0`.
 The isotropic sample had `transmitted=1946`, `reflected=1066`,
 `absorbed=1085`, `capped=0`, summing to 4097. At that historical revision HIP
 was compile-only because no AMD runtime device was visible; the current HIP
-runtime validation is recorded above. H100: blocked. `rosi_v100` is unreachable and no final H100 run has been
-recorded; the earlier JURECA `jrc0880.jureca` run is
-preliminary CUDA
-evidence only (unknown gateway sharing flag; the recorded run observed
-external load while the client was stale), so no H100 performance claim is
-made and H100 remains blocked/preliminary. The `rosi_v100` CPU OpenMP run (passive,
+runtime validation is recorded above. H100 was not used for this validation, so no H100 performance claim
+is made and H100 remains preliminary; the earlier JURECA `jrc0880.jureca` run
+is preliminary CUDA evidence only (unknown gateway sharing flag; the recorded
+run observed external load while the client was stale). The `rosi_v100` CPU OpenMP run (passive,
 `GOMP_SPINCOUNT=0`) works with no hangs; the histogram sums are exact.
 
 ### PR-A generic graph API core
@@ -292,7 +299,8 @@ claims no new build or test run.
 The numbers below are the pre-T5/T7 result. They are not a current integrated
 run. They predate device-aware policy resolution, multi-chunk batching, and the
 payload budget. The integrated T13 measurement is recorded below; the
-historical table stays for comparison.
+historical table stays for comparison. The current `N=1e8` acceptance record
+is the `rosi_v100` V100 run in the section below.
 
 | Backend | N | Wall time | Histogram sum | Peak live chunks (historical pool) | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -369,6 +377,27 @@ the measured values.
 fwk394, CPU, `C=1024`, `P=512`, `Q=1`: `N=1e6` took 52.75 s, histogram sum
 1,000,000. The fwk394 CUDA sm_75 build fails with an nvcc 12.5 internal
 compiler error, so no fwk394 CUDA run is claimed.
+
+## N=1e8 acceptance on rosi_v100
+
+The P0 acceptance run is re-recorded on `rosi_v100` at main `f3ef355`.
+Platform: V100 SXM2-32GB, CUDA 12.6.85, `sm_70`, Release, with the explicit
+concept-parameter workaround. Parameters: `C=8192`, `P=16384`, `T=128`, seed
+42, max-visits 64. The `P=16384` payload (3,221,225,472 B) fits the V100
+SXM2-32GB budget; the A30 measurement forced `P=16128`. Three repetitions.
+
+| N | Q | Wall time | Histogram sum | particles/s |
+| --- | ---: | ---: | ---: | ---: |
+| 100,000,000 | 1 | 194.685 s | 100,000,000 | ~5.14e5 |
+| 100,000,000 | 2 | 9.093 s | 100,000,000 | ~1.10e7 |
+| 100,000,000 | 8 | 7.676 s | 100,000,000 | 1.30e7 |
+
+The sorted histogram has 260 rows, the count column sums to exactly
+100,000,000 for every Q, and the sorted `weight,count` rows hash to
+SHA-256 `89dc7fb9962e898fe2f1fe0116ad98fe2df9dceb77d33aa890a56467615d02e9`.
+Peak memory is 5702 MiB. This is the recorded P0 acceptance run; the hal A30
+numbers above stay labelled shared-host baselines. H100 was not used, so no
+H100 claim is made.
 
 ## Source admission history
 

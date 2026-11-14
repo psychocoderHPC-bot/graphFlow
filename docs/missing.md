@@ -22,29 +22,30 @@ values; they are historical for this branch, whose current CPU CTest is 210/210
 diagnostics cases, and the three cross-backend equality cases):
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
-- **Validation platform:** `rosi_v100` is the exclusive validation platform.
-  `rosi_v100` results at validated code main `2ad7d86`: CPU CTest
+- **Validation platform:** `rosi_v100` is the exclusive validation platform
+  and is reachable again. `rosi_v100` results at main `f3ef355`: CPU CTest
+  **210/210 passed** (OMP=ON Release, pedantic) and the full integrated TSAN
+  CTest passes **210/210 with 0 reports** in 202.83 s (non-PIE Debug with
+  `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the `N=1e8` CUDA
+  acceptance run is recorded on the V100 `sm_70` (CUDA 12.6.85, Release). The
+  `rosi_v100` results at validated code main `2ad7d86`, CPU CTest
   **202/202 passed** (OMP=ON Release, pedantic) and CUDA CTest **254/254
-  passed** on V100 `sm_70` (CUDA 12.6.85 Release); the 202/202 count is the
-  historical pre-P1 suite and no longer the current total. The current CPU
-  CTest is **210/210 passed** (202 plus two source-admission cases, one
-  N=1e6 smoke, two stall diagnostics cases, and three cross-backend equality
-  cases); the expected device totals for that suite are 264 (CUDA `sm_70`) and
-  255 (HIP `gfx1100`), and the device full suites have not been re-run, so the
-  measured `rosi_v100`/`hal` totals above stay the recorded values. The
-   explicit
-   concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding ICE and
-   the RNG main is preserved. The `Debug` build was not re-run on `rosi_v100`
-   after the seven hash cases: the measured `Debug` totals are the pre-hash
-   195/195 CPU and 247/247 CUDA, and 202/202 and 254/254 are the expected
-   (not-yet-re-run) `Debug` totals for the `2ad7d86` suite; hosted CI measures
-   the `Debug` CPU suite at 210/210 on this branch (the 202/202 figure is
-   historical for it).
-   CPU OpenMP (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The
-  previously recorded counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA
-  `sm_80`, are **historical validation on a shared host** (`hal` reports
-  `sharing=unknown`) and are **not the final current validation**. CUDA
-  13.4/`sm_80`, fwk394, and H100 were not re-run in this validation.
+  passed** on V100 `sm_70` (CUDA 12.6.85 Release), are historical. The CPU
+  CTest count is 210 (202 plus two source-admission cases, one N=1e6 smoke,
+  two stall diagnostics cases, and three cross-backend equality cases); the
+  expected device totals for that suite are 264 (CUDA `sm_70`) and 255 (HIP
+  `gfx1100`), and the device full suites have not been re-run, so the measured
+  CUDA/HIP CTest totals stay the recorded 254/254 and 245/245 values. The
+  explicit concept-parameter workaround keeps nvcc 12.6.85 off the name-hiding
+  ICE and the RNG main is preserved. The `Debug` build was not re-run on
+  `rosi_v100` after the seven hash cases: the measured `Debug` totals are the
+  pre-hash 195/195 CPU and 247/247 CUDA, and 202/202 and 254/254 are the
+  expected (not-yet-re-run) `Debug` totals for the `2ad7d86` suite. CPU OpenMP
+  (passive, `GOMP_SPINCOUNT=0`) works with no hangs. The previously recorded
+  counts, 194/194 on fwk394 CPU and 246/246 on hal CUDA `sm_80`, are
+  **historical validation on a shared host** (`hal` reports `sharing=unknown`)
+  and are **not the final current validation**. CUDA 13.4/`sm_80`, fwk394, and
+  H100 were not re-run in this validation.
 - The public API is implemented: `Flow<TPayload, TDevice, TStorage>` with
   source/partition/transform/sink handles, named ports, `configure(Tuning)`,
   typed failure `Status`, and `run()`.
@@ -67,9 +68,10 @@ diagnostics cases, and the three cross-backend equality cases):
   with OMP=ON on this branch (historical: 202/202 at validated main
   `2ad7d86`). The previous multi-region pathology is not observed on
   `rosi_v100`.
-- H100: the JURECA `jrc0880.jureca` run is preliminary CUDA evidence only
-  (unknown gateway sharing flag; external load while the client was stale), so
-  no final H100 claim is made. H100 remains blocked/preliminary.
+- H100: not used for this validation; no final H100 claim is made. The JURECA
+  `jrc0880.jureca` run is preliminary CUDA evidence only (unknown gateway
+  sharing flag; external load while the client was stale) and stays historical.
+  H100 remains preliminary.
 
 Priority legend: **P0** blocks plan acceptance, **P1** required for plan
 completion, **P2** hardening or optimization. **Blocked** means an external
@@ -271,13 +273,16 @@ resource or decision is missing.
   Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
   `N=1e8` acceptance run, and no performance claim while `hal` reports
   `sharing=unknown`.
-- [ ] **P0: exclusive or repeated acceptance run.** Blocked: `rosi_v100` is
-  unreachable and JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) has no
-  final recorded run, so the `N=1e8` acceptance run cannot be re-recorded and
-  no H100 performance claim is made. `hal` is shared (`sharing=unknown`); keep
-  the shared-host numbers labelled as a baseline. Re-run `N=1e8` on an
-  exclusive allocation or repeat the baseline enough times to report variance
-  once a platform is available.
+- [x] **P0: exclusive or repeated acceptance run.** Done on `rosi_v100` at
+  main `f3ef355` (V100 SXM2-32GB, CUDA 12.6.85 `sm_70`, Release), `C=8192`,
+  `P=16384`, `T=128`, seed 42, max-visits 64, three repetitions: Q1 194.685 s,
+  Q2 9.093 s, Q8 7.676 s, 1.30e7 particles/s at Q8, 260 histogram rows, count
+  sum exactly 100,000,000, sorted-histogram SHA-256
+  `89dc7fb9962e898fe2f1fe0116ad98fe2df9dceb77d33aa890a56467615d02e9`, peak
+  5702 MiB. The `P=16384` payload (3,221,225,472 B) fits the V100 SXM2-32GB
+  budget, unlike the A30, which forced `P=16128`. `hal` is shared
+  (`sharing=unknown`); its numbers stay labelled as a baseline. H100 was not
+  used, so no H100 performance claim is made.
 - [ ] **P1: freeze the throughput target.** The current baseline is about
   `5.33e5` particles/s at `N=1e8` on the A30 with `C=8192`, `P=65536`. After an
   exclusive measurement, freeze a regression target with a stated tolerance and
@@ -303,13 +308,17 @@ resource or decision is missing.
 
 ## 6. Robustness and hardening
 
-- [ ] **P0: TSAN validation.** Blocked: `rosi_v100` is unreachable, the non-PIE
-  scheduler/pool subset is clean on fwk394 (14/14), and `hal` aborts TSAN at
-  startup with `FATAL: ThreadSanitizer: unexpected memory mapping` even for a
-  non-PIE binary, so no full integrated TSAN run is claimed. `hal` is shared
-  (`sharing=unknown`), so it is not a usable exclusive TSAN host either. Run
-  TSAN on a compatible host; suppressions are allowed only with evidence and
-  must not hide a race.
+- [x] **P0: TSAN validation.** Done on `rosi_v100` at main `f3ef355`: full
+  integrated TSAN CTest **210/210, 0 reports**, 202.83 s, non-PIE Debug with
+  `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`. With the default
+  CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the
+  alpaka async CPU queue; those are upstream alpaka races, not graphFlow races,
+  which is why the clean gate uses the OMP-exec-disabled configuration. The
+  fwk394 non-PIE scheduler/pool subset (14/14) and the hal startup abort
+  (`FATAL: ThreadSanitizer: unexpected memory mapping`, even for a non-PIE
+  binary) are historical context for why this was blocked; `hal` is shared
+  (`sharing=unknown`) and not a usable TSAN host. No TSAN suppressions were
+  used; suppressions are allowed only with evidence and must not hide a race.
 - [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
   and staging exhaustion, feedback cycles, max-visits, abort during in-flight
   work, and repeated runs with generation reuse.
@@ -333,10 +342,11 @@ resource or decision is missing.
   `hal`. Other
   AMD architectures and the AMD `N=1e8` acceptance remain open; GitHub-hosted
   HIP stays compile-only.
-- **TSAN host:** the hal kernel rejects the TSAN memory mapping and
-  `rosi_v100` is unreachable, so a compatible host or a different
-  runtime/kernel is still required. The `rosi_v100` TSAN result is not yet
-  recorded; the CPU CTest pass on `rosi_v100` does not include a TSAN run.
+- **TSAN host:** resolved. The TSAN host is `rosi_v100` (exclusive); the full
+  integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
+  `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
+  `alpaka_DEP_OMP=OFF`). The hal kernel still rejects the TSAN memory mapping
+  and the fwk394 non-PIE subset (14/14) is historical context.
 - **CI status:** on this branch the hosted CPU jobs run the 210-case CPU suite
   (Release and Debug) and the `sanitizers` job runs ASAN+UBSAN over it, with
   no skip: the N=1e6 smoke, the two stall diagnostics cases, and the three
@@ -345,19 +355,23 @@ resource or decision is missing.
   202-case suite (CPU 202/202 Release and Debug, ASAN+UBSAN Debug 202/202);
   `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs
   are compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. TSAN
-  stays a local/manual check. The CUDA or HIP runtime gate still needs a device
-  host with a known sharing and label configuration; no self-hosted runner is
-  provisioned.
+  has a recorded clean `rosi_v100` run (210/210, 0 reports, 202.83 s, non-PIE
+  with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`) but stays a
+  local/manual check on that host; hosted CI runs no TSAN job. The CUDA or HIP
+  runtime gate still needs a device host with a known sharing and label
+  configuration; no self-hosted runner is provisioned.
 - **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
   and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
   host with a known sharing and label configuration; no self-hosted runner is
   provisioned.
-- **Exclusive throughput:** blocked. `hal` is shared; the current 187.5 s is a
-  baseline, not an exclusive-hardware acceptance number. `rosi_v100` is
-  unreachable, and the JURECA `jrc0880.jureca` H100 run is preliminary CUDA
-  evidence only: its gateway sharing flag is unknown, the recorded run observed
-  external load while the client was stale, and no final H100 run has been
-  recorded, so no H100 performance claim is made.
+- **Exclusive throughput:** resolved for the acceptance run. `rosi_v100` is
+  reachable and the `N=1e8` CUDA acceptance run is recorded on it at main
+  `f3ef355` (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s, 1.30e7 particles/s at Q8,
+  3 reps, peak 5702 MiB; full record in `docs/acceptance.md` and
+  `docs/benchmarks.md`). `hal` is shared (`sharing=unknown`); its historical
+  187.5 s number stays a shared-host baseline. H100 was not used; the JURECA
+  `jrc0880.jureca` run is preliminary CUDA evidence only and no H100
+  performance claim is made.
 - **CPU OMP backend:** CPU execution with the OpenMP backend works on
   `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the CPU CTest
   passes 210/210 with OMP=ON Release on this branch (202/202 was the
@@ -389,7 +403,10 @@ These are not missing work; the plan excludes them from v1:
 
 ## 9. Completion checklist
 
-- [ ] All P0 items above are implemented and covered by tests.
+- [x] All P0 items above are implemented and covered by tests (batching, RNG
+  API, example CLI in CTest, cross-backend histogram equality, CUDA kernel
+  test, HIP execution gate, GitHub Actions workflow, format, REUSE, the
+  `N=1e8` acceptance run on `rosi_v100`, and TSAN validation).
 - [x] CPU, CUDA, and HIP build; HIP execution is validated on `hal` (RX 7900
   XTX `gfx1100`, ROCm 7.2) with 245/245 CTest and 43 HIP cases, measured on
    `b972eaa`. `rosi_v100` CPU CTest passes 210/210 (OMP=ON Release) on this
@@ -404,10 +421,16 @@ These are not missing work; the plan excludes them from v1:
 - [x] `N=1e6` runs in CI: the fixed-seed `N=1e6` CPU smoke
    (`example.particle_feedback.smoke.N1000000`) runs in the ordinary hosted CPU
    CTest job with a finite timeout and exact histogram-sum check, no skip.
-    `N=1e8` remains blocked: `rosi_v100` is unreachable and no final H100 run
-    has been recorded. The `rosi_v100` CPU CTest passes 210/210 on this branch
-    (202/202 historical at validated main `2ad7d86`); the `rosi_v100`
-    33-invocation baseline comparison is not yet recorded.
+    The `N=1e8` acceptance run is re-recorded on `rosi_v100` at main `f3ef355`
+    (V100 SXM2-32GB, CUDA 12.6.85 `sm_70`, Release): Q1 194.685 s, Q2 9.093 s,
+    Q8 7.676 s, 1.30e7 particles/s at Q8, 260 rows, sum exactly 100,000,000,
+    sorted-histogram SHA-256
+    `89dc7fb9962e898fe2f1fe0116ad98fe2df9dceb77d33aa890a56467615d02e9`, peak
+    5702 MiB, 3 repetitions, `C=8192`, `P=16384`, `T=128`, seed 42, max-visits
+    64. H100 was not used; no H100 claim. The `rosi_v100` CPU CTest passes
+    210/210 on this branch at `f3ef355` (202/202 historical at validated main
+    `2ad7d86`); the `rosi_v100` 33-invocation baseline comparison is not yet
+    recorded.
 - [x] CPU/CUDA/HIP histogram equality is automated: the
    `example.particle_feedback.cross_backend.Q{1,2,8}` cases compare exact
    sorted histogram rows for `N=1e6` across every compiled backend with a
@@ -416,14 +439,20 @@ These are not missing work; the plan excludes them from v1:
    re-run; CUDA 264 and HIP 255 are the expected totals for the current
    suite).
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
-  Blocked: `rosi_v100` is unreachable and no final H100 run has been recorded.
-  The CPU OpenMP wall times are recorded (see `docs/acceptance.md`), but no
-  frozen regression target exists yet. The H100 run is preliminary CUDA
-  evidence only (external load, stale client); no final claim.
-- [ ] ASAN/UBSAN/TSAN pass on a compatible host. Blocked: `rosi_v100` is
-  unreachable and `hal` is blocked by `unexpected memory mapping`; the
-  `rosi_v100` sanitizer results are not yet recorded; the CPU CTest pass does
-  not include a sanitizer run.
+  Throughput is now measured on the exclusive `rosi_v100` (`N=1e8` CUDA
+  acceptance run at main `f3ef355`, Q1 194.685 s, Q2 9.093 s, Q8 7.676 s,
+  1.30e7 particles/s at Q8; record in `docs/acceptance.md` and
+  `docs/benchmarks.md`). What remains is freezing a regression target with a
+  stated tolerance and enforcing it in CI or a scheduled benchmark. The CPU
+  OpenMP wall times are recorded (see `docs/acceptance.md`). H100 was not
+  used; no H100 claim.
+- [x] ASAN/UBSAN/TSAN pass on a compatible host. The `rosi_v100` full
+  integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s at main
+  `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF` and
+  `alpaka_DEP_OMP=OFF`); hosted CI runs ASAN+UBSAN over the same 210-case CPU
+  suite. With the default CpuOmpBlocks plus OpenMP the TSAN suite fails
+  105/210 with reports inside the alpaka async CPU queue (upstream alpaka
+  races, not graphFlow).
  - [x] Format, REUSE, docs, and the API map are complete and green. T14b
   (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
   format gate.

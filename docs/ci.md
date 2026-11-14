@@ -39,7 +39,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | --- | ---: | --- |
 | CPU, Release and Debug | 210 on `gf/cross-backend-equality` (202 at `2ad7d86`); 210 = 202 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality | the hosted `cpu` jobs |
 | CPU, ASAN+UBSAN Debug | 210 on `gf/cross-backend-equality` (202 historical at `2ad7d86`) | the hosted `sanitizers` job |
-| CUDA `sm_70` | 254 at `2ad7d86` (historical); 264 = 254 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only |
+| CUDA `sm_70` | 254 at `2ad7d86` (historical); 264 = 254 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, not re-run on `rosi_v100` | `rosi_v100` device run; the hosted job compiles only. New `rosi_v100` runs at `f3ef355`: CPU CTest 210/210 and full TSAN CTest 210/210 (0 reports, 202.83 s, non-PIE, `alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`) |
 | HIP `gfx1100` | 245 at `b972eaa` (historical); 255 = 245 + 2 source-admission + 1 N=1e6 smoke + 2 stall diagnostics + 3 cross-backend equality, not re-run on `hal` | `hal` device run on `b972eaa`; the hosted job compiles only |
 
 The CPU count is the same in Release and Debug. Release compiles the per-event
@@ -139,9 +139,12 @@ ctest --test-dir build --output-on-failure --no-tests=error
 ```
 
 ASAN+UBSAN runs the host scheduler tests. The job does not run TSAN: the
-recorded TSAN blocker is a runtime mapping failure, and the hosted runner has
-no known-good mapping configuration. TSAN stays a local/manual check until a
-runner with a passing startup check is available.
+recorded TSAN blocker on hal (runtime mapping failure) is resolved on the
+exclusive `rosi_v100` host, where the full integrated TSAN CTest passes
+210/210 with 0 reports in 202.83 s at main `f3ef355` (non-PIE Debug with
+`alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). Hosted CI still
+runs no TSAN job because hosted runners are shared and have no known-good
+mapping configuration; TSAN remains a local/manual check on `rosi_v100`.
 
 ### Status tests
 
@@ -260,12 +263,14 @@ not change program behavior.
 
 - Self-hosted runners or labels (`fwk394`, `a30`, `rocm`).
 - CUDA or HIP execution; both jobs are compile-only.
-- TSAN on a self-hosted host: blocked by the hal `unexpected memory mapping`
-  failure and `rosi_v100` being unreachable; the hosted runner has no known-good
-  mapping configuration.
+- TSAN on a self-hosted host: the hosted runner has no known-good mapping
+  configuration, so hosted CI runs no TSAN job. A full clean `rosi_v100` TSAN
+  run exists (210/210, 0 reports, 202.83 s at `f3ef355`, non-PIE with
+  `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the hal
+  `unexpected memory mapping` failure is historical context.
 - GitLab CI.
-- H100 or any other specific GPU target: `rosi_v100` is unreachable and no
-  final H100 run has been recorded, so no H100 performance claim is made.
+- H100 or any other specific GPU target: H100 was not used and no final H100
+  run has been recorded, so no H100 performance claim is made.
 
 ## Local reproduction
 
@@ -290,7 +295,11 @@ enforces the T14b
 sweep with clang-format 20.1.8. The `sm_70` workaround clears the nvcc internal
 compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example
 without a GPU. `hip-compile` builds the HIP sources and the HIP example without
-an AMD GPU. `icpx-cpu` is manual and skipped on push and pull requests.
+an AMD GPU. `icpx-cpu` is manual and skipped on push and pull requests. On the
+exclusive `rosi_v100` host at `f3ef355` the CPU CTest now measures 210/210 and
+the full integrated TSAN CTest measures 210/210 with 0 reports (202.83 s,
+non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`), so the
+manual checks recorded in `docs/acceptance.md` are current for that host.
 
 Container jobs set `shell: bash` because container jobs default to `sh`, which
 rejects `set -o pipefail`.

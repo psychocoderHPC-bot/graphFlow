@@ -50,13 +50,18 @@ OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
 observed. The previous multi-region pathology is not observed on `rosi_v100`
 with passive spinning.
 
-## TSAN is blocked on hal
+## TSAN is validated on rosi_v100; hal still cannot run it
 
-The hal kernel aborts ThreadSanitizer at startup with
-`FATAL: ThreadSanitizer: unexpected memory mapping`, including for a non-PIE
-binary. The scheduler and pool subset is clean on fwk394 (14/14 cases). Use a
-host whose runtime mapping passes the TSAN startup check before treating TSAN as
-a gate. An integrated ASAN/UBSAN count is not recorded.
+The full integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s on
+`rosi_v100` at main `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF`
+and `alpaka_DEP_OMP=OFF`). The remaining limitation is configuration
+dependent: with the default CpuOmpBlocks plus OpenMP the same suite fails
+105/210 with reports inside the alpaka async CPU queue. Those are upstream
+alpaka races, not graphFlow races, so the clean gate uses the
+OMP-exec-disabled configuration. The hal kernel still aborts ThreadSanitizer at
+startup with `FATAL: ThreadSanitizer: unexpected memory mapping`, including for
+a non-PIE binary, so hal is not a usable TSAN host; the fwk394 scheduler and
+pool subset (14/14 cases) is historical context.
 
 ## CUDA 12.5 nvcc internal compiler error
 
@@ -75,14 +80,16 @@ threshold; deduction and the instantiated signatures are unchanged. The test
 hook adapters keep `GraphRunner::Queue` and `Batch` out of non-template
 `std::function` construction, the other nvcc 12.6.85 frontend crash. With the
 workaround the `rosi_v100` V100 `sm_70` CTest passes 254/254 and the CPU CTest
-passes 202/202 in Release; the `Debug` build was not re-run after the seven hash
+passes 202/202 in Release, and the `f3ef355` runs (CPU CTest 210/210, TSAN
+CTest 210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the
+same workaround. The `Debug` build was not re-run after the seven hash
 cases, so the measured `Debug` totals are the pre-hash 247/247 CUDA and 195/195
 CPU, and 254/254/202/202 are the expected (not-yet-re-run) `Debug` totals. The
 RNG main is preserved. The hash-path
 rerun remains open, and CUDA 13.4/`sm_80`, fwk394, and H100 were not re-run in
 this validation.
 
-## Throughput is a shared-host baseline
+## Throughput is a shared-host baseline for hal and fwk394
 
 `hal` reports `sharing=unknown` and fwk394 is shared. The historical `N=1e8`
 result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
@@ -91,20 +98,26 @@ numbers. There is no variance study and no frozen regression target. The HIP
 run on `hal` is a correctness result only; `hal` sharing is unknown and no HIP
 performance number is recorded.
 
-`rosi_v100` is the exclusive validation platform. Current `rosi_v100`
-results: CPU CTest 202/202 and CUDA CTest 254/254 on V100 `sm_70` (OMP=ON and
-CUDA 12.6.85, Release, both with the explicit concept-parameter workaround);
-the `Debug` build was not re-run after the seven hash cases (measured `Debug`
-195/195 CPU, 247/247 CUDA pre-hash; 202/202 and 254/254 expected but not
-re-run); CPU OpenMP wall times recorded (passive, `GOMP_SPINCOUNT=0`).
-No frozen regression target exists yet. CUDA 13.4/`sm_80`, fwk394, and H100
-were not re-run in this validation.
+`rosi_v100` is the exclusive validation platform, and the `N=1e8` CUDA
+acceptance run is recorded on it at main `f3ef355` (V100 SXM2-32GB, CUDA
+12.6.85 `sm_70`, Release, `C=8192`, `P=16384`, `T=128`, seed 42, max-visits
+64, three repetitions): Q1 194.685 s, Q2 9.093 s, Q8 7.676 s, 1.30e7
+particles/s at Q8, 260 rows, count sum exactly 100,000,000, peak 5702 MiB.
+Current `rosi_v100` results: CPU CTest 210/210 at `f3ef355` (OMP=ON Release)
+and the full integrated TSAN CTest 210/210 with 0 reports (202.83 s, non-PIE
+with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the measured
+historical totals at `2ad7d86` are CPU 202/202 and CUDA 254/254 on V100
+`sm_70` (CUDA 12.6.85, Release, both with the explicit concept-parameter
+workaround). The `Debug` build was not re-run after the seven hash cases
+(measured `Debug` 195/195 CPU, 247/247 CUDA pre-hash; 202/202 and 254/254
+expected but not re-run); CPU OpenMP wall times recorded (passive,
+`GOMP_SPINCOUNT=0`). No frozen regression target exists yet. CUDA
+13.4/`sm_80`, fwk394, and H100 were not re-run in this validation.
 
-JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
-gateway sharing flag is unknown. The recorded H100 run observed external load
-while the client was stale, so it is preliminary CUDA evidence only: no final
-H100 claim is made, and no H100 baseline is recorded. H100 remains
-blocked/preliminary.
+H100 was not used for this validation; no H100 claim is made and no H100
+baseline is recorded. H100 remains preliminary. The earlier JURECA
+`jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run observed external load while
+the client was stale, so it is preliminary CUDA evidence only.
 
 ## Pool memory is budget-capped but still fixed-capacity
 
@@ -139,10 +152,12 @@ CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
 CPU CTest cases in Release and Debug, and `sanitizers` runs ASAN+UBSAN. The
 CUDA and HIP jobs compile only, because the hosted runners have no NVIDIA or
 AMD GPU; a CUDA or HIP runtime gate needs a device host. TSAN stays a
-local/manual check because the hosted runner has no known-good mapping
-configuration. No self-hosted runner, project GPU label, or GitLab pipeline is
-configured. The local commands in `docs/build.md` remain the documented entry
-points.
+local/manual check on hosted runners because they have no known-good mapping
+configuration, but a full clean `rosi_v100` TSAN run exists (210/210,
+0 reports, 202.83 s at `f3ef355`, non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF`
+and `alpaka_DEP_OMP=OFF`), so TSAN is validated on the exclusive host. No
+self-hosted runner, project GPU label, or GitLab pipeline is configured. The
+local commands in `docs/build.md` remain the documented entry points.
 
 ## Accelerator test coverage is partial
 
