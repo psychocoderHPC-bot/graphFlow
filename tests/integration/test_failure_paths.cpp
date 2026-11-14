@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -49,6 +50,78 @@ namespace
             [[maybe_unused]] std::uint32_t* status,
             [[maybe_unused]] std::uint32_t* capped) const
         {
+        }
+    };
+
+    /** Return a bin outside the declared two-bin range without touching the status word. */
+    struct OutOfRangePolicy
+    {
+        static constexpr std::uint32_t maxBins = 2u;
+
+        ALPAKA_FN_ACC std::uint32_t classify(
+            [[maybe_unused]] std::uint64_t id,
+            [[maybe_unused]] std::uint32_t property,
+            [[maybe_unused]] std::uint32_t weight,
+            [[maybe_unused]] std::uint32_t visit) const
+        {
+            return maxBins;
+        }
+
+        template<typename TAcc>
+        ALPAKA_FN_ACC void apply(
+            [[maybe_unused]] TAcc const& acc,
+            [[maybe_unused]] std::uint32_t bin,
+            [[maybe_unused]] graphFlow::Particle& particle,
+            [[maybe_unused]] std::uint32_t* status,
+            [[maybe_unused]] std::uint32_t* capped) const
+        {
+        }
+    };
+
+    /** Sixteen distinct bins exceed the eight entries of `HashBinTable<4u>`. */
+    struct ManyBinsPolicy
+    {
+        static constexpr std::uint32_t maxBins = 16u;
+
+        ALPAKA_FN_ACC std::uint32_t classify(
+            std::uint64_t id,
+            [[maybe_unused]] std::uint32_t property,
+            [[maybe_unused]] std::uint32_t weight,
+            [[maybe_unused]] std::uint32_t visit) const
+        {
+            return static_cast<std::uint32_t>(id % maxBins);
+        }
+
+        template<typename TAcc>
+        ALPAKA_FN_ACC void apply(
+            [[maybe_unused]] TAcc const& acc,
+            [[maybe_unused]] std::uint32_t bin,
+            [[maybe_unused]] graphFlow::Particle& particle,
+            [[maybe_unused]] std::uint32_t* status,
+            [[maybe_unused]] std::uint32_t* capped) const
+        {
+        }
+    };
+
+    /** Emit a particle whose weight is already at the 32-bit limit. */
+    struct MaxWeightSource
+    {
+        ALPAKA_FN_ACC graphFlow::Particle operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        {
+            return graphFlow::Particle{id, 0u, std::numeric_limits<std::uint32_t>::max(), 0u};
+        }
+    };
+
+    /** Route every particle through the feedback updater. */
+    struct FeedbackOnlyClassifier
+    {
+        static constexpr std::uint32_t maxBins = 2u;
+
+        ALPAKA_FN_ACC graphFlow::particle::Outcome operator()(
+            [[maybe_unused]] auto const& accelerator,
+            [[maybe_unused]] graphFlow::Particle const& particle) const
+        {
+            return graphFlow::particle::Outcome::feedback;
         }
     };
 
@@ -201,7 +274,9 @@ namespace
         std::uint32_t numChunks = 0u;
         std::uint32_t freeChunks = 0u;
         std::uint32_t abortCalls = 0u;
+        std::uint32_t sinkCompleted = 0u;
         std::vector<std::uint32_t> leases;
+        std::vector<std::uint32_t> values;
     };
 
     /** Run source -> split -> merge -> sink with Q=2 and an injected failure hook.
@@ -272,9 +347,16 @@ namespace
         }
         outcome.numChunks = pool.numChunks();
         outcome.freeChunks = pool.freeCount();
+        outcome.sinkCompleted = runner.nodeCompleted(3u);
         outcome.leases.reserve(pool.numChunks());
         for(std::uint32_t index = 0u; index < pool.numChunks(); ++index)
             outcome.leases.push_back(pool.leaseCount(graphFlow::ChunkHandle{index, pool.generation(index)}));
+        std::vector<std::uint32_t> host(static_cast<std::size_t>(particles), 0u);
+        {
+            auto queue = device.makeQueue(alpaka::queueKind::blocking);
+            alpaka::onHost::memcpy(queue, host, result);
+        }
+        outcome.values = std::move(host);
         return outcome;
     }
 } // namespace
@@ -292,8 +374,11 @@ TEST_CASE("event enqueue failure releases a planned batch", "[integration][failu
     CHECK(outcome.threw);
     CHECK(outcome.abortCalls == 1u); // exactly one abort, so the pending chunks are released once
     CHECK(outcome.freeChunks == outcome.numChunks);
+    CHECK(outcome.sinkCompleted == 0u);
     for(std::uint32_t const leases : outcome.leases)
         CHECK(leases == 0u);
+    for(std::uint32_t const value : outcome.values)
+        CHECK(value == 0xDEAD'BEEFu);
 }
 
 TEST_CASE("lease acquisition failure rolls back acquired leases", "[integration][failure][batching]")
@@ -309,8 +394,11 @@ TEST_CASE("lease acquisition failure rolls back acquired leases", "[integration]
     CHECK(outcome.threw);
     CHECK(outcome.abortCalls == 0u); // the failing dispatch never acquired output chunks
     CHECK(outcome.freeChunks == outcome.numChunks);
+    CHECK(outcome.sinkCompleted == 0u);
     for(std::uint32_t const leases : outcome.leases)
         CHECK(leases == 0u);
+    for(std::uint32_t const value : outcome.values)
+        CHECK(value == 0xDEAD'BEEFu);
 }
 
 TEST_CASE("a later unroutable output still releases the batch input", "[integration][failure][routing]")
@@ -629,4 +717,198 @@ TEST_CASE("a capped outcome remains routable and does not fail the batch", "[int
         for(std::uint32_t const value : readValues(device, results.getView(), particles))
             CHECK(value == 1u);
     }
+}
+
+namespace
+{
+    template<typename TStorage>
+    void checkNoOutstandingLeases(TStorage const& storage)
+    {
+        for(std::uint32_t index = 0u; index < storage.numChunks(); ++index)
+            CHECK(storage.leaseCount(graphFlow::ChunkHandle{index, storage.generation(index)}) == 0u);
+    }
+} // namespace
+
+TEST_CASE("a full hash table aborts the batch without a partial sink write", "[integration][failure][hash]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    // Sixteen bins into eight hash entries: the classify table is full before any plan exists.
+    constexpr std::uint32_t capacity = 16u;
+    constexpr std::uint64_t particles = 16u;
+    constexpr std::uint32_t numChunks = 64u;
+    graphFlow::ChunkPool<Device> pool{device, numChunks, capacity};
+    auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
+    auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+    initializeSentinel(device, result.getView());
+    {
+        auto queue = device.makeQueue(alpaka::queueKind::blocking);
+        alpaka::onHost::memset(queue, capped, std::uint8_t{0});
+    }
+
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
+    graphFlow::particle::TransformStage<Device, ManyBinsPolicy, graphFlow::HashBinTable<4u>>
+        transform{device, pool, ManyBinsPolicy{}, capped, 128u};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
+
+    std::vector<int> route(ManyBinsPolicy::maxBins, 2);
+    graphFlow::GraphRunner<Device> runner{device, pool};
+    auto const source = runner.addNode(
+        "generate",
+        graphFlow::NodeRole::source,
+        1u,
+        {1},
+        graphFlow::particle::hooksOf<Device>(generate));
+    runner.addNode(
+        "hash transform",
+        graphFlow::NodeRole::transform,
+        ManyBinsPolicy::maxBins,
+        route,
+        graphFlow::particle::hooksOf<Device>(transform));
+    auto const sinkNode
+        = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
+    runner.setSource(source, particles);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    CHECK_THROWS_AS(runner.run(), graphFlow::BatchError);
+    CHECK(pool.freeCount() == pool.numChunks());
+    CHECK(pool.peakLive() <= pool.numChunks());
+    CHECK(runner.nodeCompleted(sinkNode) == 0u);
+    checkNoOutstandingLeases(pool);
+    for(std::uint32_t const value : readValues(device, result.getView(), particles))
+        CHECK(value == statusSentinel);
+}
+
+TEST_CASE("an out-of-range classifier aborts the batch without a partial sink write", "[integration][failure]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    constexpr std::uint32_t capacity = 8u;
+    constexpr std::uint64_t particles = 8u;
+    constexpr std::uint32_t numChunks = 32u;
+    graphFlow::ChunkPool<Device> pool{device, numChunks, capacity};
+    auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
+    auto capped = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+    initializeSentinel(device, result.getView());
+    {
+        auto queue = device.makeQueue(alpaka::queueKind::blocking);
+        alpaka::onHost::memset(queue, capped, std::uint8_t{0});
+    }
+
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
+    graphFlow::particle::TransformStage<Device, OutOfRangePolicy>
+        transform{device, pool, OutOfRangePolicy{}, capped, 128u};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
+
+    graphFlow::GraphRunner<Device> runner{device, pool};
+    auto const source = runner.addNode(
+        "generate",
+        graphFlow::NodeRole::source,
+        1u,
+        {1},
+        graphFlow::particle::hooksOf<Device>(generate));
+    runner.addNode(
+        "out-of-range",
+        graphFlow::NodeRole::transform,
+        OutOfRangePolicy::maxBins,
+        {2, 2},
+        graphFlow::particle::hooksOf<Device>(transform));
+    auto const sinkNode
+        = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
+    runner.setSource(source, particles);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    CHECK_THROWS_AS(runner.run(), graphFlow::BatchError);
+    CHECK(pool.freeCount() == pool.numChunks());
+    CHECK(runner.nodeCompleted(sinkNode) == 0u);
+    checkNoOutstandingLeases(pool);
+    for(std::uint32_t const value : readValues(device, result.getView(), particles))
+        CHECK(value == statusSentinel);
+}
+
+TEST_CASE("a source event-enqueue failure aborts in-flight work and restores the pool", "[integration][failure]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    constexpr std::uint32_t capacity = 8u;
+    constexpr std::uint64_t particles = 8u;
+    constexpr std::uint32_t numChunks = 16u;
+    graphFlow::ChunkPool<Device> pool{device, numChunks, capacity};
+    auto result = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{particles});
+    initializeSentinel(device, result.getView());
+
+    graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
+    graphFlow::particle::SinkStage<Device> sink{device, pool, result, 128u};
+
+    std::uint32_t abortCalls = 0u;
+    auto sourceHooks = graphFlow::test::wrapAbort<Device, graphFlow::ChunkPool<Device>>(
+        graphFlow::particle::hooksOf<Device>(generate),
+        [&abortCalls](auto const& sourceAbort)
+        {
+            ++abortCalls;
+            sourceAbort();
+        });
+
+    graphFlow::GraphRunner<Device> runner{device, pool};
+    auto const source = runner.addNode("generate", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
+    auto const sinkNode
+        = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, graphFlow::particle::hooksOf<Device>(sink));
+    runner.setSource(source, particles);
+    runner.setStallTimeout(std::chrono::milliseconds{5000});
+    // The generate launch is already enqueued when the completion-event enqueue fails, so teardown
+    // has to drain the queue and abort an in-flight batch.
+    runner.setFailureHook(
+        [](graphFlow::FailurePoint point, std::uint32_t node, std::uint32_t item)
+        {
+            if(point == graphFlow::FailurePoint::eventEnqueue && node == 0u && item == 1u)
+                throw std::runtime_error{"injected source event enqueue failure"};
+        });
+
+    bool failed = false;
+    try
+    {
+        runner.run();
+    }
+    catch(std::runtime_error const&)
+    {
+        // The example maps an escaping run exception to a nonzero process exit.
+        failed = true;
+    }
+    CHECK(failed);
+    CHECK(abortCalls == 1u); // abort runs once after the queue drain
+    CHECK(pool.freeCount() == pool.numChunks());
+    CHECK(sink.sunkParticles() == 0u);
+    CHECK(runner.nodeCompleted(sinkNode) == 0u);
+    checkNoOutstandingLeases(pool);
+    for(std::uint32_t const value : readValues(device, result.getView(), particles))
+        CHECK(value == statusSentinel);
+}
+
+TEST_CASE("a checked weight overflow aborts the typed batch", "[integration][failure][status]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+
+    auto weights = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{8u}});
+    graphFlow::Flow<graphFlow::Particle, Device> flow{device};
+    auto source = flow.source("max weight", MaxWeightSource{});
+    auto feedback = flow.partition("feedback", FeedbackOnlyClassifier{}, graphFlow::particle::UpdateWeight{1u});
+    auto sink = flow.sink("record", graphFlow::particle::RecordWeight<decltype(weights.getView())>{weights.getView()});
+    flow.connect(source, feedback);
+    flow.connect(feedback.template out<0u>(), sink);
+    flow.connect(feedback.template out<1u>(), sink);
+
+    graphFlow::Tuning tuning;
+    tuning.chunkCapacity = 8u;
+    tuning.tileSize = 8u;
+    tuning.batchChunks = 1u;
+    tuning.frameCap = 1u;
+    flow.configure(tuning);
+
+    // `UpdateWeight` reports `UpdateResult::overflow` before the weight wraps, so the host rejects
+    // the batch instead of publishing a wrapped value.
+    CHECK_THROWS_AS(flow.run(source, 8u), graphFlow::BatchError);
 }

@@ -136,6 +136,46 @@ namespace
         }
     };
 
+    /** Return a bin outside the declared range without touching `Status`. */
+    struct OutOfRangeClassifier
+    {
+        static constexpr std::uint32_t maxBins = 2u;
+
+        ALPAKA_FN_ACC std::uint32_t operator()(
+            [[maybe_unused]] auto const& accelerator,
+            [[maybe_unused]] Pod const& payload) const
+        {
+            return maxBins;
+        }
+    };
+
+    /** Report a checked counter overflow through the classify status word. */
+    struct CounterOverflowClassifier
+    {
+        static constexpr std::uint32_t maxBins = 2u;
+
+        ALPAKA_FN_ACC std::uint32_t operator()(
+            [[maybe_unused]] auto const& accelerator,
+            graphFlow::Status& status,
+            Pod const& payload) const
+        {
+            if(payload.value == std::numeric_limits<std::uint32_t>::max())
+                status.set(graphFlow::StatusCode::overflow);
+            return 0u;
+        }
+    };
+
+    /** Four bins so one full chunk needs four output chunks. */
+    struct FourBinClassifier
+    {
+        static constexpr std::uint32_t maxBins = 4u;
+
+        ALPAKA_FN_ACC std::uint32_t operator()([[maybe_unused]] auto const& accelerator, Pod const& payload) const
+        {
+            return static_cast<std::uint32_t>(payload.id % maxBins);
+        }
+    };
+
     struct GeometryPayload
     {
         double z = 0.0;
@@ -461,6 +501,111 @@ TEST_CASE("a checked updater overflow fails the planned batch", "[unit][flow][st
     stage.abort();
     CHECK(storage.freeCount() == 11u);
     requireSingleUse(stage, queue);
+    storage.release(input.handle);
+    CHECK(storage.freeCount() == storage.numChunks());
+}
+
+TEST_CASE("an out-of-range classifier result fails the dense batch before planning", "[unit][flow][status]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    Storage storage{device, 8u, 4u};
+    auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+    graphFlow::Config const config = configFor(4u, 1u);
+    graphFlow::detail::PartitionStage<Device, Storage, Pod, OutOfRangeClassifier, graphFlow::NoUpdate>
+        stage{device, storage, config, OutOfRangeClassifier{}, graphFlow::NoUpdate{}};
+
+    graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
+    using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
+    Batch const batch{{input}, 0u};
+
+    stage.launch(queue, batch);
+    drain(device, queue);
+
+    std::uint32_t allocated = 0u;
+    // The classifier returned `maxBins`; the kernel flags it and the host rejects the batch
+    // before it acquires a single output chunk.
+    CHECK_THROWS_AS(stage.advance(queue, batch, allocated), graphFlow::BatchError);
+    CHECK(allocated == 0u);
+    CHECK(storage.freeCount() == 7u);
+
+    stage.abort();
+    CHECK(storage.freeCount() == 7u);
+    std::vector<graphFlow::ChunkDescriptor> outputs;
+    stage.finish(batch, outputs);
+    CHECK(outputs.empty());
+    requireSingleUse(stage, queue);
+
+    storage.release(input.handle);
+    CHECK(storage.freeCount() == storage.numChunks());
+}
+
+TEST_CASE("a classifier counter overflow fails the dense batch before planning", "[unit][flow][status]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    Storage storage{device, 8u, 4u};
+    auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+    graphFlow::Config const config = configFor(4u, 1u);
+    graphFlow::detail::PartitionStage<Device, Storage, Pod, CounterOverflowClassifier, graphFlow::NoUpdate>
+        stage{device, storage, config, CounterOverflowClassifier{}, graphFlow::NoUpdate{}};
+
+    graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    std::uint32_t const max = std::numeric_limits<std::uint32_t>::max();
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, max}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
+    using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
+    Batch const batch{{input}, 0u};
+
+    stage.launch(queue, batch);
+    drain(device, queue);
+
+    std::uint32_t allocated = 0u;
+    CHECK_THROWS_AS(stage.advance(queue, batch, allocated), graphFlow::BatchError);
+    CHECK(allocated == 0u);
+    CHECK(storage.freeCount() == 7u);
+
+    stage.abort();
+    CHECK(storage.freeCount() == 7u);
+    std::vector<graphFlow::ChunkDescriptor> outputs;
+    stage.finish(batch, outputs);
+    CHECK(outputs.empty());
+    requireSingleUse(stage, queue);
+
+    storage.release(input.handle);
+    CHECK(storage.freeCount() == storage.numChunks());
+}
+
+TEST_CASE("pool exhaustion during planning releases every staged chunk", "[unit][flow][status]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    // One input chunk plus exactly three output chunks: the four-bin plan needs four outputs and
+    // fails on the last acquisition.
+    Storage storage{device, 4u, 4u};
+    auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+    graphFlow::Config const config = configFor(4u, 1u);
+    graphFlow::detail::PartitionStage<Device, Storage, Pod, FourBinClassifier, graphFlow::NoUpdate>
+        stage{device, storage, config, FourBinClassifier{}, graphFlow::NoUpdate{}};
+
+    graphFlow::ChunkDescriptor const input{storage.acquire(), 4u, 0u};
+    writeChunk(device, storage, input.handle, std::vector<Pod>{Pod{0u, 0u}, Pod{1u, 0u}, Pod{2u, 0u}, Pod{3u, 0u}});
+    using Batch = graphFlow::GraphRunner<Device, Storage>::Batch;
+    Batch const batch{{input}, 0u};
+
+    stage.launch(queue, batch);
+    drain(device, queue);
+
+    std::uint32_t allocated = 0u;
+    CHECK_THROWS_AS(stage.advance(queue, batch, allocated), std::runtime_error);
+    CHECK(allocated == 0u);
+    // The three chunks acquired before the pool ran dry are back; only the input is live.
+    CHECK(storage.freeCount() == 3u);
+
+    stage.abort();
+    CHECK(storage.freeCount() == 3u);
+    std::vector<graphFlow::ChunkDescriptor> outputs;
+    stage.finish(batch, outputs);
+    CHECK(outputs.empty());
+    requireSingleUse(stage, queue);
+
     storage.release(input.handle);
     CHECK(storage.freeCount() == storage.numChunks());
 }

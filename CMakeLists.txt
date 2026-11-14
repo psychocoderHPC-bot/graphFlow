@@ -224,13 +224,19 @@ if(GRAPHFLOW_BUILD_TESTS)
             PRIVATE
                 tests/unit/test_cuda_kernel.cpp
                 tests/integration/test_flow_execution_cuda.cpp
+                tests/integration/test_failure_paths_cuda.cpp
                 tests/integration/test_photon_scattering_cuda.cpp
         )
     endif()
     if(GRAPHFLOW_ENABLE_HIP)
         # Runtime cases: they fail when no AMD device is visible. GitHub CI builds
         # HIP compile-only because its runners have no AMD GPU.
-        target_sources(graphFlow_tests PRIVATE tests/integration/test_flow_execution_hip.cpp)
+        target_sources(
+            graphFlow_tests
+            PRIVATE
+                tests/integration/test_flow_execution_hip.cpp
+                tests/integration/test_failure_paths_hip.cpp
+        )
     endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(
@@ -352,6 +358,22 @@ if(GRAPHFLOW_BUILD_TESTS)
         PROPERTIES
             TIMEOUT ${GRAPHFLOW_EXAMPLE_SMOKE_TIMEOUT}
             LABELS "example;cli;cpu;smoke;long"
+    )
+
+    # Subprocess failure contract: invalid CLI input and one runtime-failing
+    # example configuration must exit nonzero through the real executable.
+    add_test(
+        NAME example.particle_feedback.failure_paths
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DBINARY=${GRAPHFLOW_EXAMPLE_CLI_BINARY}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_cli_failure.cmake"
+    )
+    set_tests_properties(
+        example.particle_feedback.failure_paths
+        PROPERTIES
+            TIMEOUT 300
+            LABELS "example;cli;failure"
     )
 
     # Cross-backend exact-equality cases. Every backend compiled into this build

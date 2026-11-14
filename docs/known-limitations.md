@@ -252,6 +252,23 @@ executed at `f3ef355`: CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s)
 and HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
 shared `hal` host, correctness only.
 
+## Failure injection is test-only
+
+`GraphRunner::setFailureHook` exists so tests can raise a host exception at a
+named failure point (lease acquisition or completion-event enqueue). Only the
+tests install the hook; the production `Flow` and runner paths leave it empty.
+The hook models control flow around a failed enqueue, not a device or driver
+fault. It cannot inject real mid-run CUDA/HIP out-of-memory, ECC, Xid, or
+context-loss errors, and the tests do not do so. Pool exhaustion exercises the
+pool allocator's own capacity; a full hash table and invalid classifier or
+updater results are detected from real device work. Real-driver fault
+injection remains an open gap (see
+[missing.md](missing.md), asynchronous failure propagation), so the failure
+suite does not claim full coverage of asynchronous device errors. The five
+device failure cases were executed at `e6e1a97` on `hal`: CUDA 277/277 on the
+A30 `sm_80` and HIP 268/268 on the RX 7900 XTX `gfx1100`, both correctness only
+because `hal` is shared.
+
 ## Hash path evidence is CPU-only (low-level)
 
 The dense path is the correctness reference and the only path the example uses.
