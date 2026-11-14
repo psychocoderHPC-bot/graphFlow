@@ -37,9 +37,10 @@ result.
 CPU execution with the OpenMP backend is blocked and not claimed. The recorded
 CPU runs use the serial CPU backend. The OpenMP backend's multi-region
 scheduling shows a pathology that makes it unsuitable for the current
-scheduler; a recorded OMP run is not available. The `GRAPHFLOW_ENABLE_OPENMP`
-option stays available, but no OMP result is claimed until the pathology is
-resolved.
+scheduler; a recorded OMP run is not available. The `rosi_v100` CPU OMP result
+is not yet recorded; no OMP claim is made until the `rosi_v100` run reports.
+The `GRAPHFLOW_ENABLE_OPENMP` option stays available, but no OMP result is
+claimed until the pathology is resolved and the `rosi_v100` run reports.
 
 ## TSAN is blocked on hal
 
@@ -63,10 +64,16 @@ result of 187.5 s, about `5.33e5` particles/s, and the integrated T13
 wall times are shared-host baselines, not exclusive-allocation acceptance
 numbers. There is no variance study and no frozen regression target.
 
+`rosi_v100` is the exclusive validation platform from now on. Its throughput
+and CTest counts are not yet recorded; they are placeholders until the
+`rosi_v100` run reports. No `rosi_v100` measurement is claimed by this docs
+commit.
+
 JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is available, but its
 gateway sharing flag is unknown. The recorded H100 run observed external load
 while the client was stale, so it is preliminary CUDA evidence only: no final
-H100 claim is made, and no H100 baseline is recorded.
+H100 claim is made, and no H100 baseline is recorded. H100 remains
+blocked/preliminary.
 
 ## Pool memory is budget-capped but still fixed-capacity
 
@@ -123,7 +130,9 @@ dense/hash threshold is the static 1024-bin limit, not a measured crossover.
   plus one `example.public_api` source-contract case. The photon example runs
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract). The
-  integrated CTest totals are 194/194 CPU and 246/246 CUDA on the current main.
+  historical integrated CTest totals are 194/194 CPU on fwk394 and 246/246
+  CUDA on hal. The `rosi_v100` CTest totals are not yet recorded; they are
+  placeholders until the `rosi_v100` run reports.
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision.
 - The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall

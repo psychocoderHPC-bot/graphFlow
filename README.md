@@ -51,25 +51,26 @@ The format/REUSE foundation is in main: `.clang-format` (clang-format 20.1.8),
 remains open (T14b), and there is no CI workflow yet. See
 [known limitations](docs/known-limitations.md).
 
-Recorded integrated tests: fwk394 CPU 194/194, hal CUDA 246/246. The totals
-include the FrameSpec launch-policy and matrix tests; the CUDA totals also
-include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
-failure-status cases. The typed CUDA tests run the feedback graph,
-exactly-once sink counts, the bounded pool, the generic POD chain, and the
-status/abort paths on the A30. The photon-scattering CTest cases and the
-opt-in photon diagnostics run on CPU and CUDA. These are the rebased CTest
-runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is visible.
+`rosi_v100` is the exclusive validation platform from now on. The CPU/CUDA
+CTest counts and the CPU OpenMP result on `rosi_v100` are not yet recorded;
+this docs commit leaves those as placeholders until the `rosi_v100` run
+reports. The previously recorded counts, fwk394 CPU 194/194 and hal CUDA
+246/246, are historical validation on a shared host (`hal` reports
+`sharing=unknown`) and are not the final current validation. The CUDA build
+fails its `[cuda]` tests when no NVIDIA GPU is visible. The CPU OpenMP result
+on `rosi_v100` is also pending; no OMP claim is made until it reports.
 
 The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
 `Flow<TPayload, TDevice, TStorage>` execution path runs source, transform,
 partition, and sink stages. The particle-feedback example declares its graph
 with `Flow<Particle>` handles and named outcome ports in a 121-line user file
-(`ParticleFeedback.hpp`); a fixed-seed 33-invocation CLI comparison matched the
-pre-change binary on both backends. `ParticleStages.hpp` remains only for the
-older low-level tests. The photon-scattering example runs the same public API
+(`ParticleFeedback.hpp`). `ParticleStages.hpp` remains only for the older
+low-level tests. The photon-scattering example runs the same public API
 with slab geometry, five events, `Philox4x32x10` draws, typed failure status,
-CSV and trace output, and plots.
+CSV and trace output, and plots. The fixed-seed 33-invocation CLI comparison
+that matched the pre-change binary is historical evidence on the previous
+platforms; the `rosi_v100` baseline is not yet recorded.
 
 ## Historical measured baseline
 
@@ -285,7 +286,8 @@ Larger statistical diagnostics (`N=200000` forward and `N=100000` isotropic)
 are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
-claimed runtime; CUDA execution is validated on `hal` with `sm_80`.
+claimed runtime. CUDA execution was historically validated on `hal` with
+`sm_80`; the `rosi_v100` CUDA validation is not yet recorded.
 
 ## Semantics
 

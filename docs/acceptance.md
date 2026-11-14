@@ -11,44 +11,71 @@ revision `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7,
 T13, T14a). Their counts and the historical T13 performance table remain below
 as evidence.
 
-Current integrated CTest totals: **194/194 on fwk394 CPU** and **246/246 on
-hal CUDA `sm_80`**. The totals include the photon-scattering CTest cases on
-both backends and the FrameSpec launch-policy and matrix tests. The opt-in
-photon diagnostics (`-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON`, `ctest -L
-diagnostics`) run 2 test cases per backend. H100: the JURECA `jrc0880.jureca`
-(4x H100 PCIe 80GB, SM 9.0) run is preliminary CUDA evidence only: its gateway
-sharing flag is unknown and the recorded run observed external load while the
-client was stale, so no final H100 claim is made. CPU execution with the
-OpenMP backend is blocked and is not claimed. Still open: the tree-wide format
-and SPDX sweep (T14b) is CPU-only work, and CI has no runners (PR #4 is a
-draft). This docs commit adds no new build or test run.
+## Validation platform
 
-Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
-NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
-alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` (alpaka 3.0.0), C++20,
-Release. `hal` reports `sharing=unknown`; throughput is a shared-host baseline.
-
-## Builds
+`rosi_v100` is the exclusive validation platform from now on. The CPU/CUDA
+CTest counts and the CPU OpenMP result on `rosi_v100` are **not yet
+recorded**; this section leaves them as placeholders until the `rosi_v100`
+run reports. The previously recorded counts, fwk394 CPU 194/194 and hal CUDA
+246/246, are **historical validation on a shared host** (`hal` reports
+`sharing=unknown`) and are **not the final current validation**. No test on
+`rosi_v100` is claimed by this docs commit.
 
 | Configuration | Result |
 | --- | --- |
-| CPU Release on fwk394 | configure and build pass |
-| CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
+| CPU CTest on `rosi_v100` | _placeholder: pending the `rosi_v100` run_ |
+| CUDA CTest on `rosi_v100` | _placeholder: pending the `rosi_v100` run_ |
+| CPU OpenMP on `rosi_v100` | _placeholder: pending the `rosi_v100` run_ |
+
+H100: the JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) run is
+preliminary CUDA evidence only: its gateway sharing flag is unknown and the
+recorded run observed external load while the client was stale, so no final
+H100 claim is made. H100 remains blocked/preliminary. Still open: the
+tree-wide format and SPDX sweep (T14b) is CPU-only work, and CI has no
+runners (PR #4 is a draft). This docs commit adds no new build or test run.
+
+Environment for the historical recorded runs: fwk394 for the CPU host and hal
+for CUDA, NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3,
+Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` (alpaka
+3.0.0), C++20, Release. `hal` reports `sharing=unknown`; the historical
+throughput is a shared-host baseline. The `rosi_v100` environment is not yet
+recorded; the placeholder table above will be filled when the `rosi_v100`
+run reports.
+
+## Builds
+
+The historical build records below are from the previous platforms. The
+`rosi_v100` build record is not yet available and is left as a placeholder
+until the `rosi_v100` run reports.
+
+| Configuration | Result |
+| --- | --- |
+| `rosi_v100` CPU Release | _placeholder: pending the `rosi_v100` run_ |
+| `rosi_v100` CUDA Release | _placeholder: pending the `rosi_v100` run_ |
+| Historical CPU Release on fwk394 | configure and build pass |
+| Historical CUDA Release on hal (`CMAKE_CUDA_ARCHITECTURES=80`) | configure and build pass |
 | HIP Release (`gfx90a`, `amdclang++`, `/opt/rocm`) | compile-only gate passes; no AMD runtime device on hal, execution blocked |
 | ASAN+UBSAN Debug | not recorded for the integrated revision |
 | TSAN Debug | fwk394 non-PIE scheduler/pool subset 14/14; hal blocked by `unexpected memory mapping`; no full integrated TSAN run claimed |
 
 ## Tests
 
+The historical CTest totals below are from the previous platforms. The
+`rosi_v100` CTest totals are not yet recorded and are left as placeholders
+until the `rosi_v100` run reports.
+
 | Configuration | Result |
 | --- | --- |
-| CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the current integrated main (T5) |
-| CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the current integrated main (T5) |
+| `rosi_v100` CPU CTest | _placeholder: pending the `rosi_v100` run_ |
+| `rosi_v100` CUDA CTest | _placeholder: pending the `rosi_v100` run_ |
+| Historical CPU CTest on fwk394 | 170/170 passed at T3b; 194/194 on the integrated main (T5) |
+| Historical CUDA CTest on hal (`sm_80`) | 206/206 passed at T3b; 246/246 on the integrated main (T5) |
 | ASAN+UBSAN CTest | not recorded for the integrated revision |
 | HIP | compiled; no AMD device was visible on hal, execution blocked, so no execution is claimed |
 
-The current integrated main totals (194/194 CPU, 246/246 CUDA) are recorded in
-the T5 section below. The T3b totals add twelve status/failure cases: the status/failure unit
+The historical integrated main totals (194/194 CPU, 246/246 CUDA) are recorded
+in the T5 section below. The `rosi_v100` totals will replace these when the
+`rosi_v100` run reports. The T3b totals add twelve status/failure cases: the status/failure unit
 suite and three typed failure-path integration cases. The CTest totals include
 `tests/unit/test_launch_policy.cpp` and
 `tests/integration/test_framespec.cpp`, which pin the FrameSpec formula, the
@@ -67,7 +94,7 @@ ports; `ParticleFeedback.hpp` is 121 lines and no longer includes the deprecated
 `example.public_api` source-contract case: 25 example tests in a CPU build and
 49 in a CUDA build (24 CPU, 24 CUDA, 1 contract).
 
-Recorded at `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` with
+Historically recorded at `b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` with
 `-Dalpaka_COMPILE_PEDANTIC=ON`: **158/158 CTest pass on fwk394 CPU Release**
 and **194/194 pass on hal CUDA `sm_80` Release**. A fixed-seed 33-invocation
 CLI comparison (the 24 N/C cases plus nine Q/P/T/frameCap and max-visits cases)
@@ -75,15 +102,16 @@ matched the pre-change binary on both backends. The example header (including
 `live-particles`), policy line, histogram rows, non-terminating count, and
 exit status are identical. The derived pool reserve changes from `P+6` to
 `P+8` because the A/B partitions now expose three named outcomes; that
-diagnostic is not a numeric result.
+diagnostic is not a numeric result. These counts are historical; the
+`rosi_v100` baseline is not yet recorded.
 
 ### T5 photon scattering output and diagnostics
 
-The photon-scattering rework was tested at implementation commit
+The photon-scattering rework was historically tested at implementation commit
 `7e3a9c9121afaaebcbf149ac7e5d18b4b933e295` on base
-`449c1ec1ffcd1c72f780c688cf113c82b70bf130`. The environment is the one above:
-fwk394 CPU with g++ 13.3, hal CUDA with an NVIDIA A30 (`sm_80`), CUDA 13.4,
-CMake 3.28.3, Ninja 1.11.1, alpaka
+`449c1ec1ffcd1c72f780c688cf113c82b70bf130`. The historical environment is the
+one above: fwk394 CPU with g++ 13.3, hal CUDA with an NVIDIA A30 (`sm_80`),
+CUDA 13.4, CMake 3.28.3, Ninja 1.11.1, alpaka
 `eb677e8d7f70d79b35df25d9002f94ba669b6f44`, C++20 Release, with
 `-Dalpaka_COMPILE_PEDANTIC=ON` (`-Werror` confirmed in both build caches).
 The remote source trees were uploaded as archives without `.git`, so the
@@ -93,15 +121,17 @@ provenance was passed explicitly with
 
 | Configuration | Command | Result |
 | --- | --- | --- |
-| CPU fwk394 | `cmake --build photon-rework-build-cpu -j 16` then `ctest --output-on-failure -j 8` | 194/194 passed |
-| CUDA hal A30 | `cmake --build photon-rework-build-cuda -j 16` then `ctest --output-on-failure -j 4` | 246/246 passed |
-| CPU diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
-| CUDA diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
-| Label registration | `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` then `ctest -N -L diagnostics` | 2 tests registered; default configure registers 0 |
+| `rosi_v100` CPU | _placeholder: pending the `rosi_v100` run_ | _placeholder_ |
+| `rosi_v100` CUDA | _placeholder: pending the `rosi_v100` run_ | _placeholder_ |
+| Historical CPU fwk394 | `cmake --build photon-rework-build-cpu -j 16` then `ctest --output-on-failure -j 8` | 194/194 passed |
+| Historical CUDA hal A30 | `cmake --build photon-rework-build-cuda -j 16` then `ctest --output-on-failure -j 4` | 246/246 passed |
+| Historical CPU diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
+| Historical CUDA diagnostics | `./graphFlow_tests '[diagnostics]'` | 2 test cases passed (1,000,019 assertions) |
+| Historical label registration | `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` then `ctest -N -L diagnostics` | 2 tests registered; default configure registers 0 |
 
 The rework adds `--output-dir` CSV output, bounded deterministic traces,
 `tools/plot_photon_scattering.py`, output/trace tests, and the opt-in
-diagnostics label. A CPU sample with the final binary wrote
+diagnostics label. A historical CPU sample with the final binary wrote
 `metadata.csv`, `outcomes.csv`, `scatter_histogram.csv`, `exits.csv`,
 `traces.csv` and `trace_summary.csv`; metadata reported the tested commit,
 alpaka pin, `sm_80`, and the expected parameters. The plotting script ran on
@@ -112,8 +142,9 @@ The isotropic sample had `transmitted=1946`, `reflected=1066`,
 `absorbed=1085`, `capped=0`, summing to 4097. HIP remains compile-only with no
 AMD runtime device. H100: the JURECA `jrc0880.jureca` run is preliminary CUDA
 evidence only (unknown gateway sharing flag; the recorded run observed
-external load while the client was stale), so no final H100 claim is made.
-CPU execution with the OpenMP backend is blocked and not claimed.
+external load while the client was stale), so no final H100 claim is made and
+H100 remains blocked/preliminary. The CPU OpenMP result on `rosi_v100` is not
+yet recorded; no OMP claim is made until it reports.
 
 ### PR-A generic graph API core
 
