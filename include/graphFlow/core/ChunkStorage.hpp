@@ -18,6 +18,10 @@ namespace graphFlow
      * payload layout: `ChunkPool`, the particle SoA adapter and the generic payload-slot adapter all
      * satisfy it. Keeping the contract narrow is what lets the runner stay a template without a
      * virtual dispatch in the hot path.
+     *
+     * `numChunks()` is the physical chunk count the storage actually allocated. The concrete
+     * storage clamps a larger request to its payload budget, so the scheduler always admits
+     * against the memory that exists; it never sees a chunk that has no payload slot.
      */
     template<typename TStorage>
     concept ChunkStorage = requires(TStorage storage, ChunkHandle handle, std::uint32_t chunkIndex) {

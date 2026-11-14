@@ -12,7 +12,9 @@ namespace graphFlow
      *
      * The generation is incremented every time the chunk is returned to the pool. A handle whose
      * generation does not match the pool's current generation refers to a retired chunk and is
-     * rejected instead of silently aliasing new data.
+     * rejected instead of silently aliasing new data. The generation counter is 32-bit and never
+     * wraps: the storage rejects the release that would overflow it, so a stale handle cannot
+     * alias a reused chunk after 2^32 releases.
      */
     struct ChunkHandle
     {

@@ -52,6 +52,72 @@ namespace graphFlow
      */
     inline constexpr std::uint64_t defaultPoolPayloadBudgetBytes = 4ull * 1024ull * 1024ull * 1024ull;
 
+    /** Checked 64-bit product used by the pool size and slot arithmetic.
+     *
+     * The dividend is tested before the multiplication so a malformed geometry raises instead of
+     * wrapping into a small value that the caller would accept.
+     */
+    inline constexpr std::uint64_t checkedProduct(std::uint64_t lhs, std::uint64_t rhs, std::string const& context)
+    {
+        if(lhs != 0u && rhs > std::numeric_limits<std::uint64_t>::max() / lhs)
+            throw std::overflow_error{context + ": product overflows 64 bits"};
+        return lhs * rhs;
+    }
+
+    /** Largest chunk count whose payload fits `payloadBudgetBytes`.
+     *
+     * The result is the integer part of `budget / (chunkCapacity * slotBytes)`. A zero result
+     * means the budget cannot hold one chunk and the caller must reject it. Zero budget, chunk
+     * capacity, or slot size is invalid because it would silently disable the cap.
+     */
+    inline std::uint64_t maxPayloadChunks(
+        std::uint64_t payloadBudgetBytes,
+        std::uint64_t chunkCapacity,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
+    {
+        if(payloadBudgetBytes == 0u)
+            throw std::invalid_argument{"graphFlow::maxPayloadChunks: payload budget must be non-zero"};
+        if(chunkCapacity == 0u)
+            throw std::invalid_argument{"graphFlow::maxPayloadChunks: chunkCapacity must be non-zero"};
+        if(slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::maxPayloadChunks: slotBytes must be non-zero"};
+        std::uint64_t const bytesPerChunk = checkedProduct(chunkCapacity, slotBytes, "graphFlow::maxPayloadChunks");
+        return payloadBudgetBytes / bytesPerChunk;
+    }
+
+    /** Checked `numChunks * chunkCapacity` slot count for kernels with 32-bit slot indices.
+     *
+     * The pool and the generic payload storage share this check so a large geometry cannot wrap
+     * a kernel slot index or silently truncate the payload allocation.
+     */
+    inline constexpr std::uint64_t checkedPoolSlotCount(
+        std::uint64_t numChunks,
+        std::uint64_t chunkCapacity,
+        std::string const& context)
+    {
+        if(numChunks == 0u)
+            throw std::invalid_argument{context + ": numChunks must be non-zero"};
+        if(chunkCapacity == 0u)
+            throw std::invalid_argument{context + ": chunkCapacity must be non-zero"};
+        std::uint64_t const slots = checkedProduct(numChunks, chunkCapacity, context);
+        if(slots > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{context + ": numChunks * chunkCapacity exceeds the 32-bit slot index"};
+        return slots;
+    }
+
+    /** Checked increment of a 32-bit lifecycle counter.
+     *
+     * The chunk generation and the per-chunk reader-lease count are 32-bit. Wrapping the
+     * generation would let a stale handle alias a new chunk, and wrapping the lease count would
+     * make a release look valid. Both cases raise instead of wrapping.
+     */
+    inline constexpr std::uint32_t checkedCounterIncrement(std::uint32_t value, std::string const& context)
+    {
+        if(value == std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{context + ": counter would wrap"};
+        return value + 1u;
+    }
+
     /** Payload bytes of `numChunks * chunkCapacity` slots, checked for 64-bit overflow.
      *
      * Both multiplications are guarded so a malformed configuration raises `std::overflow_error`

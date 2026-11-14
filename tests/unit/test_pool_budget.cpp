@@ -6,8 +6,10 @@
 #include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
+#include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
+#include "graphFlow/core/PayloadSlotStorage.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/graph/BinTable.hpp"
@@ -17,6 +19,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 TEST_CASE("pool payload bytes are derived from the pool arrays", "[pool][budget]")
 {
@@ -460,4 +463,129 @@ TEST_CASE("hash transform reserve does not grow with Q", "[pool][budget][hash]")
     std::uint64_t const budget
         = payloadBudgetWithReserve(requiredPayloadBytes(liveParticles, capacity), capacity, reserve);
     CHECK_NOTHROW(validatePayloadBudget(chunks, capacity, budget));
+}
+
+namespace
+{
+    /** 96-byte payload used to pin the generic storage budget clamp. */
+    struct PoolBudgetWidePayload
+    {
+        std::uint64_t words[12] = {};
+    };
+} // namespace
+
+TEST_CASE("the payload budget derives a checked physical chunk count", "[pool][budget][memory]")
+{
+    using namespace graphFlow;
+
+    std::uint64_t const budget = 2u * 3u * payloadBytesPerSlot;
+    CHECK(maxPayloadChunks(budget, 3u) == 2u);
+    CHECK(maxPayloadChunks(budget - 1u, 3u) == 1u);
+    CHECK(maxPayloadChunks(budget, 3u, 24u) == 2u);
+
+    // A zero budget or geometry would silently disable the cap.
+    CHECK_THROWS_AS(maxPayloadChunks(0u, 3u), std::invalid_argument);
+    CHECK_THROWS_AS(maxPayloadChunks(budget, 0u), std::invalid_argument);
+    CHECK_THROWS_AS(maxPayloadChunks(budget, 3u, 0u), std::invalid_argument);
+
+    // The per-chunk product is checked before the division.
+    CHECK_THROWS_AS(
+        maxPayloadChunks(std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max(), 2u),
+        std::overflow_error);
+
+    // The documented former C=8192, P=65536 pool needed about 12.9 GB. The default 4 GiB
+    // ceiling reduces the physical chunk count instead of allocating that pool.
+    std::uint64_t const documentedChunks = maxPayloadChunks(defaultPoolPayloadBudgetBytes, 8192u);
+    CHECK(documentedChunks < 65544u);
+    CHECK(requiredPayloadBytes(documentedChunks, 8192u) <= defaultPoolPayloadBudgetBytes);
+    CHECK(requiredPayloadBytes(documentedChunks, 8192u) < requiredPayloadBytes(65544u, 8192u));
+}
+
+TEST_CASE("pool slot counts and lifecycle counters reject overflow", "[pool][budget][overflow]")
+{
+    using namespace graphFlow;
+
+    CHECK(checkedPoolSlotCount(3u, 4u, "graphFlow::test") == 12u);
+    CHECK_THROWS_AS(checkedPoolSlotCount(0u, 4u, "graphFlow::test"), std::invalid_argument);
+    CHECK_THROWS_AS(checkedPoolSlotCount(4u, 0u, "graphFlow::test"), std::invalid_argument);
+    CHECK(
+        checkedPoolSlotCount(std::numeric_limits<std::uint32_t>::max(), 1u, "graphFlow::test")
+        == std::numeric_limits<std::uint32_t>::max());
+    CHECK_THROWS_AS(
+        checkedPoolSlotCount(std::uint64_t{std::numeric_limits<std::uint32_t>::max()} + 1u, 1u, "graphFlow::test"),
+        std::overflow_error);
+
+    CHECK(checkedCounterIncrement(0u, "graphFlow::test") == 1u);
+    CHECK(checkedCounterIncrement(41u, "graphFlow::test") == 42u);
+    CHECK_THROWS_AS(
+        checkedCounterIncrement(std::numeric_limits<std::uint32_t>::max(), "graphFlow::test"),
+        std::overflow_error);
+}
+
+TEST_CASE("the chunk pool clamps payload memory and keeps every slot addressable", "[pool][budget][memory]")
+{
+    using namespace graphFlow;
+
+    auto device = test::makeCpuDevice();
+    using Device = decltype(device);
+
+    // A four-chunk request with a two-chunk budget is reduced to two chunks, not rejected.
+    std::uint64_t const budget = 2u * 2u * payloadBytesPerSlot;
+    ChunkPool<Device> pool{device, 4u, 2u, budget};
+    CHECK(pool.numChunks() == 2u);
+    CHECK(pool.chunkCapacity() == 2u);
+    CHECK(pool.freeCount() == 2u);
+    CHECK(pool.payloadBytes() == budget);
+    CHECK(pool.payloadBytes() <= defaultPoolPayloadBudgetBytes);
+
+    auto const first = pool.acquire();
+    auto const second = pool.acquire();
+    // The clamped pool still maps every live handle inside the allocated slot range.
+    CHECK(pool.base(first) < pool.payloadBytes() / payloadBytesPerSlot);
+    CHECK(pool.base(second) < pool.payloadBytes() / payloadBytesPerSlot);
+    CHECK(pool.base(first) != pool.base(second));
+    CHECK_THROWS_AS(pool.acquire(), std::runtime_error);
+
+    pool.release(first);
+    auto const reused = pool.acquire();
+    CHECK(pool.isLive(reused));
+    CHECK(pool.base(reused) < pool.payloadBytes() / payloadBytesPerSlot);
+
+    // An exact fit keeps the requested count, so small pools are unchanged.
+    std::uint64_t const exact = requiredPayloadBytes(4u, 2u);
+    ChunkPool<Device> exactPool{device, 4u, 2u, exact};
+    CHECK(exactPool.numChunks() == 4u);
+    CHECK(exactPool.payloadBytes() == exact);
+
+    // A budget too small for one chunk fails loudly instead of allocating zero slots.
+    CHECK_THROWS_AS((ChunkPool<Device>{device, 4u, 2u, payloadBytesPerSlot - 1u}), std::invalid_argument);
+}
+
+TEST_CASE("the generic payload storage uses the same payload clamp", "[pool][budget][memory]")
+{
+    using namespace graphFlow;
+
+    auto device = test::makeCpuDevice();
+    using Device = decltype(device);
+    using Storage = PayloadSlotStorage<PoolBudgetWidePayload, Device>;
+    static_assert(Storage::slotBytes == 96u);
+
+    std::uint64_t const budget = 2u * 2u * Storage::slotBytes;
+    Storage storage{device, 4u, 2u, budget};
+    CHECK(storage.numChunks() == 2u);
+    CHECK(storage.slotCount() == 4u);
+    CHECK(storage.payloadBytes() == 384u);
+    CHECK(storage.payloadBytes() <= defaultPoolPayloadBudgetBytes);
+
+    auto const handle = storage.acquire();
+    CHECK(storage.base(handle) < storage.slotCount());
+    auto const second = storage.acquire();
+    CHECK(storage.base(second) < storage.slotCount());
+    CHECK_THROWS_AS(storage.acquire(), std::runtime_error);
+
+    // An exact fit preserves the requested geometry.
+    Storage exact{device, 4u, 2u, requiredPayloadBytes(4u, 2u, Storage::slotBytes)};
+    CHECK(exact.numChunks() == 4u);
+    CHECK(exact.slotCount() == 8u);
+    CHECK(exact.payloadBytes() == requiredPayloadBytes(4u, 2u, Storage::slotBytes));
 }
