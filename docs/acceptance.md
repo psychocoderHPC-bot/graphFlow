@@ -3,11 +3,26 @@
 
 # graphFlow acceptance record
 
-Integrated T4 revision: typed Flow execution and the particle example port at
-`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd`. The earlier integrated revision
-was `cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13,
-T14a); its counts and historical T13 performance table remain below as
-historical evidence. This docs commit adds no new build or test run.
+Current integrated revision:
+[`ac89ab558c26b938038035b26ca5dbe6d7ce7727`](https://github.com/psychocoderHPC-bot/graphFlow/commit/ac89ab558c26b938038035b26ca5dbe6d7ce7727)
+(main, merge of PR #22). The public API chain landed as PR #16
+(`f8bedf0d800c4b1beb564c54ff59f99ebbc9bd85`), #17
+(`17f9e02fe26b3e8f5df110d767eca164c0c6a646`), #18
+(`ed7cf397cf3b36ce4b26f13c749e2423e181fb54`), #19
+(`60b566dc7f45369008eddc81219a2ecc07f63a9a`), #20
+(`f5254f57aa637f0e14a12d58765a27347628f8c4`), #21
+(`449c1ec1ffcd1c72f780c688cf113c82b70bf130`), and #22
+(`ac89ab558c26b938038035b26ca5dbe6d7ce7727`). The current CTest totals are
+194/194 on fwk394 CPU and 246/246 on hal CUDA `sm_80`, recorded for the
+photon rework in the T5 section below. This docs commit adds no new build or
+test run.
+
+The integrated T4 revision was
+`b138d9a6d5ef0cca18bd634a0a98abd45e13f9bd` (typed Flow execution and the
+particle example port); the earlier integrated revision was
+`cb0548cedf81a284e6291a39dee1eeca7256d783` (T1, T2, T3, T5, T7, T13, T14a).
+Their counts and the historical T13 performance table remain below as
+historical evidence.
 
 Environment for the recorded runs: fwk394 for the CPU host and hal for CUDA,
 NVIDIA A30 (sm_80, 24 GiB), CUDA 13.4, g++ 13.3, CMake 3.28.3, Ninja 1.11.1,
@@ -105,11 +120,34 @@ The additive graph API core was validated at
 `sm_80` Release**, both with `-Dalpaka_COMPILE_PEDANTIC=ON`. The change adds
 `NodeBase`, `RouteTable`, `Graph`, and `GraphBuilder` over the existing
 `GraphRunner` hooks without changing the example, T5 batching, FrameSpec
-launches, or policy semantics. The particle-feedback example still assembles
-its graph by hand, so the full generic-graph-API item (PR-B example port)
-remains open. No HIP runtime is claimed; the HIP gate remains compile-only.
-This documentation commit records the existing runs and claims no new build or
-test run.
+launches, or policy semantics. At that revision the particle-feedback example
+assembled its graph by hand; the typed `Flow` port landed later (PR #16-#22)
+and both examples now run on the public API. No HIP runtime is claimed; the
+HIP gate remains compile-only. This documentation commit records the existing
+runs and claims no new build or test run.
+
+## Preliminary H100 evidence (not acceptance)
+
+Recorded 2026-11-13 on JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0,
+exclusive per operator, gateway sharing flag unknown) at graphFlow commit
+[`aa2c7e11fe8f11625534dee66136d9ab899d29d1`](https://github.com/psychocoderHPC-bot/graphFlow/commit/aa2c7e11fe8f11625534dee66136d9ab899d29d1),
+older than the current main, with an sm_90 build. CUDA only:
+
+| N | Q | Wall time | Notes |
+| ---: | ---: | ---: | --- |
+| 100,000,000 | 1 | ~157 s | host-submission bound, one host core busy |
+| 100,000,000 | 2 | 6.76 s | |
+| 100,000,000 | 8 | 6.52 s | about 1.30e7 particles/s |
+| 1,000,000 | 1 | 2.17 s | |
+| 1,000,000 | 8 | 0.66 s | same 3.3x step |
+
+`C=8192`, `P=16384`. The sorted histogram is bit-identical across Q at each
+N. The CPU run (`C=1024`, `P=512`) matched CUDA at `N=1e6`. External-load
+caveat: from about 20:29 UTC 2026-11-13, sibling agent workloads ran on the
+same node and a long CPU run was SIGKILLed at 925 s, so node exclusivity was
+not verified for the whole window. The CPU path on this host is blocked by
+the OMP executor, whose investigation is in progress. This is preliminary
+evidence, not an acceptance claim; the final H100 acceptance item stays open.
 
 ## Historical performance baseline
 
@@ -208,6 +246,9 @@ design without changing the `P` plus registered-node-reserve progress bound.
 
 `.clang-format` (clang-format 20.1.8), `.reuse/dep5`, and
 `LICENSES/MPL-2.0.txt` are present, so the format/REUSE foundation is in main.
-The tree-wide format and SPDX sweep (T14b) remains open. There is no CI
-workflow yet. Format and REUSE commands are documented in `docs/build.md`; no
-CI run is claimed.
+The tree-wide format and SPDX sweep (T14b) remains open. The CI workflow
+exists as draft PR #4 on branch `gf/t11-ci` (head
+`19aba8345ce85fec474573902fdfe775c38ff4b8`); no `.github/workflows` is on
+main and no runners are provisioned. The hash-path and output-reserve fix and
+the CPU OMP executor investigation are in progress. Format and REUSE commands
+are documented in `docs/build.md`; no CI run is claimed.

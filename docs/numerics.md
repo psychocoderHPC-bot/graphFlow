@@ -4,7 +4,9 @@
 # Numerics
 
 The particle example is integer-only. Random draws come from the public
-`alpaka::rand::engine::Philox4x32x10`; there is no project RNG algorithm.
+`alpaka::rand::engine::Philox4x32x10`; there is no project RNG algorithm. The
+photon example uses the same public engine with a four-purpose mapping and
+double-precision sampling.
 
 ## Philox constructor-offset defect
 
@@ -54,6 +56,36 @@ formula. `tests/unit/test_philox.cpp` pins literal draws for
 `(seed=42, id=7, visit, purpose)`, so a shared offset mistake cannot hide behind
 the oracle.
 
+## Photon scattering RNG (RNG4)
+
+The photon example reserves four independent draws per completed scatter count
+(`photonPurposesPerVisit = 4`): `purposeFlight`, `purposeCollisionKind`,
+`purposeCosine`, `purposeAzimuth`. The offset formula generalizes the particle
+mapping to
+
+```text
+4 * (1 + 4 * visit + purpose)
+```
+
+where `visit` is the photon's `scatterCount`. The draw positions are key-based
+and depend only on `(seed, id, scatterCount, purpose)`, not on chunk, tile,
+thread, backend, or scheduling order.
+
+Sampling uses the open-interval uniform `(word + 0.5) * 2^-32`, strictly inside
+`(0, 1)`, so `log(U)` is finite and the exponential free-flight sample is always
+positive:
+
+| Draw | Purpose | Use |
+| --- | --- | --- |
+| `purposeFlight` | flight | `sampledDistance = -log(U) / sigmaTotal` |
+| `purposeCollisionKind` | collision kind | competition between scatter and absorption |
+| `purposeCosine` | cosine | `mu = 2U - 1` (isotropic mode) |
+| `purposeAzimuth` | azimuth | `phi = 2*pi*V` (isotropic mode) |
+
+Forward mode reuses the incoming direction and does not consume the cosine and
+azimuth draws. The collision count follows `Poisson(sigma_s * L)` in the
+expected value; absorption competes through `sigma_a`.
+
 ## Integer decisions
 
 ```text
@@ -102,10 +134,24 @@ tests additionally compare the weight buffer element-wise against the scalar
 oracle as a diagnostic for lost or duplicated ids. The acceptance contract
 stays histogram multiset equality.
 
+## Photon terminal accounting
+
+Each photon receives exactly one terminal record. The host pass checks that the
+terminal visit count equals one and that the recorded event is within the five
+event bins (`scatter`, `transmitted`, `reflected`, `absorbed`, `capped`); a
+record that fails either check is counted as inconsistent and does not enter
+the outcome counts. The per-event counts sum to `N`, which is what the CLI
+tests and the `# terminal-sum` line check. A capped history is a routed
+outcome, not a failure, so it still terminates normally and is counted.
+
 ## CPU and CUDA equality
 
-The historical pre-T5/T7 CPU and CUDA `N=1e6` runs with seed 42, `C=8192`, and
-`P=65536` produced identical histograms by direct row diff. That check was not
-repeated on the integrated revision, where the pair is rejected by the payload
-budget. HIP compiles the same code path for `gfx90a`, but no AMD device was
-visible, so no HIP numeric result is claimed.
+The particle port to the `Flow` API (T4) was validated against a fixed-seed
+33-invocation CLI baseline (the 24 N/C cases plus nine Q/P/T/frameCap and
+max-visits cases); the example header, policy line, histogram rows,
+non-terminating count, and exit status are identical to the pre-change binary
+on both backends. The historical pre-T5/T7 CPU and CUDA `N=1e6` runs with seed
+42, `C=8192`, and `P=65536` produced identical histograms by direct row diff;
+that check was not repeated on the integrated revision, where the pair is
+rejected by the payload budget. HIP compiles the same code path for `gfx90a`,
+but no AMD device was visible, so no HIP numeric result is claimed.

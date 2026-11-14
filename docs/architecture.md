@@ -3,11 +3,12 @@
 
 # Architecture
 
-graphFlow is a host-scheduled dataflow runner for chunked particle payloads.
-The host owns topology, admission, routing, and completion. Device code owns
-per-tile histogram, hash, and scatter work. The current tree is a
-particle-feedback example built from reusable runner primitives, not a generic
-graph API.
+graphFlow is a host-scheduled dataflow runner for chunked payloads. The host
+owns topology, admission, routing, and completion. Device code owns per-tile
+histogram, hash, and scatter work. The typed public API
+`graphFlow::Flow<TPayload, TDevice, TStorage>` (in `include/graphFlow/flow/`)
+is implemented and both examples run on it; the low-level
+`GraphBuilder`/`GraphRunner` core remains available for custom nodes.
 
 ## Host scheduler
 
@@ -218,6 +219,29 @@ releases output chunks that were acquired but never published, for example when
 the completion-event enqueue failed after planning. A failed `TransformStage`
 is single-use because a device stage may have been partially enqueued.
 
+## Typed execution path (flow/)
+
+`Flow<TPayload, TDevice, TStorage>` maps the four node roles to typed stages
+in `flow/Execution.hpp`. `source` and `sink` launch one kernel per admitted
+chunk. A `transform` batch issues one out-of-place batch-wide kernel through a
+`FrameSpec` frame and coalesces the result into `ceil(sum(fill)/C)` chunks. A
+`partition` batch issues one classify launch and one scatter launch through a
+`FrameSpec` frame, plans the exact output chunks on the host, and applies the
+updater once per emitted payload. The stages reach the payload through the
+four views of `StorageAccess`, which binds the SoA `ParticleStorage` or the
+AoS `PayloadSlotStorage` without type erasure or a virtual hot path.
+
+Each stage owns a single status word per batch. The device writes the word;
+the execution adapter copies it to the host after the batch metadata and
+before observing the batch event, so the host rejects the batch with a
+`BatchError` before it plans or publishes outputs. A failed stage is single-use
+because a device stage may have been partially enqueued.
+
+`run()` validates the topology, derives the configuration, constructs the
+typed stages and the scheduler, and returns only after every queue and pool
+chunk has been retired. The runner is destroyed first, then the stages, then
+the storage, so the teardown order is fixed.
+
 ## Queue independence
 
 `device.makeQueue()` may return the same handle and does not promise parallel
@@ -240,11 +264,12 @@ public `DeviceProperties` (`multiProcessorCount`, `warpSize`,
 `globalMemCapacityBytes`). It caps the payload working set by a budget, keeps
 explicit overrides, and rejects impossible combinations.
 
-The CLI resolves the policy in `examples/particle_feedback/Cli.hpp`. An absent
-`--chunk-size`, `--live-particles`, or `--tile-size` takes the policy value; an
-explicit value is passed through as an override. An explicit `P` is rejected
-when its payload exceeds the budget; only the auto-derived default `P` is
-clamped. The policy is unit-tested with CPU properties and accelerator-shaped
+Both example CLIs resolve the policy and hand it to `Flow` through a
+`Tuning` value (`examples/particle_feedback/Cli.hpp` and
+`examples/photon_scattering/PhotonCli.hpp`). An absent `--chunk-size`,
+`--live-particles`, or `--tile-size` takes the policy value; an explicit value
+is passed through as an override. An explicit `P` is rejected when its payload
+exceeds the budget; only the auto-derived default `P` is clamped. The policy is unit-tested with CPU properties and accelerator-shaped
 public fields. The accelerator-shaped test pins `C=8192`, `P=16384`, `T=128` on
 a nominal 24 GiB device. A device with the ECC-reduced A30 usable memory
 (`3,171,090,432 B` at a 1/8 budget) selects `P=16128`: an explicit `C=8192`
@@ -260,4 +285,9 @@ rejected.
 - Each batch uses one `FrameSpec` launch for classify and one for scatter. The
   frame count is capped, so a block may process several tiles.
 - A single transform output plan per batch.
-- The generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is host-only; the example still assembles its graph by hand.
+- The generic `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is
+  host-only; the examples now use the typed `Flow` API.
+- The hash-path and output-reserve fix is in progress; the dense path remains
+  the correctness reference.
+- The CPU path on the H100 host is blocked by the OMP executor; the
+  investigation is in progress.

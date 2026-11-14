@@ -21,8 +21,12 @@ Documentation:
 
 ## Status
 
-Integrated main: `d5fa45f3cb9298f5e288e2b750d326b56f8ba47b` (T1, T2, T3, T5,
-T7, T13, T14a). CPU and CUDA execution are validated on the recorded integrated
+Integrated main:
+[`ac89ab558c26b938038035b26ca5dbe6d7ce7727`](https://github.com/psychocoderHPC-bot/graphFlow/commit/ac89ab558c26b938038035b26ca5dbe6d7ce7727)
+(T1, T2, T3, T5, T7, T13, T14a, and the public API chain PR #16-#22: generic
+payload slot storage, typed `Flow` execution, the failure/status channel,
+four-purpose RNG, the particle example on `Flow`, and the photon scattering
+example). CPU and CUDA execution are validated on the recorded integrated
 runs. HIP compiles the full tree for `gfx90a` with `amdclang++`, but no AMD
 device is visible, so HIP execution is not claimed.
 
@@ -46,16 +50,23 @@ remains open (T14b), and there is no CI workflow yet. See
 
 Recorded integrated tests: fwk394 CPU 194/194, hal CUDA 246/246. The totals
 include the FrameSpec launch-policy and matrix tests; the CUDA totals also
-include the kernel execution, FrameSpec matrix, typed `Flow` execution, and
-failure-status cases. The typed CUDA tests run the feedback graph,
-exactly-once sink counts, the bounded pool, the generic POD chain, and the
-status/abort paths on the A30. These are the rebased CTest runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is
-visible.
+include the kernel execution, FrameSpec matrix, typed `Flow` execution,
+failure-status, RNG4, and photon scattering cases. The typed CUDA tests run
+the feedback graph, exactly-once sink counts, the bounded pool, the generic
+POD chain, and the status/abort paths on the A30. These are the rebased CTest
+runs. The CUDA build fails its `[cuda]` tests when no NVIDIA GPU is visible.
 
-The public contract is frozen in [public API contract](docs/public-api.md). The typed
-`Flow<T>` execution path runs source, transform, partition, and sink stages. The
-particle-feedback example now declares its graph with `Flow` handles and named outcome
-ports; `ParticleStages.hpp` remains only for the older low-level tests.
+The public API is implemented. `graphFlow::Flow<TPayload, TDevice, TStorage>`
+runs source, partition, transform, and sink stages over pluggable storage,
+with `connect` and `out<Bin>()` ports, an optional `Tuning` value, and a
+failure status channel; the contract and the implemented surface are in
+[public API](docs/public-api.md). The particle-feedback example declares its
+graph in a 121-line user file, `ParticleFeedback.hpp`, with `Flow` handles and
+named outcome ports; the port was validated against 158/158 CPU and 194/194
+CUDA at that step, and the current totals are 194/194 CPU and 246/246 CUDA.
+A fixed-seed 33-invocation CLI comparison (the 24 N/C cases plus nine
+Q/P/T/frameCap and max-visits cases) matched the pre-change binary on both
+backends. `ParticleStages.hpp` remains only for the older low-level tests.
 
 ## Historical measured baseline
 
@@ -83,13 +94,16 @@ Details and the historical invocations are in
 
 ```text
 include/graphFlow/
-  core/    Chunk.hpp, ChunkPool.hpp, Config.hpp, DevicePolicy.hpp, PoolBudget.hpp,
-           Reservation.hpp, Backend.hpp
-  graph/   Classifier.hpp, ClassifyKernel.hpp, ScatterKernel.hpp, Kernels.hpp,
-           DenseBinTable.hpp, BinTable.hpp, HashClassifyKernel.hpp,
-           HashScatterKernel.hpp, TileDescriptor.hpp
-  flow/    Flow.hpp, Execution.hpp, PayloadStorage.hpp, Concepts.hpp,
-           NodeHandle.hpp, Ports.hpp, Tuning.hpp
+  core/    Backend.hpp, Chunk.hpp, ChunkLedger.hpp, ChunkPool.hpp,
+           ChunkStorage.hpp, Config.hpp, DevicePolicy.hpp, LaunchPolicy.hpp,
+           PayloadSlotStorage.hpp, PoolBudget.hpp, Reservation.hpp
+  graph/   BinTable.hpp, Classifier.hpp, ClassifyKernel.hpp,
+           DenseBinTable.hpp, Graph.hpp, GraphBuilder.hpp,
+           HashClassifyKernel.hpp, HashScatterKernel.hpp, Kernels.hpp,
+           NodeBase.hpp, RouteTable.hpp, ScatterKernel.hpp,
+           TileDescriptor.hpp
+  flow/    Concepts.hpp, Execution.hpp, Flow.hpp, NodeHandle.hpp, Payload.hpp,
+           PayloadStorage.hpp, Ports.hpp, Status.hpp, Tuning.hpp
   sched/   GraphRunner.hpp
   rng/     ParticleRng.hpp
   detail/  QueueProbe.hpp
@@ -98,15 +112,25 @@ examples/particle_feedback/
   main.cpp             backend selection, policy output and histogram
   ParticleFunctors.hpp domain functors and named outcome ports
   ParticleTypes.hpp    parameters and histogram formatting
-  ParticleFeedback.hpp Flow graph construction and run function
+  ParticleFeedback.hpp 121-line Flow graph construction and run function
   ParticleStages.hpp   deprecated low-level stages kept for older tests
+examples/photon_scattering/
+  main.cpp             CLI entry point
+  PhotonCli.hpp        option parsing and policy resolution
+  PhotonFunctors.hpp   slab physics, sampling, status reporting
+  PhotonOutput.hpp     CSV, trace, and metadata writers
+  PhotonScattering.hpp Flow graph construction and terminal accounting
+  PhotonTypes.hpp      payload, events, slab, and trace records
 tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases,
-                       bin table, Philox mapping, device policy, CUDA kernel
-tests/integration/     particle example, batching, dense and hash pipelines,
-                       scripted fixture, pressure, failure paths
+                       bin table, Philox mapping, device policy, CUDA kernel,
+                       typed Flow stages, failure status
+tests/integration/     particle and photon example CLIs, generic DAG and Flow,
+                       batching, dense and hash pipelines, scripted fixture,
+                       pressure, failure paths, FrameSpec, CUDA/HIP execution
 tests/reference/       scalar oracle with its own Philox mapping
+tools/                 bench matrix driver and photon plotting script
 docs/                  build, architecture, numerics, benchmarks, limitations,
-                       API map, plan, acceptance
+                       API map, plan, public API, acceptance, missing work
 ```
 
 ## Build and test
@@ -258,6 +282,23 @@ are not part of the default CTest suite. Configure with
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP compiles but has no
 claimed runtime; CUDA execution is validated on `hal` with `sm_80`.
 
+## H100: preliminary CUDA-only evidence
+
+On JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0, exclusive per
+operator, gateway sharing flag unknown), a preliminary CUDA run at
+[`aa2c7e11fe8f11625534dee66136d9ab899d29d1`](https://github.com/psychocoderHPC-bot/graphFlow/commit/aa2c7e11fe8f11625534dee66136d9ab899d29d1)
+(older than current main), sm_90 build, `N=1e8`, `C=8192`, `P=16384`: Q=1
+took about 157 s and was host-submission bound with one core busy; Q=2 took
+6.76 s and Q=8 took 6.52 s, about 1.30e7 particles/s at `N=1e8`. `N=1e6`
+shows the same step (2.17 s at Q=1 down to 0.66 s at Q>=2), and the sorted
+histogram is bit-identical across Q at each N. The CPU run (`C=1024`,
+`P=512`) matched CUDA at `N=1e6`. Two caveats apply: from about 20:29 UTC
+2026-11-13, sibling agent workloads ran on the same node and a long CPU run
+was SIGKILLed at 925 s, so node exclusivity was not verified for the whole
+window, and the CPU path on the H100 host is blocked by the OMP executor,
+whose investigation is in progress. This is not a final H100 acceptance
+claim; the final H100 item stays open.
+
 ## Semantics
 
 Fields per particle: `id: uint64`, `property: uint32`, `weight: uint32`,
@@ -367,6 +408,12 @@ The full design is in [architecture](docs/architecture.md).
 
 ## Current limitations
 
+- The hash-path and output-reserve fix is in progress. The hash scatter and
+  the transform output reserve are under correctness review; the dense path
+  remains the correctness reference.
+- The CPU path is blocked by the OMP executor; the investigation is in
+  progress. Until it is resolved, no CPU result is claimed for the H100
+  host, and CPU performance evidence stays on the serial-executor hosts.
 - `--batch-chunks Q` has no upper cap beyond the 32-bit parse limit. Large `Q`
   sizes tile-descriptor, table, and staging buffers even when the ready list is
   short. An optional cap is not implemented.

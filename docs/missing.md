@@ -10,17 +10,26 @@ repository state, not on the intended final state.
 Current validated state:
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
-  Policy/docs main is `cb0548cedf81a284e6291a39dee1eeca7256d783`; this work
-  rebases the FrameSpec launch on top of it.
-- Last recorded validation on the rebased FrameSpec revision: 82/82 CTest
-  cases on fwk394 CPU, 86/86 on hal CUDA, per `docs/acceptance.md`. The CUDA
-  totals include the `[cuda]` kernel and FrameSpec matrix cases.
+  Main is `ac89ab558c26b938038035b26ca5dbe6d7ce7727` (merge of PR #22).
+- Public API chain: PR #16-#22 landed the `Flow<TPayload, TDevice, TStorage>`
+  public API with typed execution, generic payload slot storage, the failure
+  status channel, the four-purpose RNG mapping, the particle example on
+  `Flow` (121-line user file, 33 identical fixed-seed baseline invocations),
+  and the photon scattering example with CSV output, traces, and plots.
+- Last recorded validation: 194/194 CTest cases on fwk394 CPU, 246/246 on hal
+  CUDA `sm_80` (Release, pedantic), per `docs/acceptance.md`. The CUDA totals
+  include the `[cuda]` kernel, FrameSpec matrix, typed `Flow` execution,
+  failure-status, RNG4, and photon cases.
 - HIP compiles the full tree for `gfx90a`; no AMD device is visible on hal, so
   HIP execution is blocked and no HIP execution is claimed.
-- CUDA example: `N=1e5` 0.58 s, `N=1e6` 2.24 s, `N=1e8` 187.5 s with an exact
-  histogram sum of 100,000,000.
-- CPU example: `N=1e6` 19.45 s.
-- The CPU and CUDA `N=1e6` histograms are identical by direct row diff.
+- Historical pre-T5/T7 CUDA example baselines: `N=1e5` 0.58 s, `N=1e6` 2.24 s,
+  `N=1e8` 187.5 s with an exact histogram sum of 100,000,000. Historical CPU
+  example: `N=1e6` 19.45 s. The historical CPU and CUDA `N=1e6` histograms
+  are identical by direct row diff.
+- H100 (`jrc0880.jureca`): preliminary CUDA-only evidence at
+  `aa2c7e11fe8f11625534dee66136d9ab899d29d1` (older than main); Q=8 about
+  1.30e7 particles/s at `N=1e8`; external-load caveat; CPU path blocked by
+  the OMP executor. No final H100 claim.
 - `hal` reports `sharing=unknown`; the throughput is a shared-host baseline.
 
 Priority legend: **P0** blocks plan acceptance, **P1** required for plan
@@ -33,8 +42,7 @@ resource or decision is missing.
   (default 1) dispatches up to `Q` ready input chunks per transform node, with
   one classify launch and one scatter launch per batch and the adaptive
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
-  Q=1/2/8 with identical sorted histograms across Q. The current tree passes
-  82/82 CPU on fwk394 and 86/86 CUDA on hal. Open refinement:
+  Q=1/2/8 with identical sorted histograms across Q. Open refinement:
   `--batch-chunks Q` has no upper cap beyond the 32-bit parse limit, tracked in
   Section 7.
 - [x] **P1: FrameSpec launch.** Done: every graph kernel launches through
@@ -43,13 +51,22 @@ resource or decision is missing.
   `frameCap` default 8; the host frame extent is 1 and accelerators use `T`.
   Kernels stride the batch tile list, so a block may process several tiles. The
   FrameSpec unit and matrix tests pass on CPU and CUDA.
-- [ ] **P0: generic graph API.** The host-side
-  `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core is in the tree with
-  source/transform/sink roles, per-bin routing, feedback edges, and no device
-  function pointers. The generic DAG acceptance test runs a source, two
-  transforms, a sink, and one feedback edge through `GraphRunner`.
-  Remaining: typed payload contracts beyond `NodeBase` and porting the particle
-  example to the graph core.
+- [x] **P0: generic graph API (typed `Flow` path).** The typed
+  `Flow<TPayload, TDevice, TStorage>` public API is implemented and both
+  examples run on it: the particle-feedback example is ported (121-line user
+  file, 33 identical fixed-seed baseline invocations), and the photon
+  scattering example builds its graph with `Flow` handles and named event
+  ports. Typed execution, generic payload slot storage, the failure status
+  channel, and the four-purpose RNG mapping are in main (PR #16-#22). The
+  lower-level host-side `NodeBase`/`Graph`/`GraphBuilder`/`RouteTable` core
+  remains host-only and unused by the examples; it stays available for custom
+  nodes, and using it for the examples remains open.
+- [ ] **P1: hash-path and output-reserve fix (in progress).** The hash scatter
+  and the transform output-reserve derivation are under correctness review.
+  The dense path remains the correctness reference until the fix lands.
+- [ ] **P1: CPU OMP executor investigation (in progress).** The CPU path on
+  the H100 host is blocked by the OpenMP executor; the investigation is in
+  progress. No CPU result is claimed for that host until it is resolved.
 - [ ] **P1: multiple in-flight batches per node.** The scheduler currently
   allows one in-flight batch per node. Add a bounded submitted depth per node,
   an event pool, and fair round-robin across ready nodes while preserving
@@ -156,15 +173,19 @@ resource or decision is missing.
   (T14b) and the `reuse lint` CI gate remain open.
 - [x] **P1: add the plan to the repository.** Done: `docs/plan.md` is in main
   with an SPDX header.
-- [ ] **P1: complete the documentation set.** Add `docs/build.md` (exact pins,
-  configure/build/test commands, environment scrub), `docs/ci.md`,
-  `docs/architecture.md`, `docs/numerics.md`, `docs/known-limitations.md`, and
-  `docs/benchmarks.md`. Link them from the README.
-- [ ] **P1: complete the alpaka API map.** `docs/alpaka-api-map.md` covers the
-  main primitives; add an entry for every new accelerator helper, with searched
-  symbols, pinned path, selected API, tested backends, and the reason for any
-  project-owned code.
-- [ ] **P1: repository policy.** Decide public versus private, enable branch
+- [x] **P1: complete the documentation set.** `docs/build.md` (exact pins,
+  configure/build/test commands, environment scrub), `docs/architecture.md`,
+  `docs/numerics.md`, `docs/known-limitations.md`, `docs/benchmarks.md`,
+  `docs/public-api.md`, `docs/acceptance.md`, and `docs/missing.md` are in
+  main and linked from the README. `docs/ci.md` exists only in draft PR #4
+  (`gf/t11-ci`) and is not on main; it lands with the CI workflow.
+- [x] **P1: complete the alpaka API map.** `docs/alpaka-api-map.md` covers the
+  main primitives, the typed `Flow` API, the storage adapters, the status
+  channel, and the four-purpose RNG mapping, with searched symbols, pinned
+  path, selected API, tested backends, and the reason for any project-owned
+  code. The typed `Flow` path uses no accelerator helper beyond the mapped
+  primitives.
+- [ ] **P1: repository policy.** The repository is public. Enable branch
   protection for `main`, add a CI badge, and document the PR/merge process.
 - [ ] **P1: exact pin record.** Record the alpaka commit and Catch2 version used
   for validation in `docs/build.md` and the acceptance record; update the pin
@@ -178,12 +199,17 @@ resource or decision is missing.
 - [ ] **P0: HIP execution gate. Blocked.** No AMD runtime device is visible on
   hal; HIP is compile-only for `gfx90a`. Run the example and the relevant tests
   on an AMD GPU. Record the GPU model, ROCm version, `gfx` target, and results.
-- [ ] **P0: exclusive or repeated acceptance run.** `hal` is shared
-  (`sharing=unknown`). JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
-  available and exclusive per operator, but its gateway sharing flag is unknown
-  and no H100 baseline is recorded yet. Re-run `N=1e8` on an exclusive
-  allocation or repeat the baseline enough times to report variance; keep the
-  shared-host numbers labelled as a baseline.
+- [ ] **P0: exclusive or repeated acceptance run. Blocked (preliminary CUDA
+  only).** `hal` is shared (`sharing=unknown`). JURECA `jrc0880.jureca` (4x
+  H100 PCIe 80GB, SM 9.0) is available and exclusive per operator, but its
+  gateway sharing flag is unknown. Preliminary CUDA-only evidence exists at
+  `aa2c7e11fe8f11625534dee66136d9ab899d29d1` (older than main): Q=8 about
+  1.30e7 particles/s at `N=1e8`, with an external-load caveat (sibling agents
+  on the node from about 20:29 UTC 2026-11-13; a long CPU run was SIGKILLed at
+  925 s). The CPU path is blocked by the OMP executor (in progress). Re-run
+  `N=1e8` on a verified exclusive allocation or repeat the baseline enough
+  times to report variance; keep the shared-host numbers labelled as a
+  baseline.
 - [ ] **P1: freeze the throughput target.** The current baseline is about
   `5.33e5` particles/s at `N=1e8` on the A30 with `C=8192`, `P=65536`. After an
   exclusive measurement, freeze a regression target with a stated tolerance and
@@ -230,9 +256,16 @@ resource or decision is missing.
 - **TSAN host:** the hal kernel rejects the TSAN memory mapping. A compatible
   host or a different runtime/kernel is required.
 - **CI runners:** the workflow needs self-hosted CUDA and AMD runners with known
-  labels, credentials, and artifact retention. PR #4 is a draft and no runners
-  are provisioned; the repository is public and has no `.github/workflows` on
+  labels, credentials, and artifact retention. PR #4 (`gf/t11-ci`, head
+  `19aba8345ce85fec474573902fdfe775c38ff4b8`) is a draft and no runners are
+  provisioned; the repository is public and has no `.github/workflows` on
   main.
+- **Hash-path and output-reserve fix:** in progress. The hash scatter and the
+  transform output-reserve derivation are under correctness review; the dense
+  path remains the correctness reference.
+- **CPU OMP executor:** in progress. The CPU path on the H100 host is blocked
+  by the OpenMP executor; no CPU result is claimed for that host until the
+  investigation is resolved.
 - **Exclusive throughput:** `hal` is shared; the current 187.5 s is a baseline,
   not an exclusive-hardware acceptance number.
 - **Pool memory:** `S=P+K*R` is safe but overprovisioned at `C=8192`,
