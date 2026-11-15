@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/Chunk.hpp"
+#include "graphFlow/core/PoolBudget.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -12,6 +13,13 @@
 
 namespace graphFlow::detail
 {
+    /** Test-only accessor for the private lifecycle counters.
+     *
+     * The unit tests need to drive a generation or lease counter to its 32-bit limit; production
+     * code never refers to this type. It is declared here so the counters can stay private.
+     */
+    struct ChunkLedgerTestAccess;
+
     /** Host-side chunk bookkeeping shared by the chunk-storage adapters.
      *
      * The ledger owns the free list, the per-chunk generation and reader-lease counters, and the
@@ -71,7 +79,8 @@ namespace graphFlow::detail
                 throw std::invalid_argument{"graphFlow::ChunkLedger: stale chunk handle"};
             if(m_leases[handle.index] != 0u)
                 throw std::logic_error{"graphFlow::ChunkLedger: release while a reader lease is outstanding"};
-            ++m_generations[handle.index];
+            m_generations[handle.index]
+                = checkedCounterIncrement(m_generations[handle.index], "graphFlow::ChunkLedger generation");
             m_free.push_back(handle.index);
         }
 
@@ -79,7 +88,7 @@ namespace graphFlow::detail
         void acquireLease(ChunkHandle handle)
         {
             validateLive(handle);
-            ++m_leases[handle.index];
+            m_leases[handle.index] = checkedCounterIncrement(m_leases[handle.index], "graphFlow::ChunkLedger lease");
             m_peakLeases = m_leases[handle.index] > m_peakLeases ? m_leases[handle.index] : m_peakLeases;
         }
 
@@ -130,6 +139,8 @@ namespace graphFlow::detail
         }
 
     private:
+        friend struct ChunkLedgerTestAccess;
+
         std::uint32_t m_numChunks;
         std::vector<std::uint32_t> m_generations;
         std::vector<std::uint32_t> m_leases;
