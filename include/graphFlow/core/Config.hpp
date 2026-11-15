@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include "graphFlow/core/BinPath.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
+#include "graphFlow/core/ScatterMode.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -53,6 +55,15 @@ namespace graphFlow
         std::uint64_t numParticles = 0u; // N
         std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
         std::uint32_t frameCap = 8u; // blocks per multiprocessor cap of the frame launch
+        /** Bin-table implementation of every partition node in this run.
+         *
+         * `automatic` keeps the historical dense behaviour for widths up to `denseBinLimit` and
+         * selects the hash table above it. An explicit `dense` request above the limit is a
+         * configuration error, not a silent fallback.
+         */
+        BinPath binPath = BinPath::automatic;
+        /** Dense scatter strategy; `SharedStaging` is the measured default. */
+        ScatterMode scatterMode = ScatterMode::SharedStaging;
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
 
@@ -83,6 +94,34 @@ namespace graphFlow
          * has the device properties.
          */
         static constexpr std::uint32_t denseBinLimit = 1024u;
+
+        /** Compile-time tile width of the shared-memory hash table used by `Flow`.
+         *
+         * The table has `2 * hashBinTableTileSize` entries. A hash run whose configured tile size
+         * is wider than this bound is rejected because a tile could then hold more distinct bins
+         * than the table has slots. The default matches the measured `2*T` table with `T=128`.
+         */
+        static constexpr std::uint32_t hashBinTableTileSize = 128u;
+
+        /** Largest partition width the public `Flow` classifier concept accepts.
+         *
+         * The dense limit is enforced at run time through `effectiveBinPath()` and the stage
+         * factory; the hash table is sized by the tile width, so wide partitions only need host
+         * buffers of `bins` words.
+         */
+        static constexpr std::uint32_t maxSupportedBins = 65536u;
+
+        /** Resolve `automatic` against the partition width.
+         *
+         * The result is the bin path the stage factory instantiates; an explicit `dense` above the
+         * measured limit stays `dense` and `validate()` rejects it loudly.
+         */
+        [[nodiscard]] constexpr BinPath effectiveBinPath() const noexcept
+        {
+            if(binPath != BinPath::automatic)
+                return binPath;
+            return maxBins > denseBinLimit ? BinPath::hash : BinPath::dense;
+        }
 
         /** Shared-memory words the dense scatter stages per bin.
          *
@@ -134,9 +173,27 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};
-            // No denseBinLimit check here: the hash path supports larger partition widths. The
-            // dense shared-table limit is still enforced by DenseNodePolicy and the dense
-            // kernels, which instantiate their shared counts[maxBins] table at compile time.
+            if(maxBins > maxSupportedBins)
+                throw std::invalid_argument{"graphFlow::Config: maxBins exceeds the public Flow partition limit"};
+            // The dense shared-table limit is checked on the resolved path only: `automatic`
+            // selects hash above the limit, and an explicit dense request above it is a loud
+            // configuration error instead of a kernel that fails to instantiate. The low-level
+            // hash path may still declare a wider partition through DenseNodePolicy.
+            BinPath const path = effectiveBinPath();
+            if(path == BinPath::dense && maxBins > denseBinLimit)
+                throw std::invalid_argument{
+                    "graphFlow::Config: the dense bin path supports at most " + std::to_string(denseBinLimit)
+                    + " bins; select the hash path"};
+            if(path == BinPath::hash)
+            {
+                if(scatterMode == ScatterMode::Direct)
+                    throw std::invalid_argument{
+                        "graphFlow::Config: the hash bin path always stages; direct scatter is dense-only"};
+                if(tileSize > hashBinTableTileSize)
+                    throw std::invalid_argument{
+                        "graphFlow::Config: the hash bin path supports tileSize at most "
+                        + std::to_string(hashBinTableTileSize)};
+            }
             if(policyWaves == 0u)
                 throw std::invalid_argument{"graphFlow::Config: policyWaves must be non-zero"};
             if(policyTargetBlocksPerSm == 0u)

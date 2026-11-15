@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+#include "KernelAxes.hpp"
+#include "ParticleTypes.hpp"
 #include "graphFlow/flow/Execution.hpp"
 #include "graphFlow/graphFlow.hpp"
 #include "integration/StallDiagnostics.hpp"
@@ -442,6 +444,47 @@ TEST_CASE("CUDA typed flow runs the generic POD chain", "[cuda][execution]")
                 CHECK(values[static_cast<std::size_t>(id)] == 5u + static_cast<std::uint32_t>(id % 3u));
         }
     }
+}
+
+TEST_CASE("CUDA typed flow routes the measured kernel axes", "[cuda][execution][kernel-axes]")
+{
+    auto device = makeCudaDevice();
+    using namespace graphFlow::particle;
+
+    constexpr std::uint64_t particles = 1000u;
+    Parameters parameters{};
+    parameters.numParticles = particles;
+    parameters.chunkSize = 64u;
+    parameters.liveParticles = static_cast<std::uint32_t>(particles);
+    parameters.tileSize = 32u;
+    parameters.batchChunks = 1u;
+
+    auto run = [&](ScatterChoice scatter, BinPath path, std::uint32_t bins, Distribution distribution)
+    {
+        KernelOptions options{};
+        options.scatter = scatter;
+        options.binPath = path;
+        options.bins = bins;
+        options.distribution = distribution;
+        return runKernelAxes(device, parameters, options);
+    };
+
+    KernelAxisResult const baseline = run(ScatterChoice::shared, BinPath::dense, 64u, Distribution::balanced);
+    KernelAxisResult const direct = run(ScatterChoice::direct, BinPath::dense, 64u, Distribution::balanced);
+    KernelAxisResult const hash = run(ScatterChoice::shared, BinPath::hash, 64u, Distribution::balanced);
+    CHECK(direct.weights == baseline.weights);
+    CHECK(direct.histogram == baseline.histogram);
+    CHECK(hash.weights == baseline.weights);
+    CHECK(hash.histogram == baseline.histogram);
+
+    KernelAxisResult const sparse = run(ScatterChoice::shared, BinPath::hash, 4096u, Distribution::sparse);
+    std::uint64_t sum = 0u;
+    for(HistogramRow const& row : sparse.histogram)
+        sum += row.count;
+    CHECK(sum == particles);
+    REQUIRE(sparse.weights.size() == particles);
+    for(std::uint64_t id = 0u; id < particles; ++id)
+        CHECK(sparse.weights[static_cast<std::size_t>(id)] == static_cast<std::uint32_t>(id % 4096u));
 }
 
 TEST_CASE("CUDA typed transform stage issues one batch-wide launch", "[cuda][execution]")

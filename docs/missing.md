@@ -161,9 +161,9 @@ resource or decision is missing.
   `37.25 ms` skewed, `4.19` vs `6.62 ms` sparse). The committed integration
   cases compare the two paths on all four distributions. P07b runs the
   kernel-workload `direct` mode on `rosi_v100` CUDA at kernel level (see
-  [benchmarks.md](benchmarks.md)). Missing artifact: HIP `Direct`, and the
-  public `Flow` graph still runs the dense path; only the CPU `Direct` timings
-  and the P07b kernel-level CUDA rows exist, so this item stays open.
+  [benchmarks.md](benchmarks.md)). The public `Flow` graph now routes
+  `Direct` through `Tuning::scatterMode`; only HIP `Direct` and the public-path
+  performance numbers are missing, so this item stays open.
 - [x] **P1: dense/hash threshold measurement.** P03 at
   `ad7208f80fbb6a07d9a87767e947abc057c00e84` made the threshold
   measurement-backed from the fwk394 CPU run: dense beat the `2*T` and `4*T`
@@ -356,15 +356,16 @@ resource or decision is missing.
   a 10 percent tolerance (floor 11,700,000). The measured P07b median
   12,987,013 passes in `tools/bench_matrix.sh`. Missing artifact: a CI or
   scheduled job that invokes the gate; no workflow job runs it yet.
-- [ ] **P1: complete the measurement matrix (public Flow dense path open).**
+- [ ] **P1: complete the measurement matrix (public Flow matrix open).**
   P07 records wall time, particles/s, the copy reference, and the frozen target
   for the default dense example path. P07b adds kernel-level end-to-end numbers
   for `shared|direct` scatter, `dense|hash` bin paths and the
   balanced/one-hot/skewed/sparse distributions through the opt-in
   `--workload kernel` path, including dense `direct` on `rosi_v100` CUDA. The
-  public `Flow` graph still runs the dense path only and HIP has no `direct`
-  execution, so this item stays open for the public path. Missing artifact:
-  public-API routing of the measured axes.
+  public `Flow` graph now routes the same axes through `Tuning::scatterMode`
+  and `Tuning::binPath`, but no public-path performance matrix and no HIP
+  `direct` execution are recorded, so this item stays open. Missing artifact:
+  public-path measurements for those axes.
 - [x] **P1: copy-bandwidth reference.** P07 measured 409.733 GB/s over
   3,221,225,472 B (10 device-to-device copies, 7.862 ms per copy) on the
   exclusive `rosi_v100`. It is a copy-engine reference, not a scatter

@@ -49,9 +49,18 @@ Every other `Tuning` field is optional and empty by default, so the device
 policy supplies the derived value: batching (`batchChunks`,
 `chunkCapacity`), storage and pool limits (`liveParticles`, `tileSize`,
 `numChunks`, `poolPayloadBudgetBytes`), the launch frame cap (`frameCap`),
-device-policy knobs, the opt-in `diagnostics` flag, and an optional
-`stallTimeout` (`std::chrono::milliseconds`). It never changes payload semantics
-or routes; tuning is not an argument of the minimal calls above.
+device-policy knobs, the opt-in `diagnostics` flag, the measured partition
+axes (`scatterMode` and `binPath`), and an optional `stallTimeout`
+(`std::chrono::milliseconds`). It never changes payload semantics or routes;
+tuning is not an argument of the minimal calls above.
+
+`scatterMode` selects `ScatterMode::SharedStaging` (the default) or
+`ScatterMode::Direct` on the dense path. `binPath` is `BinPath::automatic` by
+default: it selects dense up to `Config::denseBinLimit` bins and the
+shared-memory hash table above it. A run is rejected before device work when an
+explicit dense path exceeds the limit, when direct scatter is combined with the
+hash path, or when a hash run requests a tile wider than
+`Config::hashBinTableTileSize`.
 
 `run()` returns `SchedulerStats` with aggregate peaks (`peakReadyChunks`,
 `peakReadyNodes`, `maxReadyDepth`, `peakInflightBatches`, `peakInflightChunks`,
@@ -167,8 +176,9 @@ seed, offset, or purpose.
 
 The contract is exercised on CPU, CUDA, and HIP. The current suites are
 **247/247 CPU**, **307/307 CUDA** on `hal` A30 `sm_80`, and **298/298 HIP** on
-`hal` RX 7900 XTX at `88de14f`; P07b adds 7/7 cases. The previous 246/246,
-306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281` are
+`hal` RX 7900 XTX at `88de14f`; P07b adds 7/7 cases. This change adds focused
+CPU, CUDA, and HIP kernel-axis cases on top of those totals. The previous
+246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281` are
 historical. The original HIP gate at `b972eaa` ran 245/245 with
 43 HIP cases, including 8 typed Flow cases through the public `Flow` API
 plus the particle and photon example CLI/output cases; that total is
@@ -178,9 +188,12 @@ partial tails, bounded pools, empty and single runs, the generic POD chain,
 one batch-wide transform launch, one classify plus one scatter partition
 launch, and Q=8 feedback termination. `rocprof` confirms the device kernels.
 
-The public `Flow` API is the dense path; the shared-memory hash path is
-low-level and not a public-API change. The tree-wide format and SPDX sweep
-(T14b) has landed and is enforced by the hosted `format` job.
+The public `Flow` API routes both the dense and the shared-memory hash bin path
+through `Tuning::binPath`; the dense scatter mode is selected by
+`Tuning::scatterMode`. Wide partitions connect their outputs through the
+additive runtime-bin `connect(node, bin, node)` overload so 4096 and 65536-bin
+graphs do not need a compile-time port per bin. The tree-wide format and SPDX
+sweep (T14b) has landed and is enforced by the hosted `format` job.
 
 GitHub-hosted HIP builds are compile-only because those runners have no AMD
 GPU, so they are not a runtime result. `hal` reports `sharing=unknown`; the HIP

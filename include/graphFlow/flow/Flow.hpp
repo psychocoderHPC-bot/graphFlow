@@ -143,13 +143,51 @@ namespace graphFlow
                                          Config const& config,
                                          std::uint32_t purpose) -> std::unique_ptr<Stage>
             {
-                return std::make_unique<detail::PartitionStage<TDevice, TStorage, TPayload, TClassifier, TUpdate>>(
-                    device,
-                    storage,
-                    config,
-                    *classifierPtr,
-                    *updatePtr,
-                    purpose);
+                // `config.binPath` is already resolved; `config.validate()` rejected direct+hash
+                // and an explicit dense request above the shared-table limit before this point.
+                if constexpr(TClassifier::maxBins <= Config::denseBinLimit)
+                {
+                    if(config.binPath == BinPath::dense && config.scatterMode == ScatterMode::Direct)
+                    {
+                        using Stage = detail::PartitionStage<
+                            TDevice,
+                            TStorage,
+                            TPayload,
+                            TClassifier,
+                            TUpdate,
+                            DenseBinTable,
+                            ScatterMode::Direct>;
+                        return std::make_unique<Stage>(device, storage, config, *classifierPtr, *updatePtr, purpose);
+                    }
+                }
+                if(config.binPath == BinPath::hash)
+                {
+                    using Stage = detail::PartitionStage<
+                        TDevice,
+                        TStorage,
+                        TPayload,
+                        TClassifier,
+                        TUpdate,
+                        HashBinTable<Config::hashBinTableTileSize>,
+                        ScatterMode::SharedStaging>;
+                    return std::make_unique<Stage>(device, storage, config, *classifierPtr, *updatePtr, purpose);
+                }
+                if constexpr(TClassifier::maxBins <= Config::denseBinLimit)
+                {
+                    using Stage = detail::PartitionStage<
+                        TDevice,
+                        TStorage,
+                        TPayload,
+                        TClassifier,
+                        TUpdate,
+                        DenseBinTable,
+                        ScatterMode::SharedStaging>;
+                    return std::make_unique<Stage>(device, storage, config, *classifierPtr, *updatePtr, purpose);
+                }
+                else
+                {
+                    throw std::invalid_argument{"graphFlow: the dense bin path does not support this partition width"};
+                }
             };
             auto const key = appendNode(
                 std::move(name),
@@ -231,6 +269,19 @@ namespace graphFlow
         void connect(OutputPort<BinValue> const& port, NodeHandle const& to)
         {
             connectPort(port.node(), BinValue, to);
+        }
+
+        /** Connect one runtime-selected output bin to a destination node.
+         *
+         * Wide partitions such as the 4096 and 65536-bin hash cases cannot enumerate every bin as
+         * a compile-time `out<Bin>()` port. This overload keeps the same checks (owner identity,
+         * bin range, duplicate route) and is additive; the compile-time port overloads stay the
+         * preferred form for small named outcomes.
+         */
+        template<std::uint32_t MaxBins, typename TBin>
+        void connect(TypedNodeHandle<MaxBins, TBin> const& from, std::uint32_t bin, NodeHandle const& to)
+        {
+            connectPort(from, bin, to);
         }
 
         /** Validate the graph, build the typed execution path and run it to completion.
@@ -537,6 +588,8 @@ namespace graphFlow
             config.policyLiveParticlesPerChunk
                 = m_tuning.policyLiveParticlesPerChunk.value_or(config.policyLiveParticlesPerChunk);
             config.policyMemoryBudgetBytes = m_tuning.policyMemoryBudgetBytes.value_or(config.policyMemoryBudgetBytes);
+            config.scatterMode = m_tuning.scatterMode.value_or(config.scatterMode);
+            config.binPath = m_tuning.binPath.value_or(config.binPath);
             config.slotBytes = TStorage::slotBytes;
 
             DevicePolicyOverrides overrides;
@@ -548,6 +601,9 @@ namespace graphFlow
                 = makeDevicePolicy(m_device.getDeviceProperties(), itemCount, overrides, policyConfigOf(config));
             config.poolOutputReserveChunks = transformReserve(policy.chunkCapacity);
             applyDevicePolicy(config, policy);
+            // Resolve the automatic default before validation and before the stage factory reads
+            // the path; every explicit request stays explicit and is validated as such.
+            config.binPath = config.effectiveBinPath();
 
             if(m_tuning.poolPayloadBudgetBytes.has_value())
                 config.poolPayloadBudgetBytes = *m_tuning.poolPayloadBudgetBytes;
