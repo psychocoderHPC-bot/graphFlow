@@ -117,7 +117,7 @@ in `docs/benchmarks.md` was measured on the A30 only.
 The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
- the particle and photon CLI/output cases for the HIP backend. The current tree
+ the particle and photon CLI/output cases for the HIP backend. The HIP suite
  passes **307/307** on `hal` at `561b9a4c9435e37b164623bb6be60a3051783eb4`;
  the previous 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at
  `56c11ac`, the 290/290 at `a610281` and the original 245/245 run with 43 HIP
@@ -172,11 +172,17 @@ ctest --test-dir build-sycl --output-on-failure --no-tests=error
 The SYCL runtime cases fail when no Intel GPU is visible instead of skipping.
 `ctest -L sycl` selects the in-process typed Flow, failure, photon, async/depth,
 FrameSpec and particle pressure matrix, together with the SYCL CLI and
-cross-backend exact-histogram cases. The validated device is `hal` with an
-Intel Arc A770 (`spir64`, oneAPI 2026.2), where the matrix passes 71/71. The
-Arc A770 does not advertise the SYCL `fp64` aspect, so the oneAPI photon path
-runs single precision and converts the result to the public `ScatteringResult`;
-the CPU, CUDA and HIP photon runs keep double. Check the compiler and device
+cross-backend exact-histogram cases: 33 in-process Catch2 cases, 24 particle
+CLI, 3 cross-backend, 10 photon CLI and 1 photon output case. The validated
+device is `hal` with an Intel Arc A770 (`spir64`, oneAPI 2026.2), where the
+matrix passes 71/71 at current main
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511`; the GitHub-hosted `sycl-compile`
+job compiles the same target but runs no CTest. The Arc A770 does not
+advertise the SYCL `fp64` aspect, so the oneAPI photon path
+runs single precision (fp32) and converts the result to the public
+`ScatteringResult`; the CPU, CUDA and HIP photon runs keep double. AOT
+compilation with `ocloc` (`-fsycl-targets=spir64_gen`) crashes on `hal`, so the
+build stays JIT-compiled SPIR-V. Check the compiler and device
 visibility before a run:
 
 ```sh
@@ -236,8 +242,10 @@ the hot path has no per-event state branch, and the Debug case exercises the
 compiled checks. The scheduler adds its conservation, fill-level and
 exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
 each violation and `[scheduler][release]` proves the checks are compiled out.
-The recorded Release suite is **255/255 CPU**, **316/316 CUDA**, and **307/307
-HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` (see `docs/acceptance.md`);
+The recorded Release suite is **255/255 CPU**, **316/316 CUDA**, **307/307
+HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **71/71 SYCL** at
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511` (see
+`docs/acceptance.md`);
 the six `[scheduler]` cases are included in those totals, the
 `[scheduler][release]` case among them. PR #63 adds the public-Flow routed-axis
 cases on top of the P07b 7/7. The `ffe4074` totals 249/249, 310/310 and
@@ -332,7 +340,11 @@ revision, and this documentation commit does not claim a new build or test run.
  **307/307** at `561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous
  **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
  `56c11ac`, the **290/290** at `a610281` and the earlier **245/245** with 43
- HIP cases at `b972eaa` are historical. The `sm_75` CUDA
+ HIP cases at `b972eaa` are historical. The SYCL runtime CTest on `hal` (Arc
+ A770 `spir64`, oneAPI 2026.2) passes **71/71** at
+ `9fb15f1e6ce13f252b31d4cb60cc410862d56511` via
+ `ctest -L sycl`; the GitHub-hosted `sycl-compile` job compiles the target but
+ runs no CTest and makes no SYCL runtime claim. The `sm_75` CUDA
 build still fails with the CUDA 12.5 nvcc internal compiler error
 (`docs/known-limitations.md`). Format and REUSE metadata are present; the
 hosted `reuse` job checks `reuse lint`, the

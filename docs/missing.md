@@ -5,17 +5,20 @@
 
 This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
-repository state at code main `561b9a4c9435e37b164623bb6be60a3051783eb4` (PR
-#65, the debug scheduler conservation checks), not on the intended final state.
+repository state at code main `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR
+#69, the full SYCL test matrix), not on the intended final state.
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
   Changes land through a feature branch and a PR targeting `main`; branch
   protection is pending operator action.
 - **Current validation:** CPU **255/255** (fwk394 Release, g++ 13.3), CUDA
-  **316/316** on `hal` A30 `sm_80` (CUDA 13.4), and HIP **307/307** on `hal`
-  RX 7900 XTX `gfx1100` (ROCm 7.2). No case is skipped or filtered; PR #63
-  adds the public-Flow routed-axis and rejection cases and PR #65 adds the six
-  `[scheduler]` cases (6/6 on CPU, CUDA and HIP) on top of the P07b 7/7. The
+  **316/316** on `hal` A30 `sm_80` (CUDA 13.4), HIP **307/307** on `hal`
+  RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **71/71** on `hal` Arc A770
+  `spir64` (oneAPI 2026.2, PR #69 matrix, fp32 photons). No case is skipped or
+  filtered; PR #63
+  adds the public-Flow routed-axis and rejection cases, PR #65 adds the six
+  `[scheduler]` cases (6/6 on CPU, CUDA and HIP), and PR #69 registers the 71-case
+  SYCL device matrix, all on top of the P07b 7/7. The
   `ffe4074` totals 249/310/301, the `88de14f` totals 247/307/298, the `56c11ac`
   totals 246/306/297, and the earlier `a610281` totals 239/299/290 are
   historical. The full record, commands, and pins are in
@@ -200,10 +203,11 @@ resource or decision is missing.
    `10c1733770e16ebaecc74513034e6d327924503c`
    (`tests/integration/FailurePaths.hpp`) cover invalid classifier and
    updater results, a full hash table, pool exhaustion, and an injected enqueue
-  failure, and they fail rather than skip when no device is visible. The
-  current suites are 255/255 CPU, 316/316 CUDA and 307/307 HIP at
-  `561b9a4c9435e37b164623bb6be60a3051783eb4` and include these failure
-  cases. The injection hook is test-only: no production path calls
+  failure, and they fail rather than skip when no device is visible; the PR #69
+  SYCL matrix adds the same failure paths on the Arc A770. The
+  current suites (255/255 CPU, 316/316 CUDA and 307/307 HIP at `561b9a4c`;
+  71/71 SYCL at `9fb15f1e6ce13f252b31d4cb60cc410862d56511`) include these
+  failure cases. The injection hook is test-only: no production path calls
   `GraphRunner::setFailureHook`, and the hook raises a host exception at a named
   scheduler point instead of injecting a driver fault. Missing artifact: real
   mid-run CUDA/HIP out-of-memory, ECC, Xid, context-loss, or `wait`-failure
@@ -304,13 +308,14 @@ resource or decision is missing.
      `[status]` error-path cases (`GRAPHFLOW_ENABLE_ERROR_PATH_LEAK_CHECK=ON`);
    - a hosted `tsan` job on `ubuntu-latest` (non-PIE Debug, OMP off,
      CpuOmpBlocks off);
-   - CUDA compile-only (`sm_70`) and HIP compile-only (`gfx90a`);
+   - CUDA compile-only (`sm_70`), HIP compile-only (`gfx90a`), and
+     SYCL compile-only (Intel GPU only, oneAPI 2025.3 container);
    - `reuse lint`;
    - finite timeouts and JUnit artifact upload.
-   Still open: a CUDA or HIP runtime gate on a device host. The workflow uses
-   no self-hosted runner. The P10 fwk394 evidence at `cf3bc8a` is ASAN+UBSAN
-   236/236, leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan` and `leak`
-   runtimes were not observed, and no H100 was used.
+   Still open: a CUDA, HIP, or SYCL runtime gate on a device host. The workflow
+   uses no self-hosted runner. The P10 fwk394 evidence at `cf3bc8a` is ASAN+UBSAN
+   236/236, leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan`, `leak`,
+   and SYCL runtimes were not observed, and no H100 was used.
 - [x] **P0: format configuration.** The upstream-derived `.clang-format`
   (clang-format 20.1.8) is in main (PR #5 / T14a). The tree-wide format sweep
   (T14b) is complete, and the hosted `format` job fails on any diff.
@@ -359,6 +364,18 @@ resource or decision is missing.
   Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
   `N=1e8` acceptance run, and no performance claim while `hal` reports
   `sharing=unknown`.
+- [x] **P0: SYCL execution gate.** Done at
+  `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69) on `hal` with an Intel
+  Arc A770 (`spir64`, oneAPI 2026.2, icpx 2026.2.0): **71/71** CTest via
+  `ctest -L sycl` (33 in-process Catch2 cases, 24 particle CLI, 3
+  cross-backend exact-histogram, 10 photon CLI, 1 photon output). The Arc
+  A770 lacks the SYCL `fp64` aspect, so the oneAPI photon path runs fp32;
+  AOT compilation with `ocloc` (`-fsycl-targets=spir64_gen`) crashes on
+  `hal`, so the build stays JIT-compiled SPIR-V. GitHub-hosted SYCL remains
+  compile-only in the `sycl-compile` job; no SYCL runtime claim is made for
+  GitHub CI, and no SYCL performance run is recorded while `hal` reports
+  `sharing=unknown`. Remaining SYCL work: a second Intel device and an
+  `N=1e8` acceptance run.
 - [x] **P0: exclusive or repeated acceptance run.** P07 on `rosi_v100` at
   `64d4a1e11949886c7147c082cc386edde4bdb01f` (merged as `a610281`; V100
   SXM2-32GB, CUDA 12.6.85 `sm_70`, Release), `C=8192`, `P=16384`, seed 42:
@@ -487,15 +504,21 @@ resource or decision is missing.
   `leak` step, with no skip. A hosted `tsan` job runs the host scheduler under
   TSAN (non-PIE, OMP off, CpuOmpBlocks off). The historical 202-case final main
   was green (CPU 202/202 Release and Debug, ASAN+UBSAN Debug 202/202);
-  `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs
-  are compile-only; no self-hosted runner, SYCL runtime job, or GitLab pipeline. The
+  `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; the
+  `sycl-compile` job builds the Intel-GPU-only SYCL target and, with
+  `cuda-compile` and `hip-compile`, is compile-only; the SYCL device matrix
+  (71/71 at `9fb15f1` on `hal` Arc A770) has no hosted runtime job, and there
+  is no self-hosted runner or GitLab pipeline. The
   P10 fwk394 run at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235
   with 0 reports, and the hosted `tsan`/`leak` runtimes were not observed. The
-  CUDA or HIP runtime gate still needs a device host with a known sharing and
+  CUDA, HIP, or SYCL runtime gate still needs a device host with a known
+  sharing and
   label configuration; no self-hosted runner is provisioned. No H100 was used.
-- **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA
-  and HIP jobs are compile-only. A CUDA or HIP runtime gate still needs a device
-  host with a known sharing and label configuration; no self-hosted runner is
+- **CI GPU runtime:** hosted CI is in `.github/workflows/ci.yml` and its CUDA,
+  HIP, and SYCL jobs are compile-only (`sycl-compile` builds the Intel-GPU-only
+  SYCL target in the oneAPI 2025.3 container and runs no CTest). A CUDA, HIP,
+  or SYCL runtime gate still needs a device host with a known sharing and
+  label configuration; no self-hosted runner is
   provisioned.
 - **Exclusive throughput:** resolved for the acceptance run. The P07b Q/C
   re-run merged as `56c11ac` on `rosi_v100` records a Q8 median of 12,987,013
