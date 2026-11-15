@@ -20,9 +20,10 @@ failed` for each suite, and a compiled backend without a usable device fails its
 cases instead of skipping. PR #63 adds the `[config]` bin-path rejection case,
 the `[kernel-axes]` rejection case, and the CUDA/HIP typed routed-axis cases on
 top of the P07b 7/7; those cases are included in the totals above. PR #65 adds
-the six `[scheduler]` cases (2 CPU, 1 CUDA, 1 HIP in the host
-`test_scheduler_validation.cpp` suite plus the device-compiled release case)
-on top of the PR #63 public-Flow cases; they are included in the totals above
+the six `[scheduler]` cases (five `[scheduler][debug]` and one
+`[scheduler][release]` case in `tests/integration/test_scheduler_validation.cpp`,
+registered in every backend suite) on top of the PR #63 public-Flow cases;
+they are included in the totals above
 and pass 6/6 on CPU, CUDA, and HIP. The `ffe4074` totals 249/249, 310/310
 and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
 totals 246/246, 306/306 and 297/297, and the earlier `a610281` totals 239/239,

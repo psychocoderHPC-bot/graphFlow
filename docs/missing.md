@@ -202,9 +202,8 @@ resource or decision is missing.
    updater results, a full hash table, pool exhaustion, and an injected enqueue
   failure, and they fail rather than skip when no device is visible. The
   current suites are 255/255 CPU, 316/316 CUDA and 307/307 HIP at
-  `561b9a4c9435e37b164623bb6be60a3051783eb4`, which include these failure
-  cases.
-  injection hook is test-only: no production path calls
+  `561b9a4c9435e37b164623bb6be60a3051783eb4` and include these failure
+  cases. The injection hook is test-only: no production path calls
   `GraphRunner::setFailureHook`, and the hook raises a host exception at a named
   scheduler point instead of injecting a driver fault. Missing artifact: real
   mid-run CUDA/HIP out-of-memory, ECC, Xid, context-loss, or `wait`-failure

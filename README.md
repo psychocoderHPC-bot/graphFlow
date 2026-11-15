@@ -35,8 +35,9 @@ full CTest suites pass with no skipped or filtered cases:
 | HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **307/307 passed** |
 
 Pins, commands, the no-skip assertion, and the historical totals are in the
-[acceptance record](docs/acceptance.md). PR #65 adds 2/2 CPU, 1/1 CUDA and
-1/1 HIP `[scheduler]` cases on top of the PR #63 public-Flow routed-axis
+[acceptance record](docs/acceptance.md). PR #65 adds 6/6 CPU, 6/6 CUDA and
+6/6 HIP `[scheduler]` cases (six host cases registered in every backend suite)
+on top of the PR #63 public-Flow routed-axis
 cases (2/2 CPU, 3/3 CUDA, 3/3 HIP); the `ffe4074` totals 249/249, 310/310
 and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
 totals 246/246, 306/306 and 297/297, and the `a610281` totals 239/239,
