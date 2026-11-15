@@ -403,14 +403,17 @@ jobs:
         run: python -m pip install --upgrade pip clang-format==20.1.8
 
       # The format policy covers tracked C++ headers and sources under
-      # include/, examples/, and tests/. Everything else is out of scope.
+      # include/, examples/, and tests/. The vendored upstream tree under
+      # include/graphFlow/thirdparty/ is copied unmodified, so it stays out of
+      # scope. Everything else is out of scope.
       - name: Check formatting
         run: |
           set -euo pipefail
           mapfile -t files < <(
             git ls-files 'include/**/*.cpp' 'include/**/*.hpp' \
               'examples/**/*.cpp' 'examples/**/*.hpp' \
-              'tests/**/*.cpp' 'tests/**/*.hpp'
+              'tests/**/*.cpp' 'tests/**/*.hpp' \
+              ':(exclude)include/graphFlow/thirdparty/**'
           )
           test "${#files[@]}" -gt 0
           test "$(clang-format --version)" = "clang-format version 20.1.8"

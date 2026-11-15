@@ -26,8 +26,7 @@ namespace
 
     constexpr std::size_t particles = 8;
 
-    using Record
-        = llama_lite::Record<llama_lite::Field<momentum_t, float>, llama_lite::Field<position_t, double>>;
+    using Record = llama_lite::Record<llama_lite::Field<momentum_t, float>, llama_lite::Field<position_t, double>>;
 
     using ParticleSoA = llama_lite::SoA<Record, particles>;
 
