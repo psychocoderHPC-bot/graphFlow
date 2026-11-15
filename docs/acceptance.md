@@ -16,9 +16,12 @@ full SYCL test matrix; `561b9a4c` is the previous total).
 | HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **307/307 passed** |
 | SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **71/71 passed** |
 
-No test is skipped or filtered. CTest reports `100% tests passed, 0 tests
-failed` for each suite, and a compiled backend without a usable device fails its
-cases instead of skipping. PR #63 adds the `[config]` bin-path rejection case,
+No test is skipped. CTest reports `100% tests passed, 0 tests failed` for each
+suite, and a compiled backend without a usable device fails its cases instead of
+skipping. The CPU, CUDA, and HIP totals are the `561b9a4c` measurements; PR #69
+adds no case to those suites. The SYCL total is the `ctest -L sycl` device
+matrix, selected explicitly because the same build also registers the host
+cases. PR #63 adds the `[config]` bin-path rejection case,
 the `[kernel-axes]` rejection case, and the CUDA/HIP typed routed-axis cases on
 top of the P07b 7/7; those cases are included in the totals above. PR #65 adds
 the six `[scheduler]` cases (five `[scheduler][debug]` and one
@@ -101,12 +104,13 @@ ctest --test-dir build-sycl --output-on-failure --no-tests=error -L sycl
 Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**, SYCL
 **71/71** (`ctest -L sycl` on the Arc A770, PR #69 matrix); each
 log ends with `100% tests passed, 0 tests failed`. No label or configuration
-excluded a registered case from these runs. The retained JUnit XML reports 246
+excluded a registered CPU, CUDA, or HIP case from those runs; the SYCL run
+selects the `sycl` label on purpose. The retained JUnit XML reports 246
 CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
 were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307,
-71/71) at `9fb15f1`, which add the P02b `ChunkLedger` overflow test, the PR #63
-public-Flow cases, the PR #65 scheduler cases, and the PR #69 SYCL matrix on top
-of them. The `hal` A30 driver
+71/71) of the tree at `9fb15f1`, which add the P02b `ChunkLedger` overflow
+test, the PR #63 public-Flow cases, the PR #65 scheduler cases, and the PR #69
+SYCL matrix on top of them. The `hal` A30 driver
 is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
 archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
 

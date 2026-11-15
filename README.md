@@ -25,8 +25,8 @@ Documentation:
 ## Status
 
 Current code main: `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69, the
-full SYCL test matrix; `561b9a4c` is the previous total). The full CTest
-suites pass with no skipped or filtered cases:
+full SYCL test matrix; `561b9a4c` is the previous total). The recorded CTest
+runs pass with no skipped case; the SYCL row is the `-L sycl` device matrix:
 
 | Configuration | Host / device | Result |
 | --- | --- | --- |

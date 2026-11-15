@@ -58,7 +58,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394`; the `561b9a4c` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
 | CUDA device runtime | **316** at `561b9a4c` on `hal` A30 `sm_80`, CUDA 13.4; 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
 | HIP `gfx1100` | **307** at `561b9a4c` on `hal` RX 7900 XTX, ROCm 7.2; 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
-| SYCL Intel GPU | **71/71** at `9fb15f1` on `hal` Arc A770, oneAPI 2026.2 (PR #69 matrix, `ctest -L sycl`); no earlier SYCL device total is historical | `hal` device run; the hosted `sycl-compile` job builds without a device and produces no CTest result |
+| SYCL Intel GPU | **71/71** at `9fb15f1` on `hal` Arc A770, oneAPI 2026.2 (PR #69 matrix, `ctest -L sycl`); there is no earlier SYCL device total | `hal` device run; the hosted `sycl-compile` job builds without a device and produces no CTest result |
 
 The CPU suite registers 255 cases at `561b9a4c`; the 249 count at `ffe4074`, the
 247 count at `88de14f` and the 246 count at `56c11ac` are historical. Release compiles the per-event
@@ -113,7 +113,8 @@ source-admission cases and N=1e6 smoke; 207/207 with the stall diagnostics;
 HIP device suites were executed at `f3ef355`: CUDA 264/264 on `hal` A30
 `sm_80` (CUDA 13.4, 400.98 s) and HIP 255/255 on `hal` RX 7900 XTX `gfx1100`
 (ROCm 7.2, 99.44 s), correctness only. The current suites are 255/255,
-316/316, 307/307, and 71/71 SYCL at `9fb15f1`; the previous 249/310/301 at
+316/316 and 307/307 at `561b9a4c`, and 71/71 SYCL at `9fb15f1`; the previous
+249/310/301 at
 `ffe4074`, 247/307/298 at
 `88de14f`, 246/306/297 at `56c11ac`, and the 239/299/290 at `a610281` are
 historical.
@@ -256,7 +257,7 @@ build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **307/307** at
-`9fb15f1e6ce13f252b31d4cb60cc410862d56511`; the previous 301/301 at `ffe4074`,
+`561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous 301/301 at `ffe4074`,
 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at `a610281` are
 historical. The original
 245/245 run with 43 HIP cases (8 typed Flow, 24 particle CLI, 10 photon CLI,

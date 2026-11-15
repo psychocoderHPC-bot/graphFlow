@@ -205,9 +205,9 @@ resource or decision is missing.
    updater results, a full hash table, pool exhaustion, and an injected enqueue
   failure, and they fail rather than skip when no device is visible; the PR #69
   SYCL matrix adds the same failure paths on the Arc A770. The
-  current suites are 255/255 CPU, 316/316 CUDA, 307/307 HIP and 71/71 SYCL at
-  `9fb15f1e6ce13f252b31d4cb60cc410862d56511` and include these failure
-  cases. The injection hook is test-only: no production path calls
+  current suites (255/255 CPU, 316/316 CUDA and 307/307 HIP at `561b9a4c`;
+  71/71 SYCL at `9fb15f1e6ce13f252b31d4cb60cc410862d56511`) include these
+  failure cases. The injection hook is test-only: no production path calls
   `GraphRunner::setFailureHook`, and the hook raises a host exception at a named
   scheduler point instead of injecting a driver fault. Missing artifact: real
   mid-run CUDA/HIP out-of-memory, ECC, Xid, context-loss, or `wait`-failure

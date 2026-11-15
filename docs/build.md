@@ -117,8 +117,8 @@ in `docs/benchmarks.md` was measured on the A30 only.
 The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
- the particle and photon CLI/output cases for the HIP backend. The current tree
-  passes **307/307** on `hal` at `9fb15f1e6ce13f252b31d4cb60cc410862d56511`;
+ the particle and photon CLI/output cases for the HIP backend. The HIP suite
+ passes **307/307** on `hal` at `561b9a4c9435e37b164623bb6be60a3051783eb4`;
  the previous 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at
  `56c11ac`, the 290/290 at `a610281` and the original 245/245 run with 43 HIP
  cases at `b972eaa` are historical and recorded in
@@ -243,7 +243,8 @@ compiled checks. The scheduler adds its conservation, fill-level and
 exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
 each violation and `[scheduler][release]` proves the checks are compiled out.
 The recorded Release suite is **255/255 CPU**, **316/316 CUDA**, **307/307
-HIP**, and **71/71 SYCL** at `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (see
+HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **71/71 SYCL** at
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511` (see
 `docs/acceptance.md`);
 the six `[scheduler]` cases are included in those totals, the
 `[scheduler][release]` case among them. PR #63 adds the public-Flow routed-axis
@@ -336,11 +337,12 @@ CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
  The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passes
-  **307/307** at `9fb15f1e6ce13f252b31d4cb60cc410862d56511`; the previous
+ **307/307** at `561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous
  **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
  `56c11ac`, the **290/290** at `a610281` and the earlier **245/245** with 43
  HIP cases at `b972eaa` are historical. The SYCL runtime CTest on `hal` (Arc
- A770 `spir64`, oneAPI 2026.2) passes **71/71** at the same current main via
+ A770 `spir64`, oneAPI 2026.2) passes **71/71** at
+ `9fb15f1e6ce13f252b31d4cb60cc410862d56511` via
  `ctest -L sycl`; the GitHub-hosted `sycl-compile` job compiles the target but
  runs no CTest and makes no SYCL runtime claim. The `sm_75` CUDA
 build still fails with the CUDA 12.5 nvcc internal compiler error
