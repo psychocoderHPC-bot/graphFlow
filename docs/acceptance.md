@@ -3,27 +3,31 @@
 
 # graphFlow acceptance record
 
-## Current state at `ffe4074`
+## Current state at `561b9a4c`
 
 This is the canonical current-state block. Every older total in this document is
-historical. Code main is `ffe4074ba11fadbe1d901d724d04231c055a5d59` (PR #63, the
-measured kernel axes routed through the public `Flow`; the `88de14f` run is the
-previous total).
+historical. Code main is `561b9a4c9435e37b164623bb6be60a3051783eb4` (PR #65, the
+debug scheduler conservation checks; `ffe4074` is the previous total).
 
 | Configuration | Host / device | Toolchain | Result |
 | --- | --- | --- | --- |
-| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **249/249 passed** |
-| CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **310/310 passed** |
-| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **301/301 passed** |
+| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **255/255 passed** |
+| CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **316/316 passed** |
+| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **307/307 passed** |
 
 No test is skipped or filtered. CTest reports `100% tests passed, 0 tests
 failed` for each suite, and a compiled backend without a usable device fails its
 cases instead of skipping. PR #63 adds the `[config]` bin-path rejection case,
 the `[kernel-axes]` rejection case, and the CUDA/HIP typed routed-axis cases on
-top of the P07b 7/7; those cases are included in the totals above. The previous
-`88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac` totals 246/246,
-306/306 and 297/297, and the earlier `a610281` totals 239/239, 299/299 and
-290/290 are historical.
+top of the P07b 7/7; those cases are included in the totals above. PR #65 adds
+the six `[scheduler]` cases (five `[scheduler][debug]` and one
+`[scheduler][release]` case in `tests/integration/test_scheduler_validation.cpp`,
+registered in every backend suite) on top of the PR #63 public-Flow cases;
+they are included in the totals above
+and pass 6/6 on CPU, CUDA, and HIP. The `ffe4074` totals 249/249, 310/310
+and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
+totals 246/246, 306/306 and 297/297, and the earlier `a610281` totals 239/239,
+299/299 and 290/290 are historical.
 `hal` reports `sharing=unknown` and `fwk394` is shared, so the runs are
 correctness results, not performance claims. H100 was not used and no H100
 compile or run is recorded.
@@ -34,7 +38,7 @@ The HAL record covers the `d71935c` device suites. Platform and pins:
 
 | Item | Value |
 | --- | --- |
-| code main (JUnit run) | `d71935c` (the current main `ffe4074ba11fadbe1d901d724d04231c055a5d59` is newer) |
+| code main (JUnit run) | `d71935c` (the current main `561b9a4c9435e37b164623bb6be60a3051783eb4` is newer) |
 | alpaka | `eb677e8d7f70d79b35df25d9002f94ba669b6f44` (3.0.0) |
 | Catch2 | 3.4.0 |
 | CMake / Ninja | 3.28.3 / 1.11.1 |
@@ -74,13 +78,13 @@ ROCR_VISIBLE_DEVICES=0 ctest --test-dir build-hip \
   --output-on-failure --no-tests=error
 ```
 
-Counts and no-skip: CPU **249/249**, CUDA **310/310**, HIP **301/301**; each
+Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**; each
 log ends with `100% tests passed, 0 tests failed`. No label or configuration
 excluded a registered case from these runs. The retained JUnit XML reports 246
 CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
-were captured at `d71935c`, not the final `ffe4074` totals (249/249, 310/310,
-301/301), which add the P02b `ChunkLedger` overflow test and the PR #63
-public-Flow cases on top of them. The `hal` A30 driver
+were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307)
+at `561b9a4c`, which add the P02b `ChunkLedger` overflow test, the PR #63
+public-Flow cases, and the PR #65 scheduler cases on top of them. The `hal` A30 driver
 is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
 archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
 
@@ -127,7 +131,8 @@ The last full integrated TSAN CTest is on `rosi_v100` at
 `alpaka_DEP_OMP=OFF`, and `GRAPHFLOW_ENABLE_OPENMP=OFF`. With the default
 CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the
 upstream alpaka async CPU queue, not graphFlow. That 210-case suite predates the
-current 249-case suite, so no full TSAN result exists for `ffe4074`.
+current 255-case suite, so no full TSAN result exists for
+`561b9a4c9435e37b164623bb6be60a3051783eb4`.
 
 The hosted `tsan` job was added at
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e` (P10 branch commit
@@ -180,9 +185,10 @@ performance claim is made.
 
 ## HIP runtime validation on hal (historical record)
 
-The current HIP total is **301/301** at `ffe4074` (see the current-state
-block); the previous **298/298** at `88de14f`, **297/297** at `56c11ac` and the
-**290/290** at `a610281` are historical. The record below is the
+The current HIP total is **307/307** at
+`561b9a4c9435e37b164623bb6be60a3051783eb4` (see the current-state block); the
+previous **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
+`56c11ac` and the **290/290** at `a610281` are historical. The record below is the
 original HIP runtime gate, measured on
 `b972eaa3bd778b81f2dca505d3662df710792bd9` (HIP runtime merge, PR #35).
 Platform: `hal`, AMD Radeon RX 7900 XTX (`gfx1100`), ROCm 7.2.0, `amdclang++`
@@ -230,10 +236,10 @@ The current builds are in the current-state block. Historical build records:
 
 ## Tests (historical)
 
-The current suites are CPU 249/249, CUDA 310/310, and HIP 301/301. The
-previous 247/247, 307/307 and 298/298 at `88de14f`, the 246/246, 306/306 and
-297/297 at `56c11ac`, and the earlier 239/239, 299/299 and 290/290 at `a610281`
-are historical. The table below records the earlier totals, including the
+The current suites are CPU 255/255, CUDA 316/316, and HIP 307/307. The
+previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
+298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
+earlier 239/239, 299/299 and 290/290 at `a610281` are historical. The table below records the earlier totals, including the
 intermediate branch counts:
 
 | Configuration | Result |

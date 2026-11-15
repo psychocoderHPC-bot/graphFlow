@@ -49,17 +49,17 @@ oneAPI jobs do the same inside their container; they install `git` before
 
 | Target | CTest cases | Where the result comes from |
 | --- | ---: | --- |
-| CPU, Release and Debug | **249** at `ffe4074`; 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `cpu` jobs |
-| CPU, ASAN+UBSAN Debug | **249** current suite; 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `sanitizers` job |
+| CPU, Release and Debug | **255** at `561b9a4c`; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `cpu` jobs |
+| CPU, ASAN+UBSAN Debug | **255** current suite; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `sanitizers` job |
 | CPU, ASAN+UBSAN Debug, fwk394 | 236/236 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `sanitizers` runtime was not observed |
 | CPU, leak (error-path, `-L leak`) | 1/1 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `leak` step runtime was not observed |
 | CPU, TSAN Debug non-PIE, no OMP executor | 235/235, 0 reports at `cf3bc8a` (historical); 210/210, 0 reports, 202.83 s at `f3ef355` on `rosi_v100` (historical; no full TSAN at `ffe4074`) | local `fwk394` run; the hosted `tsan` runtime was not observed |
-| CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
-| CUDA device runtime | **310** at `ffe4074` on `hal` A30 `sm_80`, CUDA 13.4; 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
-| HIP `gfx1100` | **301** at `ffe4074` on `hal` RX 7900 XTX, ROCm 7.2; 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
+| CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394`; the `561b9a4c` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
+| CUDA device runtime | **316** at `561b9a4c` on `hal` A30 `sm_80`, CUDA 13.4; 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
+| HIP `gfx1100` | **307** at `561b9a4c` on `hal` RX 7900 XTX, ROCm 7.2; 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
 
-The CPU suite registers 249 cases at `ffe4074`; the 247 count at `88de14f` and
-the 246 count at `56c11ac` are historical. Release compiles the per-event
+The CPU suite registers 255 cases at `561b9a4c`; the 249 count at `ffe4074`, the
+247 count at `88de14f` and the 246 count at `56c11ac` are historical. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
 both modes. The opt-in `[diagnostics]` photon cases are excluded from the
 default suite. The `fwk394` sanitizer rows are the historical local P10
@@ -109,9 +109,10 @@ source-admission cases and N=1e6 smoke; 207/207 with the stall diagnostics;
 245/245 on `hal` (249 and 255 on the intermediate branches). The full CUDA and
 HIP device suites were executed at `f3ef355`: CUDA 264/264 on `hal` A30
 `sm_80` (CUDA 13.4, 400.98 s) and HIP 255/255 on `hal` RX 7900 XTX `gfx1100`
-(ROCm 7.2, 99.44 s), correctness only. The current suites are 249/249,
-310/310, and 301/301; the previous 247/307/298 at `88de14f`, 246/306/297 at
-`56c11ac`, and the 239/299/290 at `a610281` are historical.
+(ROCm 7.2, 99.44 s), correctness only. The current suites are 255/255,
+316/316, and 307/307; the previous 249/310/301 at `ffe4074`, 247/307/298 at
+`88de14f`, 246/306/297 at `56c11ac`, and the 239/299/290 at `a610281` are
+historical.
 The format sweep changed whitespace, line breaks, include and `using` order, and
 configured numeric separators only.
 
@@ -182,10 +183,10 @@ fail the job. The recorded blocker on hal (runtime mapping failure) was
 resolved on the exclusive `rosi_v100` host, where the full integrated TSAN
 CTest passed 210/210 with 0 reports in 202.83 s at
 `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` in this configuration; that run is
-historical and the current 249-case suite has no full TSAN run. The P10 run on
+historical and the current 255-case suite has no full TSAN run. The P10 run on
 `fwk394` at `cf3bc8a` is 235/235 with 0 reports, and the hosted `tsan` job
 runtime was not observed. No H100 was used. No full TSAN run exists for the
-current 249-case suite at `ffe4074`.
+current 255-case suite at `561b9a4c9435e37b164623bb6be60a3051783eb4`.
 
 ### Status tests
 
@@ -250,9 +251,10 @@ to the HIP build. The hosted runner has no AMD GPU, so the job stops after the
 build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
-(`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **301/301** at
-`ffe4074`; the previous 298/298 at `88de14f`, 297/297 at `56c11ac` and the
-290/290 at `a610281` are historical. The original
+(`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **307/307** at
+`561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous 301/301 at `ffe4074`,
+298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at `a610281` are
+historical. The original
 245/245 run with 43 HIP cases (8 typed Flow, 24 particle CLI, 10 photon CLI,
 and 1 photon output case) was measured on
 `b972eaa3bd778b81f2dca505d3662df710792bd9` and recorded in
@@ -354,9 +356,9 @@ image and the extra `git` install before checkout.
 
 ## Status
 
-The hosted workflow on `ffe4074` defines `cpu (Release)`, `cpu (Debug)`,
+The hosted workflow on `561b9a4c` defines `cpu (Release)`, `cpu (Debug)`,
 `sanitizers (ASAN+UBSAN)`, `tsan`, `cuda-compile`, `hip-compile`, `format`, and
-`reuse`. Each current CPU job runs 249 CTest cases (Release and Debug); the
+`reuse`. Each current CPU job runs 255 CTest cases (Release and Debug); the
 `sanitizers` job runs ASAN+UBSAN over the same CPU suite plus its `leak` step.
 The N=1e6 smoke, source-admission, stall-diagnostics, cross-backend equality,
 visit-cap, pool-pressure, CLI-contract, kernel-axis, and in-flight cases run in
@@ -365,7 +367,7 @@ The `format` job enforces the T14b sweep with clang-format 20.1.8. The `sm_70`
 workaround clears the nvcc internal compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example without a
 GPU. `hip-compile` builds the HIP sources and the HIP example without an AMD
 GPU. `icpx-cpu` runs on every push and pull request; the local validation passes
-the 249-case CPU suite (g++ 13.3 on `fwk394` at `ffe4074`; the icpx evidence at
+the 255-case CPU suite (g++ 13.3 on `fwk394` at `561b9a4c`; the icpx evidence at
 `88de14f` passes the then-current 247-case suite). At `cf3bc8a`
 on `gf/p10-sanitizers`, the historical fwk394 evidence is ASAN+UBSAN 236/236,
 leak 1/1, and TSAN 235/235 with 0 reports (non-PIE, OMP off, CpuOmpBlocks off);
@@ -373,7 +375,7 @@ the hosted `tsan` and `leak` runtimes were not observed, and no H100 was used.
 On the exclusive `rosi_v100` host at `f3ef355` the historical CPU CTest is
 210/210 and the full integrated TSAN CTest is 210/210 with 0 reports (202.83 s,
 non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). The
-current device totals are 310/310 CUDA on `hal` A30 `sm_80` and 301/301 HIP on
+current device totals are 316/316 CUDA on `hal` A30 `sm_80` and 307/307 HIP on
 `hal` RX 7900 XTX; see `docs/acceptance.md`.
 
 Container jobs set `shell: bash` because container jobs default to `sh`, which
@@ -385,6 +387,7 @@ the embedded shell, the container image tag, and the alpaka pin. Locally on
 2025.3.3 (the same 2025.3 line as the container) against the pinned alpaka
 checkout, and both `ctest` runs passed 247/247 with `OMP_NUM_THREADS=4` (that
 run is at `88de14f`). The `ffe4074` re-validation ran the 249-case suite with
+g++ 13.3 on `fwk394`; the `561b9a4c` re-validation ran the 255-case suite with
 g++ 13.3 on `fwk394`. The hosted container revision 2025.3.0 was not run for
 either, and 2025.3.3 is the closest available build of that compiler line. No
 GitHub-hosted job runtime was observed for this branch.

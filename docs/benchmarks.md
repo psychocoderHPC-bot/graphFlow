@@ -267,8 +267,9 @@ H100 claim is made.
   exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
   acceptance table is historical.
  - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-   `gfx1100`, ROCm 7.2); the current suite is 301/301 at `ffe4074` and the
-   previous 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
+   `gfx1100`, ROCm 7.2); the current suite is 307/307 at
+   `561b9a4c9435e37b164623bb6be60a3051783eb4` and the previous 301/301 at
+   `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
    `a610281`, and the 245/245 run at `b972eaa` are historical.
   No HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
