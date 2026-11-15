@@ -174,6 +174,33 @@ TEST_CASE("scheduler validation rejects a duplicated sink delivery", "[scheduler
         ContainsSubstring("delivered more than once"));
 }
 
+TEST_CASE("scheduler validation state is per run", "[scheduler][debug]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Runner = graphFlow::GraphRunner<decltype(device)>;
+    graphFlow::ChunkPool<decltype(device)> pool{device, 16u, 8u};
+    Runner runner{device, pool};
+    std::uint64_t sunk = 0u;
+    auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        transformHooks<Runner>(pool, TransformMode::conserve, 8u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, sinkHooks<Runner>(sunk));
+    runner.setSource(source, 16u);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    graphFlow::SchedulerStats const first = runner.run();
+    graphFlow::SchedulerStats const second = runner.run();
+    CHECK(first.sourceGenerated == 16u);
+    CHECK(first.sourceSunk == 16u);
+    CHECK(second.sourceGenerated == 16u);
+    CHECK(second.sourceSunk == 16u);
+    CHECK(sunk == 32u);
+}
+
 TEST_CASE("scheduler validation is absent from release builds", "[scheduler][release]")
 {
     if constexpr(graphFlow::debug::checksEnabled)

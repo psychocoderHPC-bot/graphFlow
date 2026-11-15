@@ -486,6 +486,13 @@ namespace graphFlow
             m_sunkParticles = 0u;
             m_reservedTotal = 0u;
             m_roundRobin = 0u;
+            if constexpr(debug::checksEnabled)
+            {
+                // The validation state is per run, like every other counter reset above, so a
+                // repeated run() on the same runner keeps the release semantics.
+                this->sinkChunkDeliveries.clear();
+                this->sinkParticlesDelivered = 0u;
+            }
             SchedulerStats& stats = m_stats;
             std::uint64_t& generated = m_generated;
             std::uint64_t& sunkParticles = m_sunkParticles;
