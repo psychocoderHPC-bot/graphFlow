@@ -11,6 +11,8 @@
 #include "llamaLite/traits.hpp"
 #include "llamaLite/utility.hpp"
 
+#include <cstddef>
+#include <type_traits>
 #include <utility>
 
 namespace llama_lite
@@ -84,6 +86,20 @@ namespace llama_lite
 
     namespace detail
     {
+        /** Invoke @p visitor with a `std::integral_constant` for every index in @p indices.
+         *
+         * The index is passed as a value to avoid an explicit-template-parameter lambda
+         * (`[&]<size_t I>()`). nvcc 12.5 fails to parse that lambda form inside a function template
+         * when another member function template is visible in the same translation unit; the error
+         * is reported at the enclosing template parameter list. See
+         * PATCHES/0001-nvcc-12.5-explicit-lambda-template.md.
+         */
+        template<typename Visitor, std::size_t... Is>
+        constexpr void for_each_index(Visitor&& visitor, std::index_sequence<Is...>)
+        {
+            (visitor(std::integral_constant<std::size_t, Is>{}), ...);
+        }
+
         template<IsRecord R, typename CurrentPath, typename Selector, template<typename> typename VisitorTrait>
         constexpr void iterate_recursive(auto&& view, auto&&... args)
         {
@@ -93,8 +109,9 @@ namespace llama_lite
             // process current path. getNode
 
             // Compile-time loop over fields
-            auto process_field = [&]<size_t I>()
+            auto process_field = [&](auto indexConstant)
             {
+                constexpr std::size_t I = decltype(indexConstant)::value;
                 using Field = std::tuple_element_t<I, fields_tuple_type>;
                 using FieldTag = typename Field::tag_type;
                 using NextPath = append_t<CurrentPath, FieldTag>;
@@ -127,8 +144,7 @@ namespace llama_lite
             };
 
             // Fold expression to unroll the loop
-            [&]<size_t... Is>(std::index_sequence<Is...>) { (process_field.template operator()<Is>(), ...); }(
-                std::make_index_sequence<std::tuple_size_v<fields_tuple_type>>{});
+            for_each_index(process_field, std::make_index_sequence<std::tuple_size_v<fields_tuple_type>>{});
         }
 
         template<IsRecord R, typename CurrentPath, typename Selector, template<typename> typename VisitorTrait>
@@ -136,8 +152,9 @@ namespace llama_lite
         {
             using fields_tuple_type = typename R::fields_tuple_type;
 
-            auto process_field = [&]<size_t I>()
+            auto process_field = [&](auto indexConstant)
             {
+                constexpr std::size_t I = decltype(indexConstant)::value;
                 using Field = std::tuple_element_t<I, fields_tuple_type>;
                 using FieldTag = typename Field::tag_type;
                 using NextPath = append_t<CurrentPath, FieldTag>;
@@ -166,8 +183,7 @@ namespace llama_lite
                 }
             };
 
-            [&]<size_t... Is>(std::index_sequence<Is...>) { (process_field.template operator()<Is>(), ...); }(
-                std::make_index_sequence<std::tuple_size_v<fields_tuple_type>>{});
+            for_each_index(process_field, std::make_index_sequence<std::tuple_size_v<fields_tuple_type>>{});
         }
     } // namespace detail
 

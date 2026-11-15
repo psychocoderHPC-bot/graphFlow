@@ -265,13 +265,15 @@ namespace graphFlow
             assign(std::index_sequence_for<Fields...>{}, std::forward<Values>(values)...);
         }
 
+        // getLeaf() deduces its tag argument, so `m_values.template getLeaf(...)` is not a
+        // simple-template-id; clang rejects the disambiguator as ill-formed.
         template<typename Tag>
         [[nodiscard]] ALPAKA_FN_ACC constexpr decltype(auto) get()
         {
             static_assert(
                 attribute_list::template contains<Tag>,
                 "graphFlow::Record: get<Tag>() names an unknown attribute");
-            return m_values.template getLeaf(Tag{})[0u];
+            return m_values.getLeaf(Tag{})[0u];
         }
 
         template<typename Tag>
@@ -280,7 +282,7 @@ namespace graphFlow
             static_assert(
                 attribute_list::template contains<Tag>,
                 "graphFlow::Record: get<Tag>() names an unknown attribute");
-            return m_values.template getLeaf(Tag{})[0u];
+            return m_values.getLeaf(Tag{})[0u];
         }
 
         template<typename Tag, typename U>
@@ -289,7 +291,7 @@ namespace graphFlow
             static_assert(
                 attribute_list::template contains<Tag>,
                 "graphFlow::Record: set<Tag>() names an unknown attribute");
-            m_values.template getLeaf(Tag{})[0u] = std::forward<U>(value);
+            m_values.getLeaf(Tag{})[0u] = std::forward<U>(value);
         }
 
         template<typename TSet = attribute_set>

@@ -39,6 +39,10 @@ namespace
     using ParticleAttributes = graphFlow::AttributeList<Id, Property, Weight, Visit>;
     using ParticleColumns = graphFlow::SoAStorage<Device, Id, Property, Weight, Visit>;
 
+    // Declared only for the negative lookup below. nvcc 12.5 crashes on the equivalent
+    // elaborated-type-specifier form (`contains<struct UnknownTag>`).
+    struct UnknownTag;
+
     struct Pair
     {
         std::uint64_t id = 0u;
@@ -58,7 +62,7 @@ TEST_CASE("attribute records expose named fields and copy all attributes", "[att
         std::same_as<typename ParticleAttributes::record_type, llama_lite::Record<Id, Property, Weight, Visit>>);
     static_assert(ParticleAttributes::size == 4u);
     static_assert(ParticleAttributes::contains<WeightTag>);
-    static_assert(!ParticleAttributes::contains<struct UnknownTag>);
+    static_assert(!ParticleAttributes::contains<UnknownTag>);
     static_assert(ParticleAttributes::template index<VisitTag> == 3u);
     static_assert(graphFlow::Set<IdTag, WeightTag>::contains<WeightTag>);
     static_assert(!graphFlow::Set<IdTag>::contains<WeightTag>);
