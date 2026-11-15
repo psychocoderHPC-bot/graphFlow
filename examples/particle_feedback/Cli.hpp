@@ -65,7 +65,7 @@ namespace graphFlow::cli
 
     inline void usage(std::ostream& out)
     {
-        out << "usage: graphFlow_particle_feedback --backend cpu|cuda|hip [--device D]\n"
+        out << "usage: graphFlow_particle_feedback --backend cpu|cuda|hip|sycl [--device D]\n"
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"

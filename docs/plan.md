@@ -288,7 +288,7 @@ loop:
 
 Build `graphFlow_particle_feedback` under `examples/particle_feedback/`.
 
-CLI: `--backend cpu|cuda|hip --particles N --chunk-size C --seed S --max-visits M --device D`.
+CLI: `--backend cpu|cuda|hip|sycl --particles N --chunk-size C --seed S --max-visits M --device D`.
 
 - Accept `N = 0`; reject `C = 0`; support capacities that are not warp multiples.
 - Default `C` from the device: `multiProcessorCount * targetBlocksPerSm * T`, capped by memory and `maxBlocksPerGrid`. Print the chosen policy.

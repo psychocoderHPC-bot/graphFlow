@@ -188,8 +188,8 @@ tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases
                         CUDA kernel
 tests/integration/     particle example, batching, dense and hash pipelines,
                         scripted fixture, pressure, failure paths, FrameSpec,
-                        generic DAG, typed Flow execution (CPU, CUDA and HIP),
-                        photon scattering (CPU, CUDA and HIP)
+                        generic DAG, typed Flow execution (CPU, CUDA, HIP and SYCL),
+                        photon scattering (CPU, CUDA, HIP and SYCL)
 tests/reference/       scalar oracle with its own Philox mapping
 docs/                  build, architecture, numerics, benchmarks, limitations,
                         API map, plan, acceptance
@@ -237,10 +237,12 @@ The HIP runtime cases are registered for `GRAPHFLOW_ENABLE_HIP` and fail when
 no AMD device is visible; do not treat a compile-only GitHub run as a HIP
 runtime result.
 
-CUDA and HIP cannot be enabled in the same build. The CPU backend stays enabled
-in accelerator builds. Catch2 3.4.0 must be visible to `find_package`. The exact
-pins, the `sm_75` RTX 2080 Ti command, the environment scrub, and the format and
-REUSE commands are in [build](docs/build.md).
+CUDA, HIP and SYCL cannot be enabled in the same build. The CPU backend stays
+enabled in accelerator builds. The SYCL backend requires the Intel oneAPI DPC++
+compiler (`icpx`) and an Intel GPU; it is validated on `hal` with an Arc A770.
+Catch2 3.4.0 must be visible to `find_package`. The exact pins, the `sm_75`
+RTX 2080 Ti command, the SYCL command, the environment scrub, and the format
+and REUSE commands are in [build](docs/build.md).
 
 `GRAPHFLOW_ENABLE_DEBUG_VALIDATION` defaults to `ON` for
 `CMAKE_BUILD_TYPE=Debug` and `OFF` for `Release` and `RelWithDebInfo`. Pass
@@ -273,7 +275,7 @@ CUDA. Hosted CI runs the `Debug` CPU suite.
 ...
 ```
 
-Arguments: `--backend cpu|cuda|hip` (an uncompiled backend reports a nonzero
+Arguments: `--backend cpu|cuda|hip|sycl` (an uncompiled backend reports a nonzero
 configuration error naming the matching `GRAPHFLOW_ENABLE_*` option),
 `--device D` (default 0), `--particles N`, `--chunk-size C`, `--live-particles P`,
 `--tile-size T`, `--batch-chunks Q` (default 1), `--seed S` (default 0), and
@@ -300,8 +302,9 @@ shrinks a transform batch to the largest prefix whose adaptive reserve fits the
 current storage credits, so a full `Q` batch is not required for progress.
 
 `--backend` dispatches to `onHost::makeDeviceSelector` with the pinned tags
-`api::host`/`deviceKind::cpu`, `api::cuda`/`deviceKind::nvidiaGpu`, and
-`api::hip`/`deviceKind::amdGpu`.
+`api::host`/`deviceKind::cpu`, `api::cuda`/`deviceKind::nvidiaGpu`,
+`api::hip`/`deviceKind::amdGpu`, and `api::oneApi`/`deviceKind::intelGpu` for
+`sycl`.
 
 ## Photon scattering example
 

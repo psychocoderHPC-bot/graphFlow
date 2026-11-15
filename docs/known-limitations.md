@@ -44,6 +44,24 @@ remain unrecorded. `hal` reports `sharing=unknown`, so no HIP performance claim
 is made. The historical `gfx90a` compile-only gate is not an AMD runtime
 result.
 
+## SYCL is a minimal Intel-GPU backend
+
+`GRAPHFLOW_ENABLE_SYCL=ON` adds the `Backend::sycl` dispatcher
+(`api::oneApi`/`deviceKind::intelGpu`) and one scalar smoke test. It does not
+add SYCL copies of the typed CUDA/HIP Flow, particle, or photon cases, and no
+performance run is recorded. The SYCL build disables the OpenCL CPU device kind
+(`alpaka_ONEAPI_Cpu=OFF`), so a missing Intel GPU fails the backend contract
+instead of falling back to the host. Only `hal` with an Arc A770 (`spir64`,
+oneAPI 2026.2) is validated.
+
+The alpaka pin `eb677e8d7f70d79b35df25d9002f94ba669b6f44` cannot set
+relocatable device code for SYCL: its `cmake/alpakaOneApi.cmake` omits the
+`target` argument type in that branch. graphFlow keeps
+`alpaka_RELOCATABLE_DEVICE_CODE=DEFAULT` and sanitizes the stray `INTERFACE`
+argument from the `-fsycl-targets` call in `CMakeLists.txt`; the external
+alpaka tree stays unmodified. No upstream `dev_v3.x` commit carries a fix, so
+the pin is unchanged.
+
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive

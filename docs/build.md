@@ -4,9 +4,9 @@
 # Building graphFlow
 
 graphFlow builds against a pinned alpaka3 checkout and a local Catch2 3
-installation. Use one build directory per backend. CUDA and HIP are mutually
-exclusive in one build; the CPU backend stays enabled in accelerator builds so
-`--backend cpu` remains available.
+installation. Use one build directory per backend. CUDA, HIP and SYCL are
+mutually exclusive in one build; the CPU backend stays enabled in accelerator
+builds so `--backend cpu` remains available.
 
 ## Pinned toolchain
 
@@ -20,6 +20,7 @@ exclusive in one build; the CPU backend stays enabled in accelerator builds so
 | Ninja | 1.11.1 | `-G Ninja` |
 | CUDA | 13.4 | validated on the A30 with `sm_80`; `sm_75` is the RTX 2080 Ti target |
 | ROCm | 7.2.0, `amdclang++` from `/opt/rocm` | runtime `gfx1100` gate on `hal`; GitHub-hosted HIP is compile-only |
+| oneAPI | 2026.2, `icpx` from `/opt/intel/oneapi` | SYCL `spir64` gate on `hal` Arc A770; not part of hosted CI |
 | C++ | C++20 | `CMAKE_CXX_STANDARD 20`, extensions off |
 
 The integrated CPU run used g++ 13.3 on fwk394; the CUDA run used hal. A
@@ -150,6 +151,48 @@ Record the GPU model, ROCm version, and `gfx` target with any HIP execution
 result. The recorded runtime result is `hal`, AMD Radeon RX 7900 XTX,
 `gfx1100`, ROCm 7.2.0. `hal` reports `sharing=unknown`, so this is a
 correctness result without a performance claim.
+
+## SYCL (Intel GPU)
+
+`GRAPHFLOW_ENABLE_SYCL=ON` builds the `Backend::sycl` dispatcher on
+`api::oneApi`/`deviceKind::intelGpu`. It requires the Intel oneAPI DPC++
+compiler (`icpx`) and enables `alpaka_DEP_ONEAPI=ON`,
+`alpaka_ONEAPI_IntelGpu=ON`, `alpaka_ONEAPI_Cpu=OFF`. The CPU SYCL device is
+disabled so the backend cannot silently fall back to an OpenCL CPU device. The
+host backend stays enabled for `--backend cpu`.
+
+```sh
+source /opt/intel/oneapi/setvars.sh
+cmake -S . -B build-sycl -G Ninja   -DCMAKE_BUILD_TYPE=Release   -DCMAKE_CXX_COMPILER=icpx   -DGRAPHFLOW_ALPAKA_SOURCE_DIR=/workspace   -DGRAPHFLOW_ENABLE_SYCL=ON   -DGRAPHFLOW_ENABLE_OPENMP=OFF   -Dalpaka_COMPILE_PEDANTIC=ON   -DCMAKE_PREFIX_PATH=<catch2-3.4.0-prefix>
+cmake --build build-sycl -j 14
+ctest --test-dir build-sycl --output-on-failure --no-tests=error -L sycl
+ctest --test-dir build-sycl --output-on-failure --no-tests=error
+```
+
+The SYCL runtime cases fail when no Intel GPU is visible instead of skipping.
+The validated device is `hal` with an Intel Arc A770 (`spir64`, oneAPI 2026.2).
+Check the compiler and device visibility before a run:
+
+```sh
+icpx --version
+sycl-ls
+```
+
+`sycl-ls` must list the Level-Zero Intel GPU. The build disables the OpenCL CPU
+device kind, so the test binary does not accept a CPU SYCL selector.
+
+### Pinned alpaka 3.0.0 SYCL workaround
+
+The `eb677e8d7f70d79b35df25d9002f94ba669b6f44` pin has two malformed calls in
+`cmake/alpakaOneApi.cmake`: the relocatable-device-code branch omits the
+`target` argument type, and the `-fsycl-targets` compiler-option call passes a
+stray `INTERFACE` argument. graphFlow keeps `alpaka_RELOCATABLE_DEVICE_CODE`
+at `DEFAULT` (RDC is not used) and sanitizes the resulting
+`alpaka_target_oneapi` compile options after `add_subdirectory(alpaka)` so the
+literal token cannot reach `icpx`. Both adjustments are in the top-level
+`CMakeLists.txt`; the external alpaka checkout is not patched. A pin bump is
+not available: the upstream `dev_v3.x` branch still contains the malformed
+calls.
 
 ## Debug and sanitizers
 

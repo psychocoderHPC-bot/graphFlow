@@ -294,6 +294,7 @@ TEST_CASE("CLI backend and device selection follow the compiled contract", "[cli
     CHECK(graphFlow::parseBackend("cpu") == Backend::cpu);
     CHECK(graphFlow::parseBackend("cuda") == Backend::cuda);
     CHECK(graphFlow::parseBackend("hip") == Backend::hip);
+    CHECK(graphFlow::parseBackend("sycl") == Backend::sycl);
     CHECK_FALSE(graphFlow::parseBackend("tpu").has_value());
     CHECK_THROWS_AS(graphFlow::requireBackend("tpu"), graphFlow::BackendError);
     CHECK_THROWS_WITH(graphFlow::requireBackend("tpu"), Catch::Matchers::ContainsSubstring("unknown backend 'tpu'"));
@@ -368,6 +369,28 @@ TEST_CASE("CLI backend and device selection follow the compiled contract", "[cli
     CHECK_FALSE(graphFlow::isBackendCompiled(Backend::hip));
     CHECK_THROWS_AS(
         graphFlow::withBackendDevice(Backend::hip, 0u, [](auto&&, Backend, std::string const&) { return 0; }),
+        BackendUnavailable);
+#endif
+
+#if ALPAKA_LANG_ONEAPI
+    CHECK(graphFlow::isBackendCompiled(Backend::sycl));
+    // A SYCL build must expose an Intel GPU device: this throws BackendUnavailable when none is
+    // visible, which fails the case instead of skipping the accelerator contract.
+    REQUIRE_NOTHROW(selectFirst(Backend::sycl));
+    auto const syclSelector = alpaka::onHost::makeDeviceSelector(
+        alpaka::onHost::DeviceSpec{alpaka::api::oneApi, alpaka::deviceKind::intelGpu});
+    REQUIRE(syclSelector.isAvailable());
+    REQUIRE(syclSelector.getDeviceCount() > 0u);
+    CHECK_THROWS_AS(
+        graphFlow::withBackendDevice(
+            Backend::sycl,
+            syclSelector.getDeviceCount(),
+            [](auto&&, Backend, std::string const&) { return 0; }),
+        std::out_of_range);
+#else
+    CHECK_FALSE(graphFlow::isBackendCompiled(Backend::sycl));
+    CHECK_THROWS_AS(
+        graphFlow::withBackendDevice(Backend::sycl, 0u, [](auto&&, Backend, std::string const&) { return 0; }),
         BackendUnavailable);
 #endif
 }
@@ -523,6 +546,21 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
     ExampleRun const hip = runExample("--backend hip --particles 0");
     CHECK(hip.exitCode == 2);
     CHECK(hip.output.find("not compiled into this build") != std::string::npos);
+#    endif
+
+#    if ALPAKA_LANG_ONEAPI
+    ExampleRun const sycl = runExample("--backend sycl --particles 0 --chunk-size 128 --seed 42");
+    CHECK(sycl.exitCode == 0);
+    CHECK(sycl.output.find("# graphFlow_particle_feedback backend=sycl device=0 ") != std::string::npos);
+    CHECK(sycl.output.find(" particles=0 ") != std::string::npos);
+
+    ExampleRun const syclBadDevice = runExample("--backend sycl --device 999999 --particles 0");
+    CHECK(syclBadDevice.exitCode == 2);
+    CHECK(syclBadDevice.output.find("out of range for backend 'sycl'") != std::string::npos);
+#    else
+    ExampleRun const sycl = runExample("--backend sycl --particles 0");
+    CHECK(sycl.exitCode == 2);
+    CHECK(sycl.output.find("not compiled into this build") != std::string::npos);
 #    endif
 }
 #endif

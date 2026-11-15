@@ -294,9 +294,8 @@ ctest --test-dir build --output-on-failure --no-tests=error \
   --output-junit ctest-icpx.xml
 ```
 
-graphFlow has no SYCL backend, so the job does not set `alpaka_DEP_ONEAPI` and
-makes no SYCL claim. It is a host-compiler portability gate for the CPU
-backend. `alpaka_COMPILE_PEDANTIC` stays off for this job: it adds `-Werror`,
+The job does not set `alpaka_DEP_ONEAPI`, so it makes no SYCL claim. It is a
+host-compiler portability gate for the CPU backend. `alpaka_COMPILE_PEDANTIC` stays off for this job: it adds `-Werror`,
 and icpx (unlike GCC) warns on the brace-initialized `RouteTable{{1u}}` scalars
 in the tests. The GCC CPU, sanitizer, and TSAN jobs keep the strict gate.
 
@@ -309,11 +308,13 @@ passed 247/247 in 506 s on the same loaded host (that run is at `88de14f`; the
 `ffe4074` re-validation used g++ 13.3 on `fwk394`). Pinning the team size keeps
 the gate stable without changing the tested executor.
 
-## No SYCL backend
+## No hosted SYCL job
 
-graphFlow has no SYCL backend, so there is no SYCL job and no job pretends to
-run one. The `icpx-cpu` job above compiles and tests the CPU backend with
-Intel's host compiler only.
+`GRAPHFLOW_ENABLE_SYCL=ON` is implemented and validated on `hal` with an Intel
+Arc A770, but the GitHub-hosted runners have no Intel GPU. No hosted job
+enables the SYCL backend, so there is no SYCL CI runtime claim. The `icpx-cpu`
+job above still exercises the CPU backend with Intel's host compiler only. See
+[build.md](build.md#sycl-intel-gpu) for the local device command.
 
 ## Format
 

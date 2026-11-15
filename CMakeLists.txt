@@ -41,6 +41,11 @@ option(
     OFF
 )
 option(GRAPHFLOW_ENABLE_HIP "Compile the HIP backend (sets alpaka_DEP_HIP=ON)" OFF)
+option(
+    GRAPHFLOW_ENABLE_SYCL
+    "Compile the OneAPI/SYCL backend for Intel GPUs (requires icpx; sets alpaka_DEP_ONEAPI=ON)"
+    OFF
+)
 # Default the debug validation to the build type: ON for CMAKE_BUILD_TYPE=Debug
 # and OFF otherwise. An explicit
 # -DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON|OFF overrides the default because
@@ -84,16 +89,22 @@ if(GRAPHFLOW_ALPAKA_PIN STREQUAL "unknown")
     endif()
 endif()
 
-if(GRAPHFLOW_ENABLE_CUDA AND GRAPHFLOW_ENABLE_HIP)
+set(_graphflow_accelerator_count 0)
+foreach(_graphflow_backend_option GRAPHFLOW_ENABLE_CUDA GRAPHFLOW_ENABLE_HIP GRAPHFLOW_ENABLE_SYCL)
+    if(${_graphflow_backend_option})
+        math(EXPR _graphflow_accelerator_count "${_graphflow_accelerator_count} + 1")
+    endif()
+endforeach()
+if(_graphflow_accelerator_count GREATER 1)
     message(
         FATAL_ERROR
-        "GRAPHFLOW_ENABLE_CUDA and GRAPHFLOW_ENABLE_HIP are mutually exclusive in one build; use one build "
-        "directory per backend"
+        "GRAPHFLOW_ENABLE_CUDA, GRAPHFLOW_ENABLE_HIP and GRAPHFLOW_ENABLE_SYCL are mutually exclusive in one "
+        "build; use one build directory per backend"
     )
 endif()
 
 # Accelerator languages and the matching alpaka dependency options must be established before
-# add_subdirectory(alpaka) so alpaka builds its CUDA/HIP targets and alpaka_finalize() compiles
+# add_subdirectory(alpaka) so alpaka builds its CUDA/HIP/SYCL targets and alpaka_finalize() compiles
 # the graphFlow sources for that backend. The CPU backend stays enabled in accelerator builds.
 include(CheckLanguage)
 
@@ -137,8 +148,56 @@ if(GRAPHFLOW_ENABLE_HIP)
     set(alpaka_HIP_AmdGpu ON CACHE BOOL "Enable api::hip/deviceKind::amdGpu in alpaka" FORCE)
 endif()
 
+if(GRAPHFLOW_ENABLE_SYCL)
+    get_filename_component(_graphflow_cxx_compiler_name "${CMAKE_CXX_COMPILER}" NAME)
+    if(NOT _graphflow_cxx_compiler_name MATCHES "^icpx$")
+        message(
+            FATAL_ERROR
+            "GRAPHFLOW_ENABLE_SYCL=ON requires the Intel oneAPI DPC++ compiler (icpx), but "
+            "CMAKE_CXX_COMPILER is '${CMAKE_CXX_COMPILER}'. Source /opt/intel/oneapi/setvars.sh and "
+            "configure with -DCMAKE_CXX_COMPILER=icpx."
+        )
+    endif()
+    # The pinned alpaka 3.0.0 has two malformed calls in cmake/alpakaOneApi.cmake:
+    # - the relocatable-device-code branch omits the 'target' argument type, so any explicit
+    #   ON/OFF value aborts the configure in alpaka_set_compiler_options();
+    # - the "-fsycl-targets" call passes a stray INTERFACE argument, which CMake currently
+    #   absorbs as a repeated scope keyword but which graphFlow sanitizes after the include.
+    # graphFlow does not use relocatable device code, so keep the upstream DEFAULT and document
+    # the pin limitation instead of patching the external alpaka checkout.
+    if(DEFINED alpaka_RELOCATABLE_DEVICE_CODE AND NOT alpaka_RELOCATABLE_DEVICE_CODE STREQUAL "DEFAULT")
+        message(
+            STATUS
+            "graphFlow: forcing alpaka_RELOCATABLE_DEVICE_CODE=DEFAULT for the pinned alpaka 3.0.0 SYCL build"
+        )
+    endif()
+    set(
+        alpaka_RELOCATABLE_DEVICE_CODE
+        "DEFAULT"
+        CACHE STRING "Relocatable device code (pinned alpaka 3.0.0 SYCL workaround)" FORCE
+    )
+    set(alpaka_DEP_ONEAPI ON CACHE BOOL "Enable the SYCL dependency in alpaka" FORCE)
+    set(alpaka_ONEAPI_IntelGpu ON CACHE BOOL "Enable api::oneApi/deviceKind::intelGpu in alpaka" FORCE)
+    set(alpaka_ONEAPI_Cpu OFF CACHE BOOL "Disable the SYCL CPU device in alpaka" FORCE)
+    set(alpaka_ONEAPI_NvidiaGpu OFF CACHE BOOL "Disable the SYCL NVIDIA device in alpaka" FORCE)
+    set(alpaka_ONEAPI_AmdGpu OFF CACHE BOOL "Disable the SYCL AMD device in alpaka" FORCE)
+endif()
+
 # alpaka3 is consumed from the pinned source tree; the project only uses its public API.
 add_subdirectory("${GRAPHFLOW_ALPAKA_SOURCE_DIR}" alpaka)
+
+if(GRAPHFLOW_ENABLE_SYCL)
+    # Sanitize the pinned alpaka 3.0.0 stray INTERFACE argument: if the property ever contains a
+    # literal INTERFACE token, icpx would reject it as an unknown argument.
+    get_target_property(_graphflow_oneapi_compile_options alpaka_target_oneapi INTERFACE_COMPILE_OPTIONS)
+    if(_graphflow_oneapi_compile_options AND NOT _graphflow_oneapi_compile_options STREQUAL "_graphflow_oneapi_compile_options-NOTFOUND")
+        list(REMOVE_ITEM _graphflow_oneapi_compile_options INTERFACE)
+        set_target_properties(
+            alpaka_target_oneapi
+            PROPERTIES INTERFACE_COMPILE_OPTIONS "${_graphflow_oneapi_compile_options}"
+        )
+    endif()
+endif()
 
 add_library(graphFlow INTERFACE)
 add_library(graphFlow::graphFlow ALIAS graphFlow)
@@ -148,6 +207,11 @@ target_include_directories(
     INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 target_link_libraries(graphFlow INTERFACE alpaka::alpaka)
+if(GRAPHFLOW_ENABLE_SYCL)
+    # The SYCL build compiles oneAPI kernels; link the dependency target explicitly even though
+    # alpaka::alpaka also pulls it in when ONEAPI is the only enabled API dependency.
+    target_link_libraries(graphFlow INTERFACE alpaka::oneapi)
+endif()
 
 if(GRAPHFLOW_ENABLE_DEBUG_VALIDATION)
     target_compile_definitions(graphFlow INTERFACE GRAPHFLOW_DEBUG_VALIDATION=1)
@@ -244,6 +308,11 @@ if(GRAPHFLOW_BUILD_TESTS)
                 tests/integration/test_flow_execution_hip.cpp
                 tests/integration/test_failure_paths_hip.cpp
         )
+    endif()
+    if(GRAPHFLOW_ENABLE_SYCL)
+        # Runtime smoke: it fails when no Intel GPU is visible. The SYCL build is not part of
+        # hosted CI; the device gate runs on hal with an Arc A770.
+        target_sources(graphFlow_tests PRIVATE tests/unit/test_sycl_kernel.cpp)
     endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(

@@ -59,7 +59,7 @@ namespace graphFlow::photon::cli
 
     inline void usage(std::ostream& out)
     {
-        out << "usage: graphFlow_photon_scattering --backend cpu|cuda|hip [--device D]\n"
+        out << "usage: graphFlow_photon_scattering --backend cpu|cuda|hip|sycl [--device D]\n"
                "                                      [--photons N] [--thickness L]\n"
                "                                      [--sigma-s S] [--sigma-a A]\n"
                "                                      [--mode forward|isotropic]\n"
