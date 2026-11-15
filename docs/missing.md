@@ -205,14 +205,18 @@ resource or decision is missing.
   [known-limitations.md](known-limitations.md#failure-injection-is-test-only)).
   The covered paths assert no partial output is published and every lease is
   released.
-- [ ] **P2: counters and validation (scheduler checks open).** The photon
-  per-event payload checks are implemented behind
-  `GRAPHFLOW_ENABLE_DEBUG_VALIDATION` (issue #26), and P03 added debug-only
-  input-conservation counters in the dense and hash scatter kernels. Open:
-  scheduler-level conservation (`next[bin]==total[bin]` across a batch), output
-  chunk fill-level checks, and exactly-once sink delivery checks. Missing
-  artifact: those debug/validation assertions and their tests; the kernel input
-  counters alone do not close this item.
+- [x] **P2: counters and validation.** The photon per-event payload checks are
+  implemented behind `GRAPHFLOW_ENABLE_DEBUG_VALIDATION` (issue #26), and P03
+  added debug-only input-conservation counters in the dense and hash scatter
+  kernels. `GraphRunner::run()` now adds the scheduler-level checks under the
+  same flag: source/transform batches must publish exactly their input
+  particles (the host-side form of `next[bin]==total[bin]`), every published
+  fill must lie in `[1, C]`, and a chunk incarnation may be scheduled for a
+  sink only once. The checks sit behind `if constexpr(debug::checksEnabled)`
+  and the empty-base release state keeps them out of the hot path; the
+  `[scheduler][debug]` cases exercise each violation and the
+  `[scheduler][release]` case proves a lossy transform completes unchecked in
+  Release.
 
 ## 3. Example, RNG, and end-to-end tests
 

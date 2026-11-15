@@ -8,6 +8,7 @@
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/ChunkStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
+#include "graphFlow/flow/Debug.hpp"
 
 #include <alpaka/alpaka.hpp>
 
@@ -25,6 +26,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -52,6 +55,29 @@ namespace graphFlow
     public:
         using std::runtime_error::runtime_error;
     };
+
+    namespace detail
+    {
+        /** Empty base used in release builds; the empty-base optimisation keeps it at zero size. */
+        struct SchedulerDebugStateOff
+        {
+        };
+
+        /** Host-side state of the debug-only scheduler validation.
+         *
+         * It is only selected when `graphFlow::debug::checksEnabled` is true. Release builds inherit
+         * the empty base and every access sits in an `if constexpr`, so no check reaches the hot
+         * path.
+         */
+        struct SchedulerDebugStateOn
+        {
+            std::unordered_set<std::uint64_t> sinkChunkDeliveries;
+            std::uint64_t sinkParticlesDelivered = 0u;
+        };
+
+        using SchedulerDebugState
+            = std::conditional_t<debug::checksEnabled, SchedulerDebugStateOn, SchedulerDebugStateOff>;
+    } // namespace detail
 
     /** Cheap aggregate scheduler counters and peaks of one `GraphRunner::run()`.
      *
@@ -237,7 +263,7 @@ namespace graphFlow
      * largest prefix that fits the current credits, so progress never depends on a full Q batch.
      */
     template<typename TDevice, typename TStorage = ChunkPool<TDevice>>
-    class GraphRunner
+    class GraphRunner : private detail::SchedulerDebugState
     {
         static_assert(
             ChunkStorage<TStorage>,
@@ -524,6 +550,12 @@ namespace graphFlow
                                     ChunkDescriptor const& output = outputs[o];
                                     try
                                     {
+                                        if constexpr(debug::checksEnabled)
+                                            debugCheckFill(
+                                                output,
+                                                node.role == NodeRole::transform
+                                                    ? "transform"
+                                                    : (node.role == NodeRole::sink ? "sink" : "source"));
                                         if(output.bin >= node.route.size())
                                             throw std::runtime_error{
                                                 "graphFlow: node '" + node.name + "' produced an unroutable bin"};
@@ -532,6 +564,11 @@ namespace graphFlow
                                             throw std::runtime_error{
                                                 "graphFlow: node '" + node.name + "' bin " + std::to_string(output.bin)
                                                 + " has no route"};
+                                        if constexpr(debug::checksEnabled)
+                                        {
+                                            if(m_nodes[static_cast<std::size_t>(dst)]->role == NodeRole::sink)
+                                                debugRecordSinkDelivery(output);
+                                        }
                                         m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                     }
                                     catch(...)
@@ -555,6 +592,12 @@ namespace graphFlow
                                 // later output is unroutable.
                                 if(node.role == NodeRole::source)
                                     lane.inputOwned = false;
+
+                                if constexpr(debug::checksEnabled)
+                                {
+                                    if(node.role != NodeRole::sink)
+                                        debugCheckBatchConservation(node, batch, outputs);
+                                }
 
                                 if(node.role == NodeRole::sink)
                                     sunkParticles += batch.particles();
@@ -615,6 +658,8 @@ namespace graphFlow
                             budget = m_storage.chunkCapacity();
                         std::uint32_t const fill = static_cast<std::uint32_t>(budget);
                         ChunkDescriptor chunk{m_storage.acquire(), fill, 0u};
+                        if constexpr(debug::checksEnabled)
+                            debugCheckFill(chunk, "source");
                         Batch const batch{{chunk}, generated};
                         generated += fill;
                         // Publish the in-flight batch before the hook so a throwing launch is
@@ -827,6 +872,15 @@ namespace graphFlow
             if(m_storage.freeCount() != m_storage.numChunks())
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
 
+            if constexpr(debug::checksEnabled)
+            {
+                if(generated != sunkParticles || generated != this->sinkParticlesDelivered)
+                    throw std::logic_error{
+                        std::string{"graphFlow: scheduler validation: source published "} + std::to_string(generated)
+                        + " particles but the sinks retired " + std::to_string(sunkParticles) + " (delivered "
+                        + std::to_string(this->sinkParticlesDelivered) + ')'};
+            }
+
             stats.poolChunks = m_storage.numChunks();
             stats.peakLiveChunks = m_storage.peakLive();
             stats.sourceParticles = m_sourceParticles;
@@ -926,6 +980,53 @@ namespace graphFlow
                 m_storage.chunkCapacity(),
                 maxBins,
                 "graphFlow: transform batch output reserve");
+        }
+
+        /** Debug-only key of one physical chunk incarnation. */
+        [[nodiscard]] static constexpr std::uint64_t debugChunkKey(ChunkHandle const& handle) noexcept
+        {
+            return (static_cast<std::uint64_t>(handle.generation) << 32u) | handle.index;
+        }
+
+        /** Debug-only fill-level check of one published descriptor. */
+        void debugCheckFill(ChunkDescriptor const& chunk, char const* stage) const
+        {
+            std::uint32_t const capacity = m_storage.chunkCapacity();
+            if(chunk.fill == 0u || chunk.fill > capacity)
+                throw std::logic_error{
+                    std::string{"graphFlow: scheduler validation: "} + stage + " chunk fill "
+                    + std::to_string(chunk.fill) + " is outside [1, " + std::to_string(capacity) + ']'};
+        }
+
+        /** Debug-only batch conservation: a source or transform publishes every input particle.
+         *
+         * This is the host-side form of the `next[bin] == total[bin]` check: the scheduler has no
+         * per-bin totals, so it verifies that the descriptors a finished batch publishes carry
+         * exactly the particles the batch took in. Sinks publish no output.
+         */
+        void debugCheckBatchConservation(
+            Node const& node,
+            Batch const& batch,
+            std::vector<ChunkDescriptor> const& outputs) const
+        {
+            std::uint64_t published = 0u;
+            for(ChunkDescriptor const& output : outputs)
+                published += output.fill;
+            std::uint64_t const consumed = batch.particles();
+            if(published != consumed)
+                throw std::logic_error{
+                    std::string{"graphFlow: scheduler validation: node '"} + node.name + "' conserved "
+                    + std::to_string(published) + " of " + std::to_string(consumed) + " input particles"};
+        }
+
+        /** Debug-only exactly-once delivery: a chunk incarnation may be routed to a sink once. */
+        void debugRecordSinkDelivery(ChunkDescriptor const& chunk)
+        {
+            if(!this->sinkChunkDeliveries.insert(debugChunkKey(chunk.handle)).second)
+                throw std::logic_error{
+                    std::string{"graphFlow: scheduler validation: sink chunk "} + std::to_string(chunk.handle.index)
+                    + " (generation " + std::to_string(chunk.handle.generation) + ") was delivered more than once"};
+            this->sinkParticlesDelivered += chunk.fill;
         }
 
         /** Enqueue one lane's completion event, with an optional injected failure for tests. */
