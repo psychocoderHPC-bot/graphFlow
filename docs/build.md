@@ -183,11 +183,15 @@ The option adds `GRAPHFLOW_DEBUG_VALIDATION=1` to the `graphFlow` interface
 target. Release hot loops keep no per-event state branch. The two
 `[photon][debug]` CTest cases run in both modes: the Release case asserts that
 the hot path has no per-event state branch, and the Debug case exercises the
- compiled checks. The current Release suite is **249/249 CPU**, **310/310
- CUDA**, and **301/301 HIP** (see `docs/acceptance.md`); PR #63 adds the
- public-Flow routed-axis cases on top of the P07b 7/7. The previous 247/247,
- 307/307 and 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`,
- and the 239/299/290 at `a610281` are historical. The `rosi_v100`
+compiled checks. The scheduler adds its conservation, fill-level and
+exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
+each violation and `[scheduler][release]` proves the checks are compiled out.
+The recorded Release suite is **249/249 CPU**, **310/310 CUDA**, and **301/301
+HIP** at `ffe4074` (see `docs/acceptance.md`); the six host-only scheduler
+cases postdate that record. PR #63 adds the public-Flow routed-axis cases on
+top of the P07b 7/7. The previous 247/247, 307/307 and 298/298 at `88de14f`,
+the 246/246, 306/306 and 297/297 at `56c11ac`, and the 239/299/290 at
+`a610281` are historical. The `rosi_v100`
 **202/202 CPU** and **254/254 CUDA** Release totals and the pre-hash
 **195/195 CPU** and **247/247 CUDA** Debug totals are historical; the `Debug`
 build was not re-run on `rosi_v100` after the seven hash cases. Hosted CI runs
