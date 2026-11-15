@@ -58,21 +58,67 @@ namespace graphFlow
 
     namespace detail
     {
-        /** Empty base used in release builds; the empty-base optimisation keeps it at zero size. */
+        /** Release variant of the scheduler validation state.
+         *
+         * It carries no data, so the empty-base optimisation keeps `GraphRunner` at its release
+         * size, and every operation is a no-op. The operations exist in this variant because some
+         * clang-based compilers (the HIP and SYCL builds) instantiate a discarded `if constexpr`
+         * statement in a member of a class template instead of dropping it, and it still has to
+         * compile.
+         */
         struct SchedulerDebugStateOff
         {
+            void debugResetState() noexcept
+            {
+            }
+
+            void debugRecordSinkDelivery(ChunkDescriptor const&) noexcept
+            {
+            }
+
+            void debugCheckTotals(std::uint64_t, std::uint64_t) const noexcept
+            {
+            }
         };
 
         /** Host-side state of the debug-only scheduler validation.
          *
-         * It is only selected when `graphFlow::debug::checksEnabled` is true. Release builds inherit
-         * the empty base and every access sits in an `if constexpr`, so no check reaches the hot
-         * path.
+         * It is only selected when `graphFlow::debug::checksEnabled` is true, and every access sits
+         * in an `if constexpr`, so no check reaches the release hot path.
          */
         struct SchedulerDebugStateOn
         {
             std::unordered_set<std::uint64_t> sinkChunkDeliveries;
             std::uint64_t sinkParticlesDelivered = 0u;
+
+            void debugResetState()
+            {
+                sinkChunkDeliveries.clear();
+                sinkParticlesDelivered = 0u;
+            }
+
+            /** Exactly-once delivery: a chunk incarnation may be routed to a sink once. */
+            void debugRecordSinkDelivery(ChunkDescriptor const& chunk)
+            {
+                std::uint64_t const key
+                    = (static_cast<std::uint64_t>(chunk.handle.generation) << 32u) | chunk.handle.index;
+                if(!sinkChunkDeliveries.insert(key).second)
+                    throw std::logic_error{
+                        std::string{"graphFlow: scheduler validation: sink chunk "}
+                        + std::to_string(chunk.handle.index) + " (generation "
+                        + std::to_string(chunk.handle.generation) + ") was delivered more than once"};
+                sinkParticlesDelivered += chunk.fill;
+            }
+
+            /** Every source particle has to reach a sink exactly once. */
+            void debugCheckTotals(std::uint64_t generated, std::uint64_t sunk) const
+            {
+                if(generated != sunk || generated != sinkParticlesDelivered)
+                    throw std::logic_error{
+                        std::string{"graphFlow: scheduler validation: source published "} + std::to_string(generated)
+                        + " particles but the sinks retired " + std::to_string(sunk) + " (delivered "
+                        + std::to_string(sinkParticlesDelivered) + ')'};
+            }
         };
 
         using SchedulerDebugState
@@ -490,8 +536,7 @@ namespace graphFlow
             {
                 // The validation state is per run, like every other counter reset above, so a
                 // repeated run() on the same runner keeps the release semantics.
-                this->sinkChunkDeliveries.clear();
-                this->sinkParticlesDelivered = 0u;
+                this->debugResetState();
             }
             SchedulerStats& stats = m_stats;
             std::uint64_t& generated = m_generated;
@@ -574,7 +619,7 @@ namespace graphFlow
                                         if constexpr(debug::checksEnabled)
                                         {
                                             if(m_nodes[static_cast<std::size_t>(dst)]->role == NodeRole::sink)
-                                                debugRecordSinkDelivery(output);
+                                                this->debugRecordSinkDelivery(output);
                                         }
                                         m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                     }
@@ -880,13 +925,7 @@ namespace graphFlow
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
 
             if constexpr(debug::checksEnabled)
-            {
-                if(generated != sunkParticles || generated != this->sinkParticlesDelivered)
-                    throw std::logic_error{
-                        std::string{"graphFlow: scheduler validation: source published "} + std::to_string(generated)
-                        + " particles but the sinks retired " + std::to_string(sunkParticles) + " (delivered "
-                        + std::to_string(this->sinkParticlesDelivered) + ')'};
-            }
+                this->debugCheckTotals(generated, sunkParticles);
 
             stats.poolChunks = m_storage.numChunks();
             stats.peakLiveChunks = m_storage.peakLive();
@@ -989,12 +1028,6 @@ namespace graphFlow
                 "graphFlow: transform batch output reserve");
         }
 
-        /** Debug-only key of one physical chunk incarnation. */
-        [[nodiscard]] static constexpr std::uint64_t debugChunkKey(ChunkHandle const& handle) noexcept
-        {
-            return (static_cast<std::uint64_t>(handle.generation) << 32u) | handle.index;
-        }
-
         /** Debug-only fill-level check of one published descriptor. */
         void debugCheckFill(ChunkDescriptor const& chunk, char const* stage) const
         {
@@ -1024,16 +1057,6 @@ namespace graphFlow
                 throw std::logic_error{
                     std::string{"graphFlow: scheduler validation: node '"} + node.name + "' conserved "
                     + std::to_string(published) + " of " + std::to_string(consumed) + " input particles"};
-        }
-
-        /** Debug-only exactly-once delivery: a chunk incarnation may be routed to a sink once. */
-        void debugRecordSinkDelivery(ChunkDescriptor const& chunk)
-        {
-            if(!this->sinkChunkDeliveries.insert(debugChunkKey(chunk.handle)).second)
-                throw std::logic_error{
-                    std::string{"graphFlow: scheduler validation: sink chunk "} + std::to_string(chunk.handle.index)
-                    + " (generation " + std::to_string(chunk.handle.generation) + ") was delivered more than once"};
-            this->sinkParticlesDelivered += chunk.fill;
         }
 
         /** Enqueue one lane's completion event, with an optional injected failure for tests. */
