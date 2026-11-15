@@ -250,7 +250,8 @@ and REUSE commands are in [build](docs/build.md).
 `[photon][debug]` CTest cases run in both modes: Release asserts that the hot
 path has no per-event state branch, and Debug exercises the compiled checks.
 Host setup validates the run configuration once. The current tree passes
-255/255 CPU, 316/316 CUDA, and 307/307 HIP in Release; the
+255/255 CPU, 316/316 CUDA, 307/307 HIP, and 71/71 SYCL on `hal` Arc A770 in
+Release; the
 [acceptance record](docs/acceptance.md) carries the current block. The
 `rosi_v100` Release totals 202/202 CPU and 254/254 CUDA are historical. The
 `Debug` build was not re-run on `rosi_v100` after the seven hash cases; the last

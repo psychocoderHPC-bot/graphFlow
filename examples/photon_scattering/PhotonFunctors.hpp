@@ -18,10 +18,11 @@
 namespace graphFlow::photon
 {
     /** Face reached by the current ray, if any. */
-    struct FaceHit
+    template<typename T>
+    struct FaceHitT
     {
         bool reachable = false;
-        double distance = 0.0;
+        T distance = T{0};
         Event event = Event::absorbed;
     };
 
@@ -31,16 +32,17 @@ namespace graphFlow::photon
      * `z = 0`. A ray parallel to the planes (`uz == 0`) has no reachable face in this infinite-slab
      * model; in vacuum that is an explicit error, while in material it collides eventually.
      */
-    ALPAKA_FN_ACC inline FaceHit faceHit(Slab const& slab, Vec3 const& position, Vec3 const& direction)
+    template<typename T>
+    ALPAKA_FN_ACC inline FaceHitT<T> faceHit(SlabT<T> const& slab, Vec3T<T> const& position, Vec3T<T> const& direction)
     {
-        FaceHit hit;
-        if(direction.z > 0.0)
+        FaceHitT<T> hit;
+        if(direction.z > T{0})
         {
             hit.reachable = true;
             hit.distance = (slab.thickness - position.z) / direction.z;
             hit.event = Event::transmitted;
         }
-        else if(direction.z < 0.0)
+        else if(direction.z < T{0})
         {
             hit.reachable = true;
             hit.distance = -position.z / direction.z;
@@ -50,7 +52,8 @@ namespace graphFlow::photon
     }
 
     /** Exact face-priority rule: equality belongs to the face, not the collision. */
-    ALPAKA_FN_ACC inline bool faceFirst(double faceDistance, double sampledDistance)
+    template<typename T>
+    ALPAKA_FN_ACC inline bool faceFirst(T faceDistance, T sampledDistance)
     {
         return faceDistance <= sampledDistance;
     }
@@ -67,25 +70,26 @@ namespace graphFlow::photon
      * adds the finite/range checks in `PhotonDebug.hpp`; the physics errors stay unconditional: a
      * vacuum ray with no reachable face is an invalid proposal.
      */
-    ALPAKA_FN_ACC inline Proposal resolveFlight(
-        Slab const& slab,
-        double sigmaTotalValue,
-        Photon const& photon,
-        double sampledDistance,
-        double sampledKind,
+    template<typename T>
+    ALPAKA_FN_ACC inline ProposalT<T> resolveFlight(
+        SlabT<T> const& slab,
+        T sigmaTotalValue,
+        PhotonT<T> const& photon,
+        T sampledDistance,
+        T sampledKind,
         std::uint32_t maxScatters)
     {
-        Proposal proposal;
+        ProposalT<T> proposal;
         proposal.event = Event::absorbed;
-        proposal.distance = 0.0;
+        proposal.distance = T{0};
         proposal.valid = false;
 
         if(!validatePhoton(slab, photon))
             return proposal;
 
-        FaceHit const face = faceHit(slab, photon.position, photon.direction);
+        FaceHitT<T> const face = faceHit(slab, photon.position, photon.direction);
 
-        if(sigmaTotalValue == 0.0)
+        if(sigmaTotalValue == T{0})
         {
             // Ballistic vacuum ray. A parallel ray never reaches a face in this model.
             if(!face.reachable)
@@ -121,13 +125,14 @@ namespace graphFlow::photon
      * Face events clamp `z` to the exact plane after advancing `x` and `y` along the ray. Collision
      * events advance along the full sampled path. The proposal and the selected bin must agree.
      */
-    ALPAKA_FN_ACC inline UpdateResult applyEvent(Slab const& slab, Event event, Photon& photon)
+    template<typename T>
+    ALPAKA_FN_ACC inline UpdateResult applyEvent(SlabT<T> const& slab, Event event, PhotonT<T>& photon)
     {
         if(!photon.proposal.valid || event != photon.proposal.event)
             return UpdateResult::invalid;
         if(!validateProposal(slab, photon))
             return UpdateResult::invalid;
-        double const distance = photon.proposal.distance;
+        T const distance = photon.proposal.distance;
 
         switch(event)
         {
@@ -139,7 +144,7 @@ namespace graphFlow::photon
             photon.position.z += distance * photon.direction.z;
             break;
         case Event::transmitted:
-            if(photon.direction.z <= 0.0)
+            if(photon.direction.z <= T{0})
                 return UpdateResult::invalid;
             photon.position.x += distance * photon.direction.x;
             photon.position.y += distance * photon.direction.y;
@@ -150,7 +155,7 @@ namespace graphFlow::photon
                 return UpdateResult::invalid;
             photon.position.x += distance * photon.direction.x;
             photon.position.y += distance * photon.direction.y;
-            photon.position.z = 0.0;
+            photon.position.z = T{0};
             break;
         }
 
@@ -165,13 +170,14 @@ namespace graphFlow::photon
      * draw. graphFlow owns the event and purpose, so these are consecutive draws of the scatter
      * stage engine.
      */
-    ALPAKA_FN_ACC inline Vec3 isotropicDirection(rng::Engine& engine)
+    template<typename T>
+    ALPAKA_FN_ACC inline Vec3T<T> isotropicDirection(rng::Engine& engine)
     {
-        constexpr double pi = alpaka::math::constants::pi;
-        double const mu = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(engine) -1.0;
-        double const phi = 2.0 * pi * alpaka::rand::distribution::UniformReal<double>{}(engine);
-        double const transverse = alpaka::math::sqrt(alpaka::math::max(0.0, 1.0 - mu * mu));
-        return Vec3{transverse * alpaka::math::cos(phi), transverse * alpaka::math::sin(phi), mu};
+        T const pi = static_cast<T>(alpaka::math::constants::pi);
+        T const mu = T{2} * alpaka::rand::distribution::UniformReal<T>{}(engine) -T{1};
+        T const phi = T{2} * pi * alpaka::rand::distribution::UniformReal<T>{}(engine);
+        T const transverse = alpaka::math::sqrt(alpaka::math::max(T{0}, T{1} - mu * mu));
+        return Vec3T<T>{transverse * alpaka::math::cos(phi), transverse * alpaka::math::sin(phi), mu};
     }
 
     /** No-op trace writer used by production runs without diagnostics. */
@@ -181,8 +187,8 @@ namespace graphFlow::photon
             [[maybe_unused]] std::uint64_t id,
             [[maybe_unused]] TraceKind kind,
             [[maybe_unused]] std::uint32_t scatterCount,
-            [[maybe_unused]] Vec3 const& position,
-            [[maybe_unused]] Vec3 const& direction) const
+            [[maybe_unused]] auto const& position,
+            [[maybe_unused]] auto const& direction) const
         {
         }
     };
@@ -192,7 +198,7 @@ namespace graphFlow::photon
      * Selected ids are exactly `id < limit`. Each id owns `maxVertices` contiguous slots; a write
      * beyond the bound sets the per-id truncation flag and never touches the simulation state.
      */
-    template<typename TVertices, typename TCounts, typename TFlags>
+    template<typename TVertices, typename TCounts, typename TFlags, typename T = double>
     struct TraceWriter
     {
         mutable TVertices vertices;
@@ -205,8 +211,8 @@ namespace graphFlow::photon
             std::uint64_t id,
             TraceKind kind,
             std::uint32_t scatterCount,
-            Vec3 const& position,
-            Vec3 const& direction) const
+            Vec3T<T> const& position,
+            Vec3T<T> const& direction) const
         {
             if(id >= limit)
                 return;
@@ -216,7 +222,7 @@ namespace graphFlow::photon
                 truncated[id] = 1u;
                 return;
             }
-            vertices[id * maxVertices + index] = TraceVertex{kind, scatterCount, position, direction};
+            vertices[id * maxVertices + index] = TraceVertexT<T>{kind, scatterCount, position, direction};
             counts[id] = index + 1u;
         }
     };
@@ -228,14 +234,14 @@ namespace graphFlow::photon
     }
 
     /** Source: one independent history per logical id at the entrance plane, normal incidence. */
-    template<typename TTrace = NoTrace>
+    template<typename TTrace = NoTrace, typename T = double>
     struct GeneratePhotonT
     {
         mutable TTrace trace;
 
-        ALPAKA_FN_ACC Photon operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        ALPAKA_FN_ACC PhotonT<T> operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
         {
-            Photon photon{id, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, 1.0}, 0u, Proposal{}};
+            PhotonT<T> photon{id, Vec3T<T>{T{0}, T{0}, T{0}}, Vec3T<T>{T{0}, T{0}, T{1}}, 0u, ProposalT<T>{}};
             trace.record(id, TraceKind::source, 0u, photon.position, photon.direction);
             return photon;
         }
@@ -245,24 +251,25 @@ namespace graphFlow::photon
 
     /** Transform: draw the flight and collision-kind uniforms and store a proposal.
      *
-     * The flight sample needs a positive value for `log`. `UniformReal<double, interval::CO>`
+     * The flight sample needs a positive value for `log`. `UniformReal<T, interval::CO>`
      * returns `[0, 1)`; `1 - U` maps it to `(0, 1]`, so the material distance is non-negative. The
      * collision-kind draw is a second `[0, 1)` sample from the same propose-stage engine. The host
      * validated the slab once, so the hot loop keeps only the vacuum/material branch and the
      * optional debug proposal check.
      */
-    struct ProposeFlight
+    template<typename T = double>
+    struct ProposeFlightT
     {
-        Slab slab{};
+        SlabT<T> slab{};
         std::uint32_t maxScatters = 0u;
 
-        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, Photon& photon) const
+        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, PhotonT<T>& photon) const
         {
-            double const flightUniform = 1.0 - alpaka::rand::distribution::UniformReal<double>{}(engine);
-            double const kindUniform = alpaka::rand::distribution::UniformReal<double>{}(engine);
-            double const total = sigmaTotal(slab);
-            double sampledDistance = 0.0;
-            if(total > 0.0)
+            T const flightUniform = T{1} - alpaka::rand::distribution::UniformReal<T>{}(engine);
+            T const kindUniform = alpaka::rand::distribution::UniformReal<T>{}(engine);
+            T const total = sigmaTotal(slab);
+            T sampledDistance = T{0};
+            if(total > T{0})
                 sampledDistance = -alpaka::math::log(flightUniform) / total;
             photon.proposal = resolveFlight(slab, total, photon, sampledDistance, kindUniform, maxScatters);
             if(!photon.proposal.valid || !validateProposal(slab, photon))
@@ -270,12 +277,15 @@ namespace graphFlow::photon
         }
     };
 
+    using ProposeFlight = ProposeFlightT<>;
+
     /** Classifier: read the proposal event, rejecting invalid proposals before the update. */
-    struct ClassifyEvent
+    template<typename T = double>
+    struct ClassifyEventT
     {
         static constexpr std::uint32_t maxBins = eventBins;
 
-        ALPAKA_FN_ACC Event operator()(auto const&, Status& status, Photon const& photon) const
+        ALPAKA_FN_ACC Event operator()(auto const&, Status& status, PhotonT<T> const& photon) const
         {
             if(!photon.proposal.valid)
             {
@@ -292,12 +302,15 @@ namespace graphFlow::photon
         }
     };
 
-    /** Updater: advance to the selected event and report checked failures. */
-    struct AdvanceToEvent
-    {
-        Slab slab{};
+    using ClassifyEvent = ClassifyEventT<>;
 
-        ALPAKA_FN_ACC UpdateResult operator()(auto const&, Status& status, Event event, Photon& photon) const
+    /** Updater: advance to the selected event and report checked failures. */
+    template<typename T = double>
+    struct AdvanceToEventT
+    {
+        SlabT<T> slab{};
+
+        ALPAKA_FN_ACC UpdateResult operator()(auto const&, Status& status, Event event, PhotonT<T>& photon) const
         {
             UpdateResult const result = applyEvent(slab, event, photon);
             if(result == UpdateResult::invalid)
@@ -308,15 +321,17 @@ namespace graphFlow::photon
         }
     };
 
+    using AdvanceToEvent = AdvanceToEventT<>;
+
     /** Transform: change direction and increment the completed-scatter counter exactly once. */
-    template<typename TTrace = NoTrace>
+    template<typename TTrace = NoTrace, typename T = double>
     struct ScatterT
     {
-        Slab slab{};
+        SlabT<T> slab{};
         ScatterMode mode = ScatterMode::forward;
         mutable TTrace trace;
 
-        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, Photon& photon) const
+        ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, PhotonT<T>& photon) const
         {
             if(!photon.proposal.valid || photon.proposal.event != Event::scatter)
             {
@@ -324,7 +339,7 @@ namespace graphFlow::photon
                 return;
             }
             if(mode == ScatterMode::isotropic)
-                photon.direction = isotropicDirection(engine);
+                photon.direction = isotropicDirection<T>(engine);
             if(!validatePhoton(slab, photon))
             {
                 status.set(StatusCode::invalid);
@@ -343,14 +358,14 @@ namespace graphFlow::photon
     using Scatter = ScatterT<>;
 
     /** Shared terminal sink: record one final state, trace vertex and per-id delivery count. */
-    template<typename TRecords, typename TVisits, typename TTrace = NoTrace>
+    template<typename TRecords, typename TVisits, typename TTrace = NoTrace, typename T = double>
     struct RecordTerminal
     {
         mutable TRecords records;
         mutable TVisits visits;
         mutable TTrace trace;
 
-        ALPAKA_FN_ACC void operator()(auto const& acc, Status& status, Photon const& photon) const
+        ALPAKA_FN_ACC void operator()(auto const& acc, Status& status, PhotonT<T> const& photon) const
         {
             if(!photon.proposal.valid)
             {
@@ -365,7 +380,7 @@ namespace graphFlow::photon
                 return;
             }
 
-            records[photon.id] = TerminalRecord{event, photon.scatterCount, photon.position, photon.direction};
+            records[photon.id] = TerminalRecordT<T>{event, photon.scatterCount, photon.position, photon.direction};
             trace.record(photon.id, traceKindOf(event), photon.scatterCount, photon.position, photon.direction);
             std::uint32_t const previous
                 = alpaka::onAcc::atomicAdd(acc, &visits[photon.id], std::uint32_t{1u}, alpaka::onAcc::scope::device);
