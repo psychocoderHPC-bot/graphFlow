@@ -3,15 +3,17 @@
 
 # Benchmarks
 
-This page contains the P07 exclusive measurement on main `64d4a1e`, the P07b
-Q/C re-run and kernel-axis matrix on main `a610281`, the historical pre-T5/T7
-baseline, and the integrated T13 result. Every number states its provenance.
-The full matrix, budget rejections, copy reference, kernel matrix, and raw-row
-provenance live in [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
+This page contains the P07 exclusive measurement merged into `a610281`, the
+P07b Q/C re-run and kernel-axis matrix merged into current main `56c11ac`, the
+historical pre-T5/T7 baseline, and the historical integrated T13 result. Every
+number states its provenance. The full matrix, budget rejections, copy
+reference, kernel matrix, and raw-row provenance live in
+[tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
 
-## P07 measurement matrix and frozen target (main `64d4a1e`)
+## P07 measurement matrix and frozen target (code `64d4a1e`)
 
-Provenance: main `64d4a1e11949886c7147c082cc386edde4bdb01f`, one exclusive
+Provenance: code `64d4a1e11949886c7147c082cc386edde4bdb01f` (merged as
+`a61028192884bb92e0107b32f20e12b5c9ca76c9`), one exclusive
 `gpu-v100-int` allocation on `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
 driver 570.158.01, CUDA 12.6.85, `sm_70`, Release, three repetitions per case.
 The tables report median and interquartile range across the three runs. No H100
@@ -48,9 +50,9 @@ Sustained copy-bandwidth reference on the same device and payload
 (3,221,225,472 B, 10 device-to-device copies): `409.733` GB/s, 7.862 ms per
 copy. This is a D2D copy-engine reference, not a scatter-bandwidth claim.
 
-## P07b Q/C re-run and kernel axes (main `a610281`)
+## P07b Q/C re-run and kernel axes (main `56c11ac`)
 
-This run closes the P07 kernel-axis gap. An opt-in `--workload kernel` path in
+This run closes the P07 kernel-level gap. An opt-in `--workload kernel` path in
 the example selects the P03 `ScatterMode` (`shared|direct`), the dense/hash bin
 table (`--bin-path`), the bin count (`--bins 64|1024|4096|65536`) and the
 occupancy (`--distribution balanced|one-hot|skewed|sparse`). The default
@@ -58,9 +60,11 @@ feedback workload and its output are unchanged. The kernel workload is a
 separate Generate -> Transform -> Sink pipeline, so its particles/s is not
 comparable with the feedback Q/C numbers above.
 
-Provenance: main `a61028192884bb92e0107b32f20e12b5c9ca76c9` plus the P07b change set on branch
-`gf/p07b-e2e`, exclusive `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
-driver 570.158.01, CUDA 12.6.85, `sm_70`, Release, three repetitions. Binary
+Provenance: main `a61028192884bb92e0107b32f20e12b5c9ca76c9` plus the P07b
+change set on branch `gf/p07b-e2e`, merged as
+`56c11acbca6d10ea82fd85d213abcb4f9050dbf8`, exclusive `rosi_v100` (`gv001`),
+Tesla V100-SXM2-32GB, driver 570.158.01, CUDA 12.6.85, `sm_70`, Release,
+three repetitions. Binary
 SHA-256 `23c2bbeed6b9b7b0216ffaf865eaa081a80176b44d14ab05f163ba8a749775b4`.
 No H100 was used.
 
@@ -99,7 +103,12 @@ is dense-only, and the hash path assumes the 2*T table with T=128.
 The committed CPU kernel timings remain the P03 measurement on fwk394: shared
 staging versus direct 5.48 vs 15.85 ms (balanced), 2.13 vs 48.31 ms (one-hot),
 2.21 vs 37.25 ms (skewed), 4.19 vs 6.62 ms (sparse), and dense 4.06 ms versus
-5.11/4.90 ms for 2*T/4*T at B=1024. P07b did not re-measure those.
+5.11/4.90 ms for 2*T/4*T at B=1024. P07b did not re-measure those. The `Direct`
+scatter path was measured on CPU by P03 and on CUDA at kernel level by P07b; no
+HIP `Direct` execution is recorded. P07b closes the kernel-level scatter/dense/distribution gap and
+exercises the dense `direct` mode on `rosi_v100` CUDA; the public `Flow` graph
+still runs the dense path, so the measurement-matrix item stays open for that
+public path. HIP `Direct` remains unrecorded.
 
 ## Historical environment
 
@@ -253,11 +262,13 @@ H100 claim is made.
   not an exclusive-hardware acceptance claim. The same caveat applies to the
   integrated T13 table: all of its wall times and derived particles/s values
   are single-run baselines on shared hosts, not exclusive-hardware acceptance
-  numbers. The `N=1e8` acceptance section above is the exception: it is the
-  recorded exclusive-platform run on `rosi_v100` (V100 SXM2-32GB).
+  numbers. The P07 table at the top is the exception: it is the recorded
+  exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
+  acceptance table is historical.
 - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-  `gfx1100`, ROCm 7.2) with 245/245 CTest (43 HIP cases), measured on
-  `b972eaa`, but no HIP benchmark is recorded.
+  `gfx1100`, ROCm 7.2); the current suite is 297/297 at `56c11ac` and the
+  previous 290/290 at `a610281` and 245/245 run at `b972eaa` are historical.
+  No HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
 - The P07 section records a sustained D2D copy reference (`409.733` GB/s at

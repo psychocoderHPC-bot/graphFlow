@@ -202,8 +202,9 @@ rebuilds the table from `binIds`, reserves one range per occupied entry, and
 hands out local ranks. A full table is a hard batch error. There is no dense
 fallback and no sort or scan.
 
-The example always uses the dense path because its flow has two bins. The hash
-path is selected by instantiating `TransformStage` with a `HashBinTable`. The
+The default feedback example flow has two bins and uses the dense path; the
+opt-in `--workload kernel` path can select the hash table. The hash path is
+selected by instantiating `TransformStage` with a `HashBinTable`. The
 dense/hash threshold is the static `Config::denseBinLimit = 1024`, not a
 measured crossover.
 

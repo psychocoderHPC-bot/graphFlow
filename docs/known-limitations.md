@@ -27,13 +27,14 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The HIP CTest run passes 245/245 with 43 HIP cases: 8 typed Flow
-cases, 24 particle CLI cases, 10 photon CLI cases, and 1 photon output case,
-measured on `b972eaa` and recorded in
-`/home/agent/final-hip-b972eaa/ctest.log`. `rocprof` v3 confirms the device
-kernels. GitHub-hosted HIP remains
-compile-only because its runners have no AMD GPU, so no HIP runtime claim is
-made for GitHub CI.
+ROCm 7.2. The current HIP CTest run passes **297/297** at `56c11ac`; the
+previous 290/290 at `a610281` is historical. The original gate passed 245/245
+with 43 HIP cases: 8 typed Flow cases, 24 particle CLI cases, 10 photon CLI
+cases, and 1 photon output case, measured on
+`b972eaa` and recorded in `/home/agent/final-hip-b972eaa/ctest.log`;
+`rocprof` v3 confirms the device kernels. That 245/245 total is historical.
+GitHub-hosted HIP remains compile-only because its runners have no AMD GPU, so
+no HIP runtime claim is made for GitHub CI.
 
 The HIP hash path, other AMD architectures, and an AMD `N=1e8` acceptance run
 remain unrecorded. `hal` reports `sharing=unknown`, so no HIP performance claim
@@ -43,8 +44,9 @@ result.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The `rosi_v100` CPU CTest passes 202/202 with
-OMP=ON Release. CPU OpenMP wall times at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
+spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 246/246; the
+`rosi_v100` 202/202 OMP=ON Release total is historical. CPU OpenMP wall times
+at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
 OMP=2 Q1 23.71 s, Q8 4.46 s. All histogram sums are exact and no hangs were
 observed. The previous multi-region pathology is not observed on `rosi_v100`
@@ -52,15 +54,18 @@ with passive spinning.
 
 ## TSAN is validated on rosi_v100 and runs in hosted CI; hal still cannot run it
 
-The full integrated TSAN CTest passes 210/210 with 0 reports in 202.83 s on
-`rosi_v100` at main `f3ef355` (non-PIE Debug with `alpaka_EXEC_CpuOmpBlocks=OFF`
-and `alpaka_DEP_OMP=OFF`). Since `gf/p10-sanitizers` (at `cf3bc8a`), hosted CI
-runs a dedicated `tsan` job on `ubuntu-latest` with the same accepted
-configuration (non-PIE, `GRAPHFLOW_ENABLE_OPENMP=OFF`,
-`alpaka_EXEC_CpuOmpBlocks=OFF`, `alpaka_DEP_OMP=OFF`). The P10 fwk394 evidence
-is ASAN+UBSAN 236/236, error-path leak 1/1, and TSAN 235/235 with 0 reports at
-`cf3bc8a`; the hosted `tsan` job runtime was not observed, and no H100 was
-used. The remaining limitation is configuration
+The last full integrated TSAN CTest passed 210/210 with 0 reports in 202.83 s
+on `rosi_v100` at `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` (non-PIE Debug
+with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). That suite
+predates the current 246-case suite, so no full TSAN result exists for
+`56c11ac`. Since `gf/p10-sanitizers` at
+`cf3bc8a72942b01c4a1ed32e4db7b260e22cb750` (merged as
+`2fefe54c6d32e9156be5c08ea497119d0bacc21e`), hosted CI runs a dedicated
+`tsan` job on `ubuntu-latest` with the same accepted configuration (non-PIE,
+`GRAPHFLOW_ENABLE_OPENMP=OFF`, `alpaka_EXEC_CpuOmpBlocks=OFF`,
+`alpaka_DEP_OMP=OFF`). The P10 fwk394 evidence is ASAN+UBSAN 236/236,
+error-path leak 1/1, and TSAN 235/235 with 0 reports at `cf3bc8a`; the hosted
+`tsan` job runtime was not observed, and no H100 was used. The remaining limitation is configuration
 dependent: with the default CpuOmpBlocks plus OpenMP the same suite fails
 105/210 with reports inside the alpaka async CPU queue. Those are upstream
 alpaka races, not graphFlow races, so the clean gate uses the
@@ -85,18 +90,17 @@ partition, scatter, and hash-scatter kernels now declare the trailing
 threshold; deduction and the instantiated signatures are unchanged. The test
 hook adapters keep `GraphRunner::Queue` and `Batch` out of non-template
 `std::function` construction, the other nvcc 12.6.85 frontend crash. With the
-workaround the `rosi_v100` V100 `sm_70` CTest passes 254/254 and the CPU CTest
-passes 202/202 in Release, and the `f3ef355` runs (CPU CTest 210/210, TSAN
-CTest 210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the
-same workaround. The `Debug` build was not re-run after the seven hash
-cases, so the measured `Debug` totals are the pre-hash 247/247 CUDA and 195/195
-CPU, and 254/254/202/202 are the expected (not-yet-re-run) `Debug` totals. The
-RNG main is preserved. The hash-path rerun remains open; H100 was not re-run in
-this validation. The full CUDA and HIP device suites were executed at
-`f3ef355`: CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
+workaround the historical `rosi_v100` V100 `sm_70` CTest passed 254/254 and
+the CPU CTest passed 202/202 in Release; the `f3ef355` runs (CPU 210/210, TSAN
+210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the same
+workaround. The `Debug` build was not re-run after the seven hash cases, so the
+measured historical `Debug` totals are the pre-hash 247/247 CUDA and 195/195
+CPU. The current tree is 246/246 CPU, 306/306 CUDA on `hal` A30 `sm_80`, and
+297/297 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
+rerun remains open; H100 was not used. The historical full device suites at
+`f3ef355` were CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
 HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
-shared `hal` host (correctness only). CPU was executed at `f3ef355` on fwk394
-Release (OMP, 210/210, 140.54 s, correctness only).
+shared `hal` host (correctness only).
 
 ## Throughput is a shared-host baseline for hal and fwk394
 
@@ -107,25 +111,28 @@ numbers. There is no variance study and no frozen regression target. The HIP
 run on `hal` is a correctness result only; `hal` sharing is unknown and no HIP
 performance number is recorded.
 
-`rosi_v100` is the exclusive validation platform, and the `N=1e8` CUDA
-acceptance run is recorded on it at main `f3ef355` (V100 SXM2-32GB, CUDA
-12.6.85 `sm_70`, Release, `C=8192`, `P=16384`, `T=128`, seed 42, max-visits
-64, three repetitions): Q1 194.685 s, Q2 9.093 s, Q8 7.676 s, 1.30e7
-particles/s at Q8, 260 rows, count sum exactly 100,000,000, peak 5702 MiB.
-Current `rosi_v100` results: CPU CTest 210/210 at `f3ef355` (OMP=ON Release)
-and the full integrated TSAN CTest 210/210 with 0 reports (202.83 s, non-PIE
-with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the measured
-historical totals at `2ad7d86` are CPU 202/202 and CUDA 254/254 on V100
-`sm_70` (CUDA 12.6.85, Release, both with the explicit concept-parameter
-workaround). The `Debug` build was not re-run after the seven hash cases
-(measured `Debug` 195/195 CPU, 247/247 CUDA pre-hash; 202/202 and 254/254
-expected but not re-run); CPU OpenMP wall times recorded (passive,
-`GOMP_SPINCOUNT=0`). No frozen regression target exists yet. H100 was not
-re-run in this validation. The full CUDA and HIP device suites were executed at
-`f3ef355`: CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
-HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
-shared `hal` host (correctness only). CPU was executed at `f3ef355` on fwk394
-Release (OMP, 210/210, 140.54 s, correctness only).
+`rosi_v100` is the exclusive validation platform. P07b, merged as `56c11ac`,
+re-ran the Q/C matrix on a V100-SXM2-32GB (CUDA 12.6.85, `sm_70`) at `N=1e8`,
+`C=8192`, `P=16384`, seed 42, three repetitions: the Q8 median is 12,987,013
+particles/s, with 260 rows summing to exactly 100,000,000, and the D2D copy
+reference remains 409.733 GB/s. The frozen target is 13,000,000 particles/s at
+Q8 with a 10 percent tolerance (floor 11,700,000) and the measured median
+passes. P07b also records the kernel-axis end-to-end matrix for scatter,
+dense/hash and the four distributions, but the public `Flow` graph still runs
+the dense path only. The earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
+particles/s) and the `f3ef355` run (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s) are
+historical.
+
+The current test totals are CPU 246/246, CUDA 306/306 on `hal` A30 `sm_80`, and
+HIP 297/297 on `hal` RX 7900 XTX; P07b adds 7/7 of those cases. The previous
+239/299/290 at `a610281` are historical. The `rosi_v100` CPU 210/210 and TSAN
+210/210 runs at `f3ef355` and the CPU 202/202 / CUDA 254/254 totals at `2ad7d86` are
+historical. The `Debug` build was not re-run after the seven hash cases
+(measured historical `Debug` 195/195 CPU and 247/247 CUDA). H100 was not used
+for this validation. The historical full CUDA and HIP device suites at
+`f3ef355` were CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
+HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), correctness
+only.
 
 H100 was not used for this validation; no H100 claim is made and no H100
 baseline is recorded. H100 remains preliminary. The earlier JURECA
@@ -259,19 +266,20 @@ used by the example.
 ## CI is hosted and GPU builds are compile-only
 
 CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
-(`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 202
-CPU CTest cases in Release and Debug (210 on the current branch),
-`sanitizers` runs ASAN+UBSAN plus a dedicated `leak` step over the error
-paths, and a separate `tsan` job runs the host scheduler under TSAN (non-PIE,
-OMP off, CpuOmpBlocks off). The CUDA and HIP jobs compile only, because the
-hosted runners have no NVIDIA or AMD GPU; a CUDA or HIP runtime gate needs a
-device host. TSAN is validated on the exclusive `rosi_v100` host (210/210,
-0 reports, 202.83 s at `f3ef355`, non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF`
-and `alpaka_DEP_OMP=OFF`); the P10 fwk394 run at `cf3bc8a` is ASAN+UBSAN
-236/236, leak 1/1, TSAN 235/235 with 0 reports, and the hosted `tsan` and
-`leak` runtimes were not observed on this branch. No self-hosted runner,
-project GPU label, or GitLab pipeline is configured, and no H100 was used. The
-local commands in `docs/build.md` remain the documented entry points.
+(`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 246
+CPU CTest cases in Release and Debug, `sanitizers` runs ASAN+UBSAN plus a
+dedicated `leak` step over the error paths, and a separate `tsan` job runs the
+host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off). The CUDA and
+HIP jobs compile only, because the hosted runners have no NVIDIA or AMD GPU; a
+CUDA or HIP runtime gate needs a device host. TSAN was validated on the
+exclusive `rosi_v100` host (210/210, 0 reports, 202.83 s at `f3ef355`,
+non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
+run is historical and no full TSAN run exists for `56c11ac`. The P10 fwk394 run
+at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235 with 0 reports, and
+the hosted `tsan` and `leak` runtimes were not observed. No self-hosted
+runner, project GPU label, or GitLab pipeline is configured, and no H100 was
+used. The local commands in `docs/build.md` remain the documented entry
+points.
 
 ## Accelerator test coverage is partial
 
@@ -284,15 +292,15 @@ equality cases are `example.particle_feedback.cross_backend.Q{1,2,8}`
 each compiled backend runs the same seed/N/C/P/Q and the cases require exact
 sorted `weight,count` row equality against the first backend plus a count sum
 of `N`, so a compiled backend without a usable device fails the case instead
-of skipping. Measured CPU 210/210 at `751c8a8` with all three Q cases exact,
-the device evidence is two build pairs, not one three-backend run: CUDA and
-HIP are mutually exclusive in a single build, and the CPU backend stays
-enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair each
-ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with the
-row comparisons exact against the CPU reference. The full device suites were
-executed at `f3ef355`: CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s)
-and HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
-shared `hal` host, correctness only.
+of skipping. The historical CPU total was 210/210 at `751c8a8` with all three Q
+cases exact. The device evidence is two build pairs, not one three-backend run:
+CUDA and HIP are mutually exclusive in a single build, and the CPU backend
+stays enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair
+each ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with
+the row comparisons exact against the CPU reference. The current full device
+suites are CUDA 306/306 on `hal` A30 `sm_80` (CUDA 13.4) and HIP 297/297 on
+`hal` RX 7900 XTX `gfx1100` (ROCm 7.2), correctness only; the `f3ef355` totals
+264/264 and 255/255 are historical.
 
 ## Failure injection is test-only
 
@@ -311,15 +319,28 @@ device failure cases were executed at `e6e1a97` on `hal`: CUDA 277/277 on the
 A30 `sm_80` and HIP 268/268 on the RX 7900 XTX `gfx1100`, both correctness only
 because `hal` is shared.
 
-## Hash path evidence is CPU-only (low-level)
+## Hash path evidence is low-level (CPU and P07b CUDA)
 
-The dense path is the correctness reference and the only path the example uses.
-The shared-memory hash path is exercised by CPU integration tests (low-level
-only). It compiles for CUDA and HIP, but no hash-path accelerator execution is
-recorded. The `rosi_v100` hash-path rerun is pending. The dense/hash threshold
-is the static 1024-bin limit, not a measured crossover. The public `Flow` API
-is the dense path; the shared-memory hash path is low-level (exercised by the
->1024-bin low-level tests) and is not a public-API change.
+The dense path is the correctness reference and the only path the public `Flow`
+graph uses. The shared-memory hash path is exercised by CPU integration tests
+and by P07b at kernel level on `rosi_v100` CUDA through the opt-in
+`--workload kernel` path. It compiles for CUDA and HIP, but no public `Flow`
+hash execution is recorded. The public-flow hash-path rerun remains pending.
+The dense limit stays at 1024 bins from the P03 fwk394 CPU measurement; no
+end-to-end device crossover is recorded. The public `Flow` API is the dense
+path; the shared-memory hash path is low-level (exercised by the >1024-bin
+low-level tests and the P07b kernel workload) and is not a public-API change.
+
+## Result storage is explicit v1
+
+The example stores one `uint32_t` final weight per particle, so the result
+buffer is `O(N)` and `4 B/weight` (about 0.4 GB at `N=1e8`). On the device the
+run keeps `weights` plus `cappedFlags`, both `uint32_t`, for `8 B/particle`
+(about 0.8 GB at `N=1e8`, 8 GB at `N=1e9`). The host transient is about
+`24 B/particle` (the two host copies, the result vector, and the sort input),
+about 2.4 GB at `N=1e8` and 24 GB at `N=1e9`. The histogram is produced with an
+`O(N log N)` sort. v1 keeps this explicit buffer; a device histogram is added
+only when `8N` bytes plus the payload pool exceeds the device budget.
 
 ## Other open items
 
@@ -329,28 +350,28 @@ is the dense path; the shared-memory hash path is low-level (exercised by the
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
   build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
-  typed Flow cases. The historical integrated CTest totals are 194/194 CPU on
-  fwk394 and 246/246 CUDA on hal (historical). The `rosi_v100` CPU CTest
-  passes 202/202 (OMP=ON Release) and the CUDA CTest on V100 `sm_70`
-  passes 254/254 in Release with the explicit concept-parameter
-  workaround; the `Debug` build was not re-run after the seven hash cases
-  (measured `Debug` 195/195 CPU, 247/247 CUDA pre-hash; 202/202 and 254/254
-  expected but not re-run). The HIP CTest on `hal` (RX 7900 XTX `gfx1100`,
-  ROCm 7.2) passes 245/245 with 43 HIP cases, measured on `b972eaa`.
+  typed Flow cases. The current CTest totals are 246/246 CPU, 306/306 CUDA on
+  `hal` A30 `sm_80`, and 297/297 HIP on `hal` RX 7900 XTX; the previous
+  239/299/290 at `a610281` are historical. The other historical integrated
+  totals are 194/194 CPU on fwk394, 246/246 CUDA on hal, 202/202 CPU
+  and 254/254 CUDA on `rosi_v100` V100 `sm_70`, and 245/245 HIP at `b972eaa`.
+  The `Debug` build was not re-run after the seven hash cases (measured
+  historical `Debug` 195/195 CPU and 247/247 CUDA).
 - The historical CPU/CUDA `N=1e6` histogram equality check was a manual diff,
   not an automated test, and was not repeated on the integrated revision; the
   automated cross-backend equality cases above (Q1/Q2/Q8, `N=1e6`) replace the
-  manual evidence; the full CUDA and HIP device suites were executed at
-  `f3ef355` (CUDA 264/264 on `hal` A30 `sm_80`, HIP 255/255 on `hal`
-  `gfx1100`).
+  manual evidence. The historical full device suites at `f3ef355` were
+  CUDA 264/264 on `hal` A30 `sm_80` and HIP 255/255 on `hal` `gfx1100`.
 - Release builds do not detect corrupted photon payload state per event. Host
   setup validates the slab and configuration once. Configure
   `-DGRAPHFLOW_ENABLE_DEBUG_VALIDATION=ON` to compile the per-event checks in
   `graphFlow/flow/Debug.hpp` and `PhotonDebug.hpp`; the option defaults to `ON`
   for `Debug` and `OFF` for `Release`/`RelWithDebInfo`.
-- The integrated T13 benchmark is recorded in `docs/benchmarks.md`; its wall
-  times remain shared-host baselines, and no frozen regression target exists
-  yet.
-- The result buffer is `O(N)` (about 400 MB at `N=1e8`).
+- The P07b exclusive measurement is recorded in `docs/benchmarks.md`; its frozen
+  target is 13,000,000 particles/s at `N=1e8`, Q=8, with a 10 percent
+  tolerance, and the measured P07b median 12,987,013 passes. The P07 run and
+  the older T13 wall times remain historical/shared-host baselines.
+- The result buffer is `O(N)`, `4 B/weight`, with the explicit v1 policy and
+  the device/host costs above.
 - The `sm_75` RTX 2080 Ti path is a documented build target, not a measured run.
 - The hash load factor (`2*T` entries by default) has not been measured.
