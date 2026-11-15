@@ -97,7 +97,9 @@ namespace graphFlow::particle
                 std::uint32_t& allocated) { return stage.advance(queue, batch, allocated); },
             [&stage](typename Runner::Batch const& batch, std::vector<ChunkDescriptor>& outputs)
             { stage.finish(batch, outputs); },
-            [&stage]()
+            // Default capture: clang reports an explicit `stage` capture as unused when the
+            // requires-expression discards the abort branch for a stage without abort().
+            [&]()
             {
                 if constexpr(requires { stage.abort(); })
                     stage.abort();

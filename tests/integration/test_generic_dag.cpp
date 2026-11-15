@@ -399,8 +399,8 @@ namespace
 
         graphFlow::GraphBuilder<TDevice> builder;
         auto const sourceId
-            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
-        builder.addNode(graphFlow::NodeRole::transform, "first", 1u, graphFlow::RouteTable{{2u}}, first);
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{1u}, source);
+        builder.addNode(graphFlow::NodeRole::transform, "first", 1u, graphFlow::RouteTable{2u}, first);
         builder.addNode(graphFlow::NodeRole::transform, "second", 2u, graphFlow::RouteTable{{3u, 1u}}, second);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, numParticles, liveParticles);
@@ -522,7 +522,7 @@ TEST_CASE("generic DAG rejects invalid routes and sources", "[integration][graph
     {
         graphFlow::GraphBuilder<Device> builder;
         auto const sourceId
-            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{5u}}, source);
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{5u}, source);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::invalid_argument); // route out of range
@@ -530,17 +530,17 @@ TEST_CASE("generic DAG rejects invalid routes and sources", "[integration][graph
     {
         graphFlow::GraphBuilder<Device> builder;
         auto const sourceId
-            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
-        builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{0u}}, transform);
+            = builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{1u}, source);
+        builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{0u}, transform);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         builder.setSource(sourceId, 0u);
         CHECK_THROWS_AS(builder.build(), std::invalid_argument); // route back to source
     }
     {
         graphFlow::GraphBuilder<Device> builder;
-        builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{{1u}}, source);
+        builder.addNode(graphFlow::NodeRole::source, "source", 1u, graphFlow::RouteTable{1u}, source);
         auto const transformId
-            = builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{{2u}}, transform);
+            = builder.addNode(graphFlow::NodeRole::transform, "transform", 1u, graphFlow::RouteTable{2u}, transform);
         builder.addNode(graphFlow::NodeRole::sink, "sink", 0u, graphFlow::RouteTable{}, sink);
         CHECK_THROWS_AS(builder.setSource(transformId, 0u), std::invalid_argument); // not a source
     }
