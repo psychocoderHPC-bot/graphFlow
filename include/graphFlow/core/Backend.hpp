@@ -19,14 +19,15 @@ namespace graphFlow
      *
      * The enum is always complete, independent of the compiled alpaka backends, so the CLI can
      * accept every name and report a configuration error for a backend that was not built. The
-     * actual device selection is gated by ALPAKA_LANG_CUDA/ALPAKA_LANG_HIP, which alpaka derives
-     * from the compiler in use.
+     * actual device selection is gated by ALPAKA_LANG_CUDA, ALPAKA_LANG_HIP and ALPAKA_LANG_ONEAPI,
+     * which alpaka derives from the compiler in use.
      */
     enum class Backend
     {
         cpu,
         cuda,
-        hip
+        hip,
+        sycl
     };
 
     inline std::string_view backendName(Backend backend)
@@ -39,6 +40,8 @@ namespace graphFlow
             return "cuda";
         case Backend::hip:
             return "hip";
+        case Backend::sycl:
+            return "sycl";
         }
         return "unknown";
     }
@@ -52,6 +55,8 @@ namespace graphFlow
             return Backend::cuda;
         if(name == "hip")
             return Backend::hip;
+        if(name == "sycl")
+            return Backend::sycl;
         return std::nullopt;
     }
 
@@ -87,6 +92,12 @@ namespace graphFlow
 #else
             return false;
 #endif
+        case Backend::sycl:
+#if ALPAKA_LANG_ONEAPI
+            return true;
+#else
+            return false;
+#endif
         }
         return false;
     }
@@ -95,7 +106,8 @@ namespace graphFlow
     {
         auto const parsed = parseBackend(name);
         if(!parsed)
-            throw BackendError{"graphFlow: unknown backend '" + std::string{name} + "' (expected cpu, cuda or hip)"};
+            throw BackendError{
+                "graphFlow: unknown backend '" + std::string{name} + "' (expected cpu, cuda, hip or sycl)"};
         return *parsed;
     }
 
@@ -109,6 +121,9 @@ namespace graphFlow
         case Backend::hip:
             throw BackendUnavailable{"graphFlow: backend 'hip' is not compiled into this build; reconfigure with "
                                      "-DGRAPHFLOW_ENABLE_HIP=ON and a HIP toolkit"};
+        case Backend::sycl:
+            throw BackendUnavailable{"graphFlow: backend 'sycl' is not compiled into this build; reconfigure with "
+                                     "-DGRAPHFLOW_ENABLE_SYCL=ON and the Intel oneAPI DPC++ compiler (icpx)"};
         case Backend::cpu:
             break;
         }
@@ -118,9 +133,10 @@ namespace graphFlow
     /** Select one device of an explicit alpaka api/deviceKind pair and run `callback` on it.
      *
      * The selector is created from the exact tags in the pinned `alpaka/tag.hpp`:
-     * `api::host`/`deviceKind::cpu`, `api::cuda`/`deviceKind::nvidiaGpu`, and
-     * `api::hip`/`deviceKind::amdGpu`. An unavailable backend throws `BackendUnavailable`; an
-     * out-of-range device index throws `std::out_of_range` instead of constructing a device.
+     * `api::host`/`deviceKind::cpu`, `api::cuda`/`deviceKind::nvidiaGpu`,
+     * `api::hip`/`deviceKind::amdGpu`, and `api::oneApi`/`deviceKind::intelGpu`. An unavailable
+     * backend throws `BackendUnavailable`; an out-of-range device index throws
+     * `std::out_of_range` instead of constructing a device.
      */
     template<typename TApi, typename TDeviceKind, typename TCallback>
     decltype(auto) withSelectedDevice(
@@ -174,6 +190,15 @@ namespace graphFlow
                 backend,
                 alpaka::api::hip,
                 alpaka::deviceKind::amdGpu,
+                deviceIndex,
+                std::forward<TCallback>(callback));
+#endif
+#if ALPAKA_LANG_ONEAPI
+        if(backend == Backend::sycl)
+            return withSelectedDevice(
+                backend,
+                alpaka::api::oneApi,
+                alpaka::deviceKind::intelGpu,
                 deviceIndex,
                 std::forward<TCallback>(callback));
 #endif

@@ -42,4 +42,16 @@ namespace graphFlow::test
         return selector.makeDevice(0u);
     }
 #endif
+
+#if defined(ALPAKA_LANG_ONEAPI) && ALPAKA_LANG_ONEAPI
+    /** Create the first oneAPI Intel GPU or fail; a compiled SYCL build must not skip its tests. */
+    inline auto makeSyclDevice()
+    {
+        auto selector = alpaka::onHost::makeDeviceSelector(alpaka::api::OneApi{}, alpaka::deviceKind::intelGpu);
+        if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+            throw std::runtime_error{
+                "SYCL is compiled in but no Intel GPU is visible; this test requires real hardware"};
+        return selector.makeDevice(0u);
+    }
+#endif
 } // namespace graphFlow::test

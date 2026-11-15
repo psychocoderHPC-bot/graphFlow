@@ -26,6 +26,7 @@ TEST_CASE("CPU backend selection creates a host device", "[backend]")
     CHECK(parseBackend("cpu") == Backend::cpu);
     CHECK(parseBackend("cuda") == Backend::cuda);
     CHECK(parseBackend("hip") == Backend::hip);
+    CHECK(parseBackend("sycl") == Backend::sycl);
     CHECK_FALSE(parseBackend("tpu").has_value());
     CHECK(isBackendCompiled(Backend::cpu));
 
@@ -58,12 +59,26 @@ TEST_CASE("uncompiled backends report the matching CMake option", "[backend]")
 {
     using namespace graphFlow;
 
-    for(Backend const backend : {Backend::cuda, Backend::hip})
+    for(Backend const backend : {Backend::cuda, Backend::hip, Backend::sycl})
     {
         if(isBackendCompiled(backend))
             continue;
 
-        std::string expectedFlag = backend == Backend::cuda ? "GRAPHFLOW_ENABLE_CUDA" : "GRAPHFLOW_ENABLE_HIP";
+        std::string expectedFlag;
+        switch(backend)
+        {
+        case Backend::cuda:
+            expectedFlag = "GRAPHFLOW_ENABLE_CUDA";
+            break;
+        case Backend::hip:
+            expectedFlag = "GRAPHFLOW_ENABLE_HIP";
+            break;
+        case Backend::sycl:
+            expectedFlag = "GRAPHFLOW_ENABLE_SYCL";
+            break;
+        case Backend::cpu:
+            break;
+        }
         try
         {
             withBackendDevice(backend, 0u, [](auto, Backend, std::string const&) { return 0; });
