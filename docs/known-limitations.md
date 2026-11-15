@@ -27,8 +27,9 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The current HIP CTest run passes **297/297** at `56c11ac`; the
-previous 290/290 at `a610281` is historical. The original gate passed 245/245
+ROCm 7.2. The current HIP CTest run passes **298/298** at `88de14f`; the
+previous 297/297 at `56c11ac` and the 290/290 at `a610281` are historical. The
+original gate passed 245/245
 with 43 HIP cases: 8 typed Flow cases, 24 particle CLI cases, 10 photon CLI
 cases, and 1 photon output case, measured on
 `b972eaa` and recorded in `/home/agent/final-hip-b972eaa/ctest.log`;
@@ -44,7 +45,7 @@ result.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 246/246; the
+spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 247/247; the
 `rosi_v100` 202/202 OMP=ON Release total is historical. CPU OpenMP wall times
 at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
@@ -56,9 +57,9 @@ with passive spinning.
 
 The last full integrated TSAN CTest passed 210/210 with 0 reports in 202.83 s
 on `rosi_v100` at `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` (non-PIE Debug
-with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). That suite
-predates the current 246-case suite, so no full TSAN result exists for
-`56c11ac`. Since `gf/p10-sanitizers` at
+ with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). That suite
+ predates the current 247-case suite, so no full TSAN result exists for
+ `88de14f`. Since `gf/p10-sanitizers` at
 `cf3bc8a72942b01c4a1ed32e4db7b260e22cb750` (merged as
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e`), hosted CI runs a dedicated
 `tsan` job on `ubuntu-latest` with the same accepted configuration (non-PIE,
@@ -95,8 +96,8 @@ the CPU CTest passed 202/202 in Release; the `f3ef355` runs (CPU 210/210, TSAN
 210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the same
 workaround. The `Debug` build was not re-run after the seven hash cases, so the
 measured historical `Debug` totals are the pre-hash 247/247 CUDA and 195/195
-CPU. The current tree is 246/246 CPU, 306/306 CUDA on `hal` A30 `sm_80`, and
-297/297 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
+ CPU. The current tree is 247/247 CPU, 307/307 CUDA on `hal` A30 `sm_80`, and
+ 298/298 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
 rerun remains open; H100 was not used. The historical full device suites at
 `f3ef355` were CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
 HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
@@ -123,9 +124,10 @@ the dense path only. The earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
 particles/s) and the `f3ef355` run (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s) are
 historical.
 
-The current test totals are CPU 246/246, CUDA 306/306 on `hal` A30 `sm_80`, and
-HIP 297/297 on `hal` RX 7900 XTX; P07b adds 7/7 of those cases. The previous
-239/299/290 at `a610281` are historical. The `rosi_v100` CPU 210/210 and TSAN
+The current test totals are CPU 247/247, CUDA 307/307 on `hal` A30 `sm_80`, and
+HIP 298/298 on `hal` RX 7900 XTX; P07b adds 7/7 of those cases. The previous
+246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281` are
+historical. The `rosi_v100` CPU 210/210 and TSAN
 210/210 runs at `f3ef355` and the CPU 202/202 / CUDA 254/254 totals at `2ad7d86` are
 historical. The `Debug` build was not re-run after the seven hash cases
 (measured historical `Debug` 195/195 CPU and 247/247 CUDA). H100 was not used
@@ -159,11 +161,11 @@ chunk count that fits the default budget rather than being allocated as-is.
 The chunk generation and the per-chunk reader-lease count are 32-bit counters
 that are checked on every increment: the storage rejects the increment that
 would wrap either counter. `ChunkPool` enforces this in its own in-class
-implementation. The shared `ChunkLedger` (used by `PayloadSlotStorage`) does
-not currently apply the same check; its generation and lease counters can wrap
-after 2^32 increments per chunk. This is a theoretical limit: 2^32 release
-cycles of a single chunk in one run is not reachable in practice, but it is a
-documented divergence between the two implementations. A slot-based pool
+implementation. The shared `ChunkLedger` (used by `PayloadSlotStorage`) now
+applies the same checked increment (PR #58, merged as
+`88de14f691a51edda5ad48e153dbbe353bef7c9e`), so its generation and lease
+counters raise on 32-bit overflow instead of wrapping after 2^32 increments per
+chunk. A slot-based pool
 remains the next memory optimization.
 
 ## In-flight depth is opt-in
@@ -282,8 +284,8 @@ host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off). The CUDA and
 HIP jobs compile only, because the hosted runners have no NVIDIA or AMD GPU; a
 CUDA or HIP runtime gate needs a device host. TSAN was validated on the
 exclusive `rosi_v100` host (210/210, 0 reports, 202.83 s at `f3ef355`,
-non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
-run is historical and no full TSAN run exists for `56c11ac`. The P10 fwk394 run
+ non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
+ run is historical and no full TSAN run exists for `88de14f`. The P10 fwk394 run
 at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235 with 0 reports, and
 the hosted `tsan` and `leak` runtimes were not observed. No self-hosted
 runner, project GPU label, or GitLab pipeline is configured, and no H100 was
@@ -306,9 +308,9 @@ cases exact. The device evidence is two build pairs, not one three-backend run:
 CUDA and HIP are mutually exclusive in a single build, and the CPU backend
 stays enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair
 each ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with
-the row comparisons exact against the CPU reference. The current full device
-suites are CUDA 306/306 on `hal` A30 `sm_80` (CUDA 13.4) and HIP 297/297 on
-`hal` RX 7900 XTX `gfx1100` (ROCm 7.2), correctness only; the `f3ef355` totals
+ the row comparisons exact against the CPU reference. The current full device
+ suites are CUDA 307/307 on `hal` A30 `sm_80` (CUDA 13.4) and HIP 298/298 on
+ `hal` RX 7900 XTX `gfx1100` (ROCm 7.2), correctness only; the `f3ef355` totals
 264/264 and 255/255 are historical.
 
 ## Failure injection is test-only
@@ -324,7 +326,8 @@ updater results are detected from real device work. Real-driver fault
 injection remains an open gap (see
 [missing.md](missing.md), asynchronous failure propagation), so the failure
 suite does not claim full coverage of asynchronous device errors. The five
-device failure cases were executed at `e6e1a97` on `hal`: CUDA 277/277 on the
+ device failure cases were executed at `10c1733770e16ebaecc74513034e6d327924503c`
+ on `hal`: CUDA 277/277 on the
 A30 `sm_80` and HIP 268/268 on the RX 7900 XTX `gfx1100`, both correctness only
 because `hal` is shared.
 
@@ -359,10 +362,11 @@ only when `8N` bytes plus the payload pool exceeds the device budget.
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
   build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
-  typed Flow cases. The current CTest totals are 246/246 CPU, 306/306 CUDA on
-  `hal` A30 `sm_80`, and 297/297 HIP on `hal` RX 7900 XTX; the previous
-  239/299/290 at `a610281` are historical. The other historical integrated
-  totals are 194/194 CPU on fwk394, 246/246 CUDA on hal, 202/202 CPU
+   typed Flow cases. The current CTest totals are 247/247 CPU, 307/307 CUDA on
+   `hal` A30 `sm_80`, and 298/298 HIP on `hal` RX 7900 XTX; the previous
+   246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281`
+   are historical. The other historical integrated totals are 194/194 CPU on
+   fwk394, 246/246 CUDA on hal, 202/202 CPU
   and 254/254 CUDA on `rosi_v100` V100 `sm_70`, and 245/245 HIP at `b972eaa`.
   The `Debug` build was not re-run after the seven hash cases (measured
   historical `Debug` 195/195 CPU and 247/247 CUDA).

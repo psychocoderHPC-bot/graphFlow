@@ -3,39 +3,41 @@
 
 # graphFlow acceptance record
 
-## Current state at `56c11ac`
+## Current state at `88de14f`
 
 This is the canonical current-state block. Every older total in this document is
-historical. Code main is `56c11acbca6d10ea82fd85d213abcb4f9050dbf8`
-(P07b merged; the `a610281` docs run is the previous total).
+historical. Code main is `88de14f691a51edda5ad48e153dbbe353bef7c9e`
+(P02b `ChunkLedger` wrap check merged; the `56c11ac` run is the previous
+total).
 
 | Configuration | Host / device | Toolchain | Result |
 | --- | --- | --- | --- |
-| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **246/246 passed** |
-| CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **306/306 passed** |
-| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2.0, `amdclang++` Clang 22.0.0, same pins | **297/297 passed** |
+| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **247/247 passed** |
+| CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **307/307 passed** |
+| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **298/298 passed** |
 
 No test is skipped or filtered. CTest reports `100% tests passed, 0 tests
 failed` for each suite, and a compiled backend without a usable device fails its
 cases instead of skipping. P07b adds 7/7 cases (five `[kernel-axes]` integration
 cases and two CLI-contract cases); those seven are included in the totals above.
-The previous `a610281` totals 239/239, 299/299 and 290/290 are historical.
+The previous `56c11ac` totals 246/246, 306/306 and 297/297 and the earlier
+`a610281` totals 239/239, 299/299 and 290/290 are historical.
 `hal` reports `sharing=unknown` and `fwk394` is shared, so the runs are
 correctness results, not performance claims. H100 was not used.
 
 ## HAL acceptance record
 
-The HAL record covers the `56c11ac` device suites. Platform and pins:
+The HAL record covers the `d71935c` device suites. Platform and pins:
 
 | Item | Value |
 | --- | --- |
-| code main | `56c11acbca6d10ea82fd85d213abcb4f9050dbf8` |
+| code main (JUnit run) | `d71935c` (the current main `88de14f691a51edda5ad48e153dbbe353bef7c9e` is newer) |
 | alpaka | `eb677e8d7f70d79b35df25d9002f94ba669b6f44` (3.0.0) |
 | Catch2 | 3.4.0 |
 | CMake / Ninja | 3.28.3 / 1.11.1 |
 | CPU compiler | g++ 13.3 |
-| CUDA | 13.4, `sm_80`, NVIDIA A30 24 GiB on `hal` |
-| ROCm | 7.2.0, `amdclang++` Clang 22.0.0, `gfx1100`, AMD Radeon RX 7900 XTX on `hal` |
+| CUDA | 13.4, `sm_80`, NVIDIA A30 24 GiB on `hal`, driver 615.71.09 |
+| ROCm | 7.2, hipcc 7.2.26015, `gfx1100`, AMD Radeon RX 7900 XTX on `hal` |
 | C++ / build | C++20, Release, `-Dalpaka_COMPILE_PEDANTIC=ON` |
 
 Commands:
@@ -71,11 +73,12 @@ ROCR_VISIBLE_DEVICES=0 ctest --test-dir build-hip \
 
 Counts and no-skip: CPU **246/246**, CUDA **306/306**, HIP **297/297**; each
 log ends with `100% tests passed, 0 tests failed`. No label or configuration
-excluded a registered case from these runs. Raw CTest logs are outside the
-repository; the 306/297 excerpt is archived in
-`/tmp/graphFlow-p08-artifacts/rework-evidence.txt`. The `hal` driver version and
-a JUnit XML for these runs were not retained; those are the missing artifacts
-for the full HAL record.
+excluded a registered case from these runs. The retained JUnit XML reports 246
+CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
+were captured at `d71935c`, not the final `88de14f` totals (247/247, 307/307,
+298/298), which add the P02b `ChunkLedger` overflow test. The `hal` A30 driver
+is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
+archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
 
 ## P07 exclusive performance result
 
@@ -120,7 +123,7 @@ The last full integrated TSAN CTest is on `rosi_v100` at
 `alpaka_DEP_OMP=OFF`, and `GRAPHFLOW_ENABLE_OPENMP=OFF`. With the default
 CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the
 upstream alpaka async CPU queue, not graphFlow. That 210-case suite predates the
-current 246-case suite, so no full TSAN result exists for `56c11ac`.
+current 247-case suite, so no full TSAN result exists for `88de14f`.
 
 The hosted `tsan` job was added at
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e` (P10 branch commit
@@ -146,7 +149,7 @@ These totals are historical and are not the current state:
 | CPU CTest at `2ad7d86` on `rosi_v100` | **202/202 passed** (OMP=ON Release) |
 | CUDA CTest at `2ad7d86` on `rosi_v100` V100 `sm_70` | **254/254 passed** (CUDA 12.6.85) |
 | CPU / CUDA Debug at `rosi_v100`, pre-hash | **195/195** / **247/247** (not re-run after the hash cases) |
-| Device failure cases at `e6e1a97` | CUDA 277/277 on `hal` A30, HIP 268/268 on `hal` RX 7900 XTX |
+| Device failure cases at `10c1733770e16ebaecc74513034e6d327924503c` | CUDA 277/277 on `hal` A30, HIP 268/268 on `hal` RX 7900 XTX |
 | Historical integrated CPU / CUDA on fwk394 / hal | **194/194** / **246/246** |
 | FrameSpec revision `327f74f` | CPU 82/82, CUDA 86/86 |
 | PR-A graph API core at `60a34302` | CPU 97/97, CUDA 101/101 |
@@ -173,8 +176,9 @@ performance claim is made.
 
 ## HIP runtime validation on hal (historical record)
 
-The current HIP total is **297/297** at `56c11ac` (see the current-state block);
-the previous **290/290** at `a610281` is historical. The record below is the
+The current HIP total is **298/298** at `88de14f` (see the current-state block);
+the previous **297/297** at `56c11ac` and the **290/290** at `a610281` are
+historical. The record below is the
 original HIP runtime gate, measured on
 `b972eaa3bd778b81f2dca505d3662df710792bd9` (HIP runtime merge, PR #35).
 Platform: `hal`, AMD Radeon RX 7900 XTX (`gfx1100`), ROCm 7.2.0, `amdclang++`
@@ -222,9 +226,10 @@ The current builds are in the current-state block. Historical build records:
 
 ## Tests (historical)
 
-The current suites are CPU 246/246, CUDA 306/306, and HIP 297/297. The
-previous 239/239, 299/299 and 290/290 at `a610281` are historical. The table
-below records the earlier totals, including the intermediate branch counts:
+The current suites are CPU 247/247, CUDA 307/307, and HIP 298/298. The
+previous 246/246, 306/306 and 297/297 at `56c11ac` and the earlier 239/239,
+299/299 and 290/290 at `a610281` are historical. The table below records the
+earlier totals, including the intermediate branch counts:
 
 | Configuration | Result |
 | --- | --- |

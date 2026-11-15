@@ -4,7 +4,7 @@
 # Benchmarks
 
 This page contains the P07 exclusive measurement merged into `a610281`, the
-P07b Q/C re-run and kernel-axis matrix merged into current main `56c11ac`, the
+P07b Q/C re-run and kernel-axis matrix merged at `56c11ac`, the
 historical pre-T5/T7 baseline, and the historical integrated T13 result. Every
 number states its provenance. The full matrix, budget rejections, copy
 reference, kernel matrix, and raw-row provenance live in
@@ -265,9 +265,10 @@ H100 claim is made.
   numbers. The P07 table at the top is the exception: it is the recorded
   exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
   acceptance table is historical.
-- HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-  `gfx1100`, ROCm 7.2); the current suite is 297/297 at `56c11ac` and the
-  previous 290/290 at `a610281` and 245/245 run at `b972eaa` are historical.
+ - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
+   `gfx1100`, ROCm 7.2); the current suite is 298/298 at `88de14f` and the
+   previous 297/297 at `56c11ac`, the 290/290 at `a610281`, and the 245/245 run
+   at `b972eaa` are historical.
   No HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
