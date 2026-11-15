@@ -302,6 +302,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
+        tests/integration/test_aos_over_soa.cpp
         tests/integration/test_photon_scattering.cpp
     )
     if(GRAPHFLOW_ENABLE_CUDA)
@@ -310,6 +311,7 @@ if(GRAPHFLOW_BUILD_TESTS)
             PRIVATE
                 tests/unit/test_cuda_kernel.cpp
                 tests/integration/test_flow_execution_cuda.cpp
+                tests/integration/test_aos_over_soa_cuda.cpp
                 tests/integration/test_failure_paths_cuda.cpp
                 tests/integration/test_photon_scattering_cuda.cpp
         )
@@ -321,6 +323,7 @@ if(GRAPHFLOW_BUILD_TESTS)
             graphFlow_tests
             PRIVATE
                 tests/integration/test_flow_execution_hip.cpp
+                tests/integration/test_aos_over_soa_hip.cpp
                 tests/integration/test_failure_paths_hip.cpp
         )
     endif()
@@ -333,6 +336,7 @@ if(GRAPHFLOW_BUILD_TESTS)
             PRIVATE
                 tests/unit/test_sycl_kernel.cpp
                 tests/integration/test_flow_execution_sycl.cpp
+                tests/integration/test_aos_over_soa_sycl.cpp
                 tests/integration/test_failure_paths_sycl.cpp
                 tests/integration/test_photon_scattering_sycl.cpp
                 tests/integration/test_async_execution_sycl.cpp

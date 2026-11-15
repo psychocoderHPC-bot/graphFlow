@@ -161,3 +161,86 @@ TEST_CASE("SoA attribute storage keeps one column per attribute and row slots", 
         storage.proxy<graphFlow::Set<IdTag>>(static_cast<std::uint32_t>(storage.slotCount())),
         std::invalid_argument);
 }
+
+TEST_CASE("record proxies expose only their set and copy every attribute", "[attributes][static]")
+{
+    using Narrow = graphFlow::Set<IdTag>;
+    using Wide = graphFlow::Set<PropertyTag, VisitTag>;
+
+    ParticleRecord record{13u, 2u, 5u, 1u};
+
+    auto narrow = record.proxy<Narrow>();
+    CHECK(narrow.get<IdTag>() == 13u);
+    narrow.set<IdTag>(21u);
+    CHECK(record.get<IdTag>() == 21u);
+    // The node subset does not hide the other attributes from the record.
+    CHECK(record.get<PropertyTag>() == 2u);
+    CHECK(record.get<WeightTag>() == 5u);
+    CHECK(record.get<VisitTag>() == 1u);
+
+    auto wide = record.proxy<Wide>();
+    wide.set<PropertyTag>(7u);
+    wide.set<VisitTag>(9u);
+    CHECK(record.get<PropertyTag>() == 7u);
+    CHECK(record.get<VisitTag>() == 9u);
+    CHECK(record.get<WeightTag>() == 5u);
+
+    // Copying a narrow proxy to a record copies every attribute, including the ones outside the
+    // declared subset, so a stage that only names one attribute cannot drop the rest.
+    ParticleRecord copy = narrow;
+    CHECK(copy.get<IdTag>() == 21u);
+    CHECK(copy.get<PropertyTag>() == 7u);
+    CHECK(copy.get<WeightTag>() == 5u);
+    CHECK(copy.get<VisitTag>() == 9u);
+
+    // store() of a full record through a narrow proxy forwards the full record as well.
+    ParticleRecord const replacement{3u, 4u, 6u, 8u};
+    narrow.store(replacement);
+    CHECK(record.get<IdTag>() == 3u);
+    CHECK(record.get<PropertyTag>() == 4u);
+    CHECK(record.get<WeightTag>() == 6u);
+    CHECK(record.get<VisitTag>() == 8u);
+
+    // A const record yields a read-only proxy; set() is unavailable on it.
+    ParticleRecord const& constRecord = record;
+    auto constProxy = constRecord.proxy<Narrow>();
+    CHECK(constProxy.get<IdTag>() == 3u);
+    static_assert(std::same_as<
+                  typename decltype(constProxy)::access_type,
+                  graphFlow::detail::ConstRefRecordAccess<ParticleRecord>>);
+    static_assert(std::same_as<decltype(constProxy)::set_type, Narrow>);
+}
+
+TEST_CASE("attribute slot accounting matches the default payload storage", "[attributes][static]")
+{
+    using PairId = graphFlow::Field<IdTag, std::uint64_t>;
+    using PairWeight = graphFlow::Field<WeightTag, std::uint32_t>;
+    using PairAttributes = graphFlow::AttributeList<PairId, PairWeight>;
+    using PairColumns = graphFlow::SoAStorage<Device, PairId, PairWeight>;
+
+    // The slot is the natural AoS size of the attributes plus the 32-bit bin-id scratch word.
+    static_assert(PairAttributes::attributeBytes == sizeof(std::uint64_t) + sizeof(std::uint32_t));
+    static_assert(PairAttributes::scratchBytes == sizeof(std::uint32_t));
+    static_assert(PairAttributes::slotBytes == PairAttributes::attributeBytes + PairAttributes::scratchBytes);
+    static_assert(PairColumns::attributeBytes == PairAttributes::attributeBytes);
+    static_assert(PairColumns::scratchBytes == PairAttributes::scratchBytes);
+    static_assert(PairColumns::slotBytes == PairAttributes::slotBytes);
+
+    // The default particle storage keeps the historical per-slot payload size, so the attribute
+    // adapter is byte-identical to the pool it replaces.
+    static_assert(graphFlow::ParticleStorage<Device>::slotBytes == ParticleAttributes::slotBytes);
+    static_assert(ParticleAttributes::slotBytes == graphFlow::payloadBytesPerSlot);
+    static_assert(graphFlow::PayloadSlotStorage<Pair, Device>::slotBytes == sizeof(Pair));
+
+    auto device = graphFlow::test::makeCpuDevice();
+    PairColumns storage{device, 2u, 3u};
+    CHECK(storage.payloadBytes() == storage.slotCount() * PairColumns::slotBytes);
+    CHECK(storage.slotCount() == 6u);
+
+    // The scratch column covers every slot and stays independent of the attribute columns.
+    storage.storeRecord(5u, graphFlow::Record<PairId, PairWeight>{11u, 12u});
+    storage.binIds()[5u] = 2u;
+    CHECK(storage.binIds()[5u] == 2u);
+    CHECK(storage.column<IdTag>()[5u] == 11u);
+    CHECK(storage.column<WeightTag>()[5u] == 12u);
+}
