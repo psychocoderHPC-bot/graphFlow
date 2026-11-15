@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "graphFlow/core/BinPath.hpp"
+#include "graphFlow/core/ScatterMode.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -41,6 +44,22 @@ namespace graphFlow
         std::optional<std::uint32_t> numChunks;
         std::optional<std::uint32_t> frameCap;
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
+
+        // Measured partition-path axes.
+        /** Dense scatter strategy. Absence keeps `ScatterMode::SharedStaging`.
+         *
+         * `Direct` skips the per-tile shared histogram and reserves one device slot per particle.
+         * It is the compact reference and is only valid for the dense bin path; the run is
+         * rejected when combined with `BinPath::hash`.
+         */
+        std::optional<ScatterMode> scatterMode;
+        /** Bin-table path of every partition node. Absence keeps `BinPath::automatic`.
+         *
+         * `automatic` selects dense up to `Config::denseBinLimit` bins and hash above it. An
+         * explicit `dense` above the limit, or a hash run with a tile size above
+         * `Config::hashBinTableTileSize`, is rejected before any device work.
+         */
+        std::optional<BinPath> binPath;
 
         // Device-policy knobs; see core/DevicePolicy.hpp.
         std::optional<std::uint32_t> policyWaves;

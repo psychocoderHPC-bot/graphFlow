@@ -135,7 +135,10 @@ namespace graphFlow
     concept PartitionClassifierFor = detail::OptionalContextInvocable<TClassifier, TPayload const&> && requires {
         { TClassifier::maxBins } -> std::convertible_to<std::uint32_t>;
         requires(TClassifier::maxBins > 0u);
-        requires(TClassifier::maxBins <= Config::denseBinLimit);
+        // The dense shared-table limit is a run-time check against the resolved bin path, not a
+        // classifier property: the hash path sizes its shared table from the tile width and may
+        // declare wider partitions. Keep a public upper bound so the host plan stays bounded.
+        requires(TClassifier::maxBins <= Config::maxSupportedBins);
     } && (std::integral<ClassifierBin<TClassifier, TPayload>> || std::is_enum_v<ClassifierBin<TClassifier, TPayload>>) && requires(ClassifierBin<TClassifier, TPayload> bin) {
         { static_cast<std::uint32_t>(bin) } -> std::convertible_to<std::uint32_t>;
     };

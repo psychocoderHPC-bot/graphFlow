@@ -160,6 +160,35 @@ TEST_CASE("config validation rejects degenerate values", "[config]")
     CHECK_NOTHROW(zeroParticles.validate());
 }
 
+TEST_CASE("config validation rejects unsupported bin-path combinations", "[config][hash]")
+{
+    graphFlow::Config dense;
+    dense.maxBins = graphFlow::Config::denseBinLimit + 1u;
+    dense.binPath = graphFlow::BinPath::dense;
+    CHECK_THROWS_AS(dense.validate(), std::invalid_argument);
+
+    graphFlow::Config automatic;
+    automatic.maxBins = 65536u;
+    CHECK(automatic.effectiveBinPath() == graphFlow::BinPath::hash);
+    CHECK_NOTHROW(automatic.validate());
+
+    graphFlow::Config hashDirect;
+    hashDirect.maxBins = 4096u;
+    hashDirect.binPath = graphFlow::BinPath::hash;
+    hashDirect.scatterMode = graphFlow::ScatterMode::Direct;
+    CHECK_THROWS_AS(hashDirect.validate(), std::invalid_argument);
+
+    graphFlow::Config hashWideTile;
+    hashWideTile.maxBins = 4096u;
+    hashWideTile.binPath = graphFlow::BinPath::hash;
+    hashWideTile.tileSize = graphFlow::Config::hashBinTableTileSize + 1u;
+    CHECK_THROWS_AS(hashWideTile.validate(), std::invalid_argument);
+
+    graphFlow::Config overLimit;
+    overLimit.maxBins = graphFlow::Config::maxSupportedBins + 1u;
+    CHECK_THROWS_AS(overLimit.validate(), std::invalid_argument);
+}
+
 TEST_CASE("hash output credit uses maxBins, not table entries or Q", "[reservation][hash]")
 {
     constexpr std::uint32_t capacity = 64u;

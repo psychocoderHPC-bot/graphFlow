@@ -50,8 +50,9 @@ The latest exclusive performance record is P07b on `rosi_v100` (merged as
 `P=16384`, Q=8 median 12,987,013 particles/s, with 260 rows summing to exactly
 100,000,000. The frozen 13,000,000 target with its 10 percent tolerance
 (floor 11,700,000) passes. P07b also records the kernel-axis end-to-end matrix
-for scatter, dense/hash and the four distributions; the public `Flow` graph
-still runs the dense path only. The earlier P07 run at `64d4a1e` (Q=8 median
+for scatter, dense/hash and the four distributions; the public `Flow` graph now
+routes the same axes through `Tuning`, while the recorded performance matrix
+remains kernel-level. The earlier P07 run at `64d4a1e` (Q=8 median
 7.690 s and 1.300e7 particles/s) is historical. The record is in
 [benchmarks](docs/benchmarks.md). H100 was not used for any current validation
 or performance claim; the earlier JURECA `jrc0880.jureca` run remains
@@ -420,8 +421,8 @@ once. See [numerics](docs/numerics.md).
 
 A shared-memory open-addressing hash table (`HashBinTable`, `2*T` entries by
 default) covers large bin counts. A full table is a hard batch error, not a
-dense fallback. The default example uses the dense path; the opt-in kernel
-workload can select the hash table.
+dense fallback. The default example uses the dense path; `Tuning::binPath`
+selects the hash table, and the opt-in kernel workload exposes that knob.
 
 Every kernel launch uses `FrameSpec` from `graphFlow/core/LaunchPolicy.hpp`.
 The frame count is
@@ -545,15 +546,16 @@ yet; that is an operator action and is not changed from this repository. See
   builds.
 - CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
   compile-only there, and no self-hosted runner is provisioned.
-- The dense/hash threshold is static. The public `Flow` API is the dense path;
-  hash classify/scatter stays low-level and is not a public-API change. The
-  opt-in `--workload kernel` path makes the P03 scatter mode, the dense/hash
-  bin table and the four distributions reachable end to end from the example,
-  so P07b measures scatter/dense/distribution at kernel level; it does not
-  route the public `Flow` graph through the hash table.
-- The hash path is CPU-tested (low-level); P07b also runs it at kernel level on
-  `rosi_v100` CUDA, but no public `Flow` CUDA/HIP hash execution is recorded.
-  The dense limit stays at the measured 1024-bin threshold.
+- The dense/hash threshold is static. The public `Flow` API routes both paths
+  through `Tuning::binPath` and both dense scatter modes through
+  `Tuning::scatterMode`, so the opt-in `--workload kernel` path makes the P03
+  scatter mode, the dense/hash bin table and the four distributions reachable
+  end to end through the public graph. P07b's recorded numbers remain
+  kernel-level; no public-API performance matrix is claimed.
+- The hash path is CPU-tested and runs through the public `Flow` API in the
+  new correctness cases; P07b also runs it at kernel level on `rosi_v100` CUDA.
+  No public `Flow` performance run or HIP `Direct` execution is recorded. The
+  dense limit stays at the measured 1024-bin threshold.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The older numbers in this README are
   historical and pre-T5/T7.

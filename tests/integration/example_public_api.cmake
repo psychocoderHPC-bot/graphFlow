@@ -15,6 +15,7 @@ set(user_files
     ParticleFunctors.hpp
     ParticleTypes.hpp
     ParticleFeedback.hpp
+    KernelAxes.hpp
     Cli.hpp
     main.cpp
 )

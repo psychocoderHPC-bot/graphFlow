@@ -105,10 +105,11 @@ staging versus direct 5.48 vs 15.85 ms (balanced), 2.13 vs 48.31 ms (one-hot),
 2.21 vs 37.25 ms (skewed), 4.19 vs 6.62 ms (sparse), and dense 4.06 ms versus
 5.11/4.90 ms for 2*T/4*T at B=1024. P07b did not re-measure those. The `Direct`
 scatter path was measured on CPU by P03 and on CUDA at kernel level by P07b; no
-HIP `Direct` execution is recorded. P07b closes the kernel-level scatter/dense/distribution gap and
-exercises the dense `direct` mode on `rosi_v100` CUDA; the public `Flow` graph
-still runs the dense path, so the measurement-matrix item stays open for that
-public path. HIP `Direct` remains unrecorded.
+HIP `Direct` performance run is recorded. P07b closes the kernel-level
+scatter/dense/distribution gap and exercises the dense `direct` mode on
+`rosi_v100` CUDA. The public `Flow` graph now routes the same axes, but no
+public-path performance matrix is recorded, so the measurement-matrix item
+stays open for those numbers.
 
 ## Historical environment
 

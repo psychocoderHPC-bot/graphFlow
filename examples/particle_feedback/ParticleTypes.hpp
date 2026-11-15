@@ -34,9 +34,9 @@ namespace graphFlow::particle
 
     /** Workload of the example binary.
      *
-     * `feedback` is the default public `Flow` graph. `kernel` runs the committed low-level
-     * Generate -> Transform -> Sink pipeline so the P03 scatter mode, the dense/hash bin path and
-     * the bin-occupancy distributions become selectable from the CLI. The two workloads share
+     * `feedback` is the default public `Flow` graph. `kernel` runs a Generate -> Transform -> Sink
+     * pipeline through the same public `Flow` API so the P03 scatter mode, the dense/hash bin path
+     * and the bin-occupancy distributions become selectable from the CLI. The two workloads share
      * C, P, T, Q and the frame cap.
      */
     enum class Workload : std::uint8_t
@@ -52,12 +52,8 @@ namespace graphFlow::particle
         direct // ScatterMode::Direct
     };
 
-    /** Bin-table path of the low-level transform stage. */
-    enum class BinPath : std::uint8_t
-    {
-        dense,
-        hash
-    };
+    /** Bin-table path of the kernel workload; routed through `Tuning::binPath`. */
+    using BinPath = graphFlow::BinPath;
 
     /** Bin-occupancy distribution of the kernel workload.
      *

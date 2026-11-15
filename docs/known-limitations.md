@@ -119,8 +119,9 @@ particles/s, with 260 rows summing to exactly 100,000,000, and the D2D copy
 reference remains 409.733 GB/s. The frozen target is 13,000,000 particles/s at
 Q8 with a 10 percent tolerance (floor 11,700,000) and the measured median
 passes. P07b also records the kernel-axis end-to-end matrix for scatter,
-dense/hash and the four distributions, but the public `Flow` graph still runs
-the dense path only. The earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
+dense/hash and the four distributions; the public `Flow` graph now routes those
+axes through `Tuning`, while the recorded matrix remains kernel-level. The
+earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
 particles/s) and the `f3ef355` run (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s) are
 historical.
 
@@ -331,17 +332,17 @@ suite does not claim full coverage of asynchronous device errors. The five
 A30 `sm_80` and HIP 268/268 on the RX 7900 XTX `gfx1100`, both correctness only
 because `hal` is shared.
 
-## Hash path evidence is low-level (CPU and P07b CUDA)
+## Hash path evidence is kernel-level; public routing added
 
-The dense path is the correctness reference and the only path the public `Flow`
-graph uses. The shared-memory hash path is exercised by CPU integration tests
-and by P07b at kernel level on `rosi_v100` CUDA through the opt-in
-`--workload kernel` path. It compiles for CUDA and HIP, but no public `Flow`
-hash execution is recorded. The public-flow hash-path rerun remains pending.
-The dense limit stays at 1024 bins from the P03 fwk394 CPU measurement; no
-end-to-end device crossover is recorded. The public `Flow` API is the dense
-path; the shared-memory hash path is low-level (exercised by the >1024-bin
-low-level tests and the P07b kernel workload) and is not a public-API change.
+The dense path is the correctness reference. The shared-memory hash path is
+exercised by CPU integration tests and by P07b at kernel level on `rosi_v100`
+CUDA through the opt-in `--workload kernel` path. The public `Flow` API now
+routes the same axes through `Tuning::binPath` and `Tuning::scatterMode`, and
+the kernel workload runs through `Flow`; the new CPU and device correctness
+cases cover dense shared/direct and hash shared. No public-API performance
+matrix and no HIP `Direct` execution are recorded, so the measurement-matrix
+item stays open for those numbers. The dense limit stays at 1024 bins from the
+P03 fwk394 CPU measurement; no end-to-end device crossover is recorded.
 
 ## Result storage is explicit v1
 

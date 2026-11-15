@@ -5,8 +5,10 @@
 #include "KernelAxes.hpp"
 #include "ParticleTypes.hpp"
 #include "TestDevice.hpp"
+#include "graphFlow/graph/ScatterKernel.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -140,4 +142,48 @@ TEST_CASE("kernel workload hash path handles sparse wide bins", "[integration][k
 {
     checkCase(Distribution::sparse, BinPath::hash, ScatterChoice::shared, 4096u);
     checkCase(Distribution::sparse, BinPath::hash, ScatterChoice::shared, 65536u);
+}
+
+TEST_CASE("kernel workload rejects unsupported public-Flow axis combinations", "[integration][kernel-axes]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+
+    Parameters parameters{};
+    parameters.numParticles = 64u;
+    parameters.chunkSize = 16u;
+    parameters.liveParticles = 64u;
+    parameters.tileSize = 128u;
+    parameters.batchChunks = 1u;
+
+    KernelOptions options{};
+
+    options.bins = 4096u;
+    options.binPath = BinPath::dense;
+    CHECK_THROWS_WITH(
+        graphFlow::particle::runKernelAxes(device, parameters, options),
+        Catch::Matchers::ContainsSubstring("dense kernel path"));
+
+    options = KernelOptions{};
+    options.bins = 64u;
+    options.binPath = BinPath::hash;
+    options.scatter = ScatterChoice::direct;
+    CHECK_THROWS_WITH(
+        graphFlow::particle::runKernelAxes(device, parameters, options),
+        Catch::Matchers::ContainsSubstring("dense-only"));
+
+    options = KernelOptions{};
+    options.bins = 4096u;
+    options.binPath = BinPath::hash;
+    parameters.tileSize = graphFlow::Config::hashBinTableTileSize + 1u;
+    CHECK_THROWS_WITH(
+        graphFlow::particle::runKernelAxes(device, parameters, options),
+        Catch::Matchers::ContainsSubstring("tile-size"));
+
+    options = KernelOptions{};
+    options.bins = 64u;
+    options.distribution = Distribution::sparse;
+    parameters.tileSize = 128u;
+    CHECK_THROWS_WITH(
+        graphFlow::particle::runKernelAxes(device, parameters, options),
+        Catch::Matchers::ContainsSubstring("sparse requires"));
 }

@@ -10,6 +10,7 @@
 #include "graphFlow/core/PayloadSlotStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/flow/Concepts.hpp"
+#include "graphFlow/flow/Debug.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/PayloadStorage.hpp"
 #include "graphFlow/flow/Status.hpp"
@@ -466,13 +467,17 @@ namespace graphFlow::detail
      * The selected bin is read from `binIds`, the updater runs once per emitted payload, and the
      * mutated payload is written to the planned output slot. `counts[T_B]` is the internal status
      * word; a checked updater overflow reports it and leaves the payload unchanged in the output.
+     *
+     * `TMode` selects the measured scatter strategy. `SharedStaging` is the historical default;
+     * `Direct` skips the shared histogram and reserves one device slot per particle.
      */
     template<
         typename TClassifier,
         typename TUpdate,
         typename TAccess,
         typename TBin = ClassifierBin<TClassifier, typename TAccess::Payload>,
-        std::uint32_t T_B = TClassifier::maxBins>
+        std::uint32_t T_B = TClassifier::maxBins,
+        ScatterMode TMode = ScatterMode::SharedStaging>
     struct PartitionScatterKernel
     {
         static_assert(T_B > 0u, "a partition needs at least one bin");
@@ -512,9 +517,266 @@ namespace graphFlow::detail
             Status status{&statusView[0u]};
 
             std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
-            auto tileCounts = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
-            auto tileBase = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
-            auto tileCursor = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
+
+            if constexpr(TMode == ScatterMode::Direct)
+            {
+                // One device atomic and one output write per particle. The table lookup is the
+                // same exact plan the shared-staging path uses, only the range reservation differs.
+                for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
+                {
+                    std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
+                    TileDescriptor const tile = tiles[tileIndex];
+                    std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                    std::uint32_t const count = tile.count;
+
+                    for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+                    {
+                        std::uint32_t const slotIn = inBase + static_cast<std::uint32_t>(i);
+                        std::uint32_t const bin = binIds[slotIn];
+                        std::uint32_t const j
+                            = onAcc::atomicAdd(acc, &next[bin], std::uint32_t{1u}, onAcc::scope::device);
+                        std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
+                        std::uint32_t const outputOffset = j % chunkCapacity;
+
+                        typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
+                        rng::Engine engine
+                            = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                        UpdateResult const result
+                            = applyUpdate(update, acc, engine, status, static_cast<TBin>(bin), payload);
+                        if(result == UpdateResult::invalid)
+                            status.set(StatusCode::invalid);
+                        else if(result == UpdateResult::overflow)
+                            status.set(StatusCode::overflow);
+                        if(result != UpdateResult::success)
+                            onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
+
+                        access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
+                    }
+                }
+            }
+            else
+            {
+                auto tileCounts
+                    = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
+                auto tileBase
+                    = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
+                auto tileCursor
+                    = onAcc::declareSharedMdArray<std::uint32_t, uniqueId()>(acc, CVec<std::uint32_t, T_B>{});
+
+                for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
+                {
+                    std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
+                    TileDescriptor const tile = tiles[tileIndex];
+                    std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                    std::uint32_t const count = tile.count;
+
+                    for(auto [bin] :
+                        onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                        tileCounts[bin] = 0u;
+                    onAcc::syncBlockThreads(acc);
+
+                    for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+                    {
+                        std::uint32_t const bin = binIds[inBase + static_cast<std::uint32_t>(i)];
+                        onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
+                    }
+                    onAcc::syncBlockThreads(acc);
+
+                    for(auto [bin] :
+                        onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                    {
+                        std::uint32_t const inTile = tileCounts[bin];
+                        if(inTile != 0u)
+                        {
+                            tileBase[bin] = onAcc::atomicAdd(acc, &next[bin], inTile, onAcc::scope::device);
+                            tileCursor[bin] = 0u;
+                        }
+                    }
+                    onAcc::syncBlockThreads(acc);
+
+                    for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+                    {
+                        std::uint32_t const slotIn = inBase + static_cast<std::uint32_t>(i);
+                        std::uint32_t const bin = binIds[slotIn];
+                        std::uint32_t const rank
+                            = onAcc::atomicAdd(acc, &tileCursor[bin], std::uint32_t{1u}, onAcc::scope::block);
+                        std::uint32_t const j = tileBase[bin] + rank;
+                        std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
+                        std::uint32_t const outputOffset = j % chunkCapacity;
+
+                        typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
+                        rng::Engine engine
+                            = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                        UpdateResult const result
+                            = applyUpdate(update, acc, engine, status, static_cast<TBin>(bin), payload);
+                        if(result == UpdateResult::invalid)
+                            status.set(StatusCode::invalid);
+                        else if(result == UpdateResult::overflow)
+                            status.set(StatusCode::overflow);
+                        if(result != UpdateResult::success)
+                            onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
+
+                        access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
+                    }
+                }
+            }
+        }
+    };
+
+    /** Hash classify kernel of one typed partition batch.
+     *
+     * Mirrors `PartitionClassifyKernel` but replaces the `bins`-word shared histogram with the
+     * open-addressing table sized from the tile width. The classifier runs once per payload and
+     * the stored bin is reused by the scatter phase. A full table or an out-of-range classifier
+     * result writes the status word at `counts[T_B]`, so the host aborts the batch before any
+     * output chunk is planned.
+     */
+    template<typename TClassifier, typename TAccess, typename TBinTable, std::uint32_t T_B = TClassifier::maxBins>
+    struct PartitionHashClassifyKernel
+    {
+        static_assert(T_B > 0u, "a partition needs at least one bin");
+        static_assert(TBinTable::isHash, "PartitionHashClassifyKernel requires a hash bin table");
+
+        TClassifier classifier;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
+
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            auto view0,
+            auto view1,
+            auto view2,
+            auto view3,
+            alpaka::concepts::IMdSpan auto statusView,
+            alpaka::concepts::IMdSpan auto binIds,
+            alpaka::concepts::IMdSpan auto counts,
+            alpaka::concepts::IMdSpan auto tiles,
+            std::uint32_t chunkCapacity) const
+        {
+            using namespace alpaka;
+            TAccess access;
+            Status status{&statusView[0u]};
+
+            std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
+            auto hashTable = onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(
+                acc,
+                CVec<std::uint32_t, TBinTable::entries>{});
+            auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
+
+            for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
+            {
+                std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
+                TileDescriptor const tile = tiles[tileIndex];
+                std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                std::uint32_t const count = tile.count;
+
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                    hashTable[entry] = HashBinEntry{hashEmptyKey, 0u, 0u, 0u};
+                for(auto [one] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{1u}}))
+                {
+                    alpaka::unused(one);
+                    tableFull = 0u;
+                }
+                onAcc::syncBlockThreads(acc);
+
+                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+                {
+                    std::uint32_t const slot = base + static_cast<std::uint32_t>(i);
+                    typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, slot);
+                    rng::Engine engine
+                        = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                    std::uint32_t const bin
+                        = static_cast<std::uint32_t>(invokeWithContext(classifier, acc, engine, status, payload));
+                    if(bin >= T_B)
+                    {
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
+                    }
+                    binIds[slot] = bin;
+                    if(!hashInsert<ALPAKA_TYPEOF(acc), TBinTable>(acc, hashTable.data(), bin))
+                    {
+                        onAcc::atomicExch(acc, &tableFull, std::uint32_t{1u}, onAcc::scope::block);
+                        break;
+                    }
+                }
+                onAcc::syncBlockThreads(acc);
+
+                if(tableFull != 0u)
+                {
+                    onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                    break;
+                }
+
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                {
+                    std::uint32_t const bin = hashTable[entry].key;
+                    if(bin != hashEmptyKey)
+                        onAcc::atomicAdd(acc, &counts[bin], hashTable[entry].count, onAcc::scope::device);
+                }
+            }
+        }
+    };
+
+    /** Hash scatter kernel of one typed partition batch.
+     *
+     * Rebuilds the per-bin counts from the stored `binIds` into the tile-sized hash table,
+     * reserves one device-scope range per occupied entry, and applies the updater exactly once per
+     * emitted payload. The output table layout is the dense plan `[binBase[B], chunkIndex[R]]`; a
+     * full table writes the status word and returns before reserving any output.
+     */
+    template<
+        typename TClassifier,
+        typename TUpdate,
+        typename TAccess,
+        typename TBinTable,
+        typename TBin = ClassifierBin<TClassifier, typename TAccess::Payload>,
+        std::uint32_t T_B = TClassifier::maxBins>
+    struct PartitionHashScatterKernel
+    {
+        static_assert(T_B > 0u, "a partition needs at least one bin");
+        static_assert(TBinTable::isHash, "PartitionHashScatterKernel requires a hash bin table");
+
+        TUpdate update;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
+
+        // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
+        template<
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TBinIds,
+            alpaka::concepts::IMdSpan TTable,
+            alpaka::concepts::IMdSpan TNext,
+            alpaka::concepts::IMdSpan TCounts,
+            alpaka::concepts::IMdSpan TTiles>
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            auto in0,
+            auto in1,
+            auto in2,
+            auto in3,
+            auto out0,
+            auto out1,
+            auto out2,
+            auto out3,
+            TStatusView statusView,
+            TBinIds binIds,
+            TTable table,
+            TNext next,
+            TCounts counts,
+            TTiles tiles,
+            std::uint32_t chunkCapacity) const
+        {
+            using namespace alpaka;
+            TAccess access;
+            Status status{&statusView[0u]};
+
+            std::uint32_t const numTiles = static_cast<std::uint32_t>(tiles.getExtents().x());
+            auto hashTable = onAcc::declareSharedMdArray<HashBinEntry, uniqueId()>(
+                acc,
+                CVec<std::uint32_t, TBinTable::entries>{});
+            auto& tableFull = onAcc::declareSharedVar<std::uint32_t, uniqueId()>(acc);
 
             for(auto const& tileIndexVec : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{numTiles}))
             {
@@ -523,25 +785,53 @@ namespace graphFlow::detail
                 std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
                 std::uint32_t const count = tile.count;
 
-                for(auto [bin] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
-                    tileCounts[bin] = 0u;
-                onAcc::syncBlockThreads(acc);
-
-                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                    hashTable[entry] = HashBinEntry{hashEmptyKey, 0u, 0u, 0u};
+                for(auto [one] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{1u}}))
                 {
-                    std::uint32_t const bin = binIds[inBase + static_cast<std::uint32_t>(i)];
-                    onAcc::atomicAdd(acc, &tileCounts[bin], std::uint32_t{1u}, onAcc::scope::block);
+                    alpaka::unused(one);
+                    tableFull = 0u;
                 }
                 onAcc::syncBlockThreads(acc);
 
-                for(auto [bin] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
+                // Rebuild the per-bin counts from the stored bin ids; never recompute the classifier.
+                for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
                 {
-                    std::uint32_t const inTile = tileCounts[bin];
-                    if(inTile != 0u)
+                    std::uint32_t const bin = binIds[inBase + static_cast<std::uint32_t>(i)];
+                    if(bin >= T_B)
                     {
-                        tileBase[bin] = onAcc::atomicAdd(acc, &next[bin], inTile, onAcc::scope::device);
-                        tileCursor[bin] = 0u;
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
                     }
+                    if(!hashInsert<ALPAKA_TYPEOF(acc), TBinTable>(acc, hashTable.data(), bin))
+                    {
+                        onAcc::atomicExch(acc, &tableFull, std::uint32_t{1u}, onAcc::scope::block);
+                        break;
+                    }
+                }
+                onAcc::syncBlockThreads(acc);
+
+                if(tableFull != 0u)
+                {
+                    onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                    return;
+                }
+
+                for(auto [entry] :
+                    onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{TBinTable::entries}}))
+                {
+                    std::uint32_t const bin = hashTable[entry].key;
+                    if(bin == hashEmptyKey)
+                        continue;
+                    if(bin >= T_B)
+                    {
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
+                    }
+                    hashTable[entry].base
+                        = onAcc::atomicAdd(acc, &next[bin], hashTable[entry].count, onAcc::scope::device);
+                    hashTable[entry].localRank = 0u;
                 }
                 onAcc::syncBlockThreads(acc);
 
@@ -549,9 +839,17 @@ namespace graphFlow::detail
                 {
                     std::uint32_t const slotIn = inBase + static_cast<std::uint32_t>(i);
                     std::uint32_t const bin = binIds[slotIn];
+                    if(bin >= T_B)
+                        continue;
+                    HashBinEntry* entry = hashFind<TBinTable>(hashTable.data(), bin);
+                    if(entry == nullptr)
+                    {
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
+                    }
                     std::uint32_t const rank
-                        = onAcc::atomicAdd(acc, &tileCursor[bin], std::uint32_t{1u}, onAcc::scope::block);
-                    std::uint32_t const j = tileBase[bin] + rank;
+                        = onAcc::atomicAdd(acc, &entry->localRank, std::uint32_t{1u}, onAcc::scope::block);
+                    std::uint32_t const j = entry->base + rank;
                     std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                     std::uint32_t const outputOffset = j % chunkCapacity;
 
@@ -565,7 +863,7 @@ namespace graphFlow::detail
                     else if(result == UpdateResult::overflow)
                         status.set(StatusCode::overflow);
                     if(result != UpdateResult::success)
-                        onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
 
                     access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
                 }
@@ -1001,8 +1299,20 @@ namespace graphFlow::detail
         bool m_failed = false;
     };
 
-    /** Partition stage: one classify and one scatter launch per batch. */
-    template<typename TDevice, typename TStorage, typename TPayload, typename TClassifier, typename TUpdate>
+    /** Partition stage: one classify and one scatter launch per batch.
+     *
+     * `TBinTable` selects the dense shared histogram or the tile-sized hash table. `TMode` selects
+     * the dense scatter strategy; the hash path always stages and is instantiated with
+     * `ScatterMode::SharedStaging`.
+     */
+    template<
+        typename TDevice,
+        typename TStorage,
+        typename TPayload,
+        typename TClassifier,
+        typename TUpdate,
+        typename TBinTable = DenseBinTable,
+        ScatterMode TMode = ScatterMode::SharedStaging>
     class PartitionStage final : public StageBase<TDevice, TStorage>
     {
         using Base = StageBase<TDevice, TStorage>;
@@ -1016,8 +1326,11 @@ namespace graphFlow::detail
             alpaka::onHost::alloc<TileDescriptor>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
         using MappedTileView = ALPAKA_TYPEOF(
             alpaka::onHost::allocMapped<TileDescriptor>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
-        using ClassifyKernel = PartitionClassifyKernel<TClassifier, Access>;
-        using ScatterKernel = PartitionScatterKernel<TClassifier, TUpdate, Access>;
+        using DenseClassifyKernel = PartitionClassifyKernel<TClassifier, Access>;
+        using DenseScatterKernel
+            = PartitionScatterKernel<TClassifier, TUpdate, Access, Bin, TClassifier::maxBins, TMode>;
+        using HashClassifyKernel = PartitionHashClassifyKernel<TClassifier, Access, TBinTable>;
+        using HashScatterKernel = PartitionHashScatterKernel<TClassifier, TUpdate, Access, TBinTable>;
 
     public:
         using Queue = typename Base::Queue;
@@ -1116,19 +1429,26 @@ namespace graphFlow::detail
                     m_tilesHost,
                     alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
                 auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
-                queue.enqueue(
-                    policy.frameSpec(),
-                    alpaka::KernelBundle{
-                        ClassifyKernel{m_classifier, m_seed, m_purpose},
-                        Access::view0(m_storage),
-                        Access::view1(m_storage),
-                        Access::view2(m_storage),
-                        Access::view3(m_storage),
-                        m_status,
-                        m_binIds,
-                        m_counts,
-                        tilesView,
-                        m_capacity});
+                auto enqueueClassify = [&](auto kernel)
+                {
+                    queue.enqueue(
+                        policy.frameSpec(),
+                        alpaka::KernelBundle{
+                            std::move(kernel),
+                            Access::view0(m_storage),
+                            Access::view1(m_storage),
+                            Access::view2(m_storage),
+                            Access::view3(m_storage),
+                            m_status,
+                            m_binIds,
+                            m_counts,
+                            tilesView,
+                            m_capacity});
+                };
+                if constexpr(TBinTable::isHash)
+                    enqueueClassify(HashClassifyKernel{m_classifier, m_seed, m_purpose});
+                else
+                    enqueueClassify(DenseClassifyKernel{m_classifier, m_seed, m_purpose});
                 ++m_classifyLaunches;
             }
             alpaka::onHost::memcpy(queue, m_statusHost, m_status);
@@ -1287,25 +1607,34 @@ namespace graphFlow::detail
 
                 if(m_numTiles != 0u)
                 {
-                    queue.enqueue(
-                        policy.frameSpec(),
-                        alpaka::KernelBundle{
-                            ScatterKernel{m_update, m_seed, static_cast<std::uint32_t>(m_purpose + 1u)},
-                            Access::view0(m_storage),
-                            Access::view1(m_storage),
-                            Access::view2(m_storage),
-                            Access::view3(m_storage),
-                            Access::view0(m_storage),
-                            Access::view1(m_storage),
-                            Access::view2(m_storage),
-                            Access::view3(m_storage),
-                            m_status,
-                            m_binIds,
-                            m_table,
-                            m_next,
-                            m_counts,
-                            tilesView,
-                            m_capacity});
+                    auto enqueueScatter = [&](auto kernel)
+                    {
+                        queue.enqueue(
+                            policy.frameSpec(),
+                            alpaka::KernelBundle{
+                                std::move(kernel),
+                                Access::view0(m_storage),
+                                Access::view1(m_storage),
+                                Access::view2(m_storage),
+                                Access::view3(m_storage),
+                                Access::view0(m_storage),
+                                Access::view1(m_storage),
+                                Access::view2(m_storage),
+                                Access::view3(m_storage),
+                                m_status,
+                                m_binIds,
+                                m_table,
+                                m_next,
+                                m_counts,
+                                tilesView,
+                                m_capacity});
+                    };
+                    if constexpr(TBinTable::isHash)
+                        enqueueScatter(
+                            HashScatterKernel{m_update, m_seed, static_cast<std::uint32_t>(m_purpose + 1u)});
+                    else
+                        enqueueScatter(
+                            DenseScatterKernel{m_update, m_seed, static_cast<std::uint32_t>(m_purpose + 1u)});
                     ++m_scatterLaunches;
                 }
 
