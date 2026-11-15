@@ -188,6 +188,11 @@ not by an unbounded queue. `Tuning::inflightBatches` rejects a zero value with
 
 ## Queue overlap is advisory and the CUDA probe is timing-sensitive
 
+The missing.md "exploit or document queue overlap" item is closed on the
+basis of this evidence (P04, PR #45 at
+`e86adb73e41a5f70f4c9839c58895f7a789691ac`); this section stays as the
+reference for the probe's timing sensitivity.
+
 `probeQueueIndependence()` creates two non-blocking queues, runs a delay kernel
 on the first and a no-op on the second, and polls both events. The scheduler
 never depends on the verdict, and correctness does not depend on overlap.
@@ -224,6 +229,10 @@ node overlap and the per-lane events bound the in-flight work. A device whose
 queues alias or run sequentially follows the same path.
 
 ## Host planning stays; batching amortizes the round trip
+
+This section is the closing evidence for the missing.md "host round-trip
+profiling and device-side planning experiment" item (P04, PR #45 at
+`e86adb73e41a5f70f4c9839c58895f7a789691ac`).
 
 An `nsys` profile of `graphFlow_particle_feedback` on the shared `hal` A30
 (N=1e6, C=1024, P=8192, seed 42, max-visits 64, Release) separates the

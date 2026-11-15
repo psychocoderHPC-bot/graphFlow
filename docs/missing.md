@@ -96,11 +96,18 @@ resource or decision is missing.
   == depth`, `duplicateDeliveries == 0`, `maxReadyDepth >= 1` (lane exhaustion
   backpressures), and the full particle-feedback histogram is identical across
   every `(batchChunks, inflightBatches)` pair in `{1,2,8} x {1,2,4}`.
-- [ ] **P1: exploit or document queue overlap.** The CUDA queue probe reports
-  distinct queues but `overlap=no`; the CPU probe reports overlap. Investigate
-  whether the CUDA probe's kernels or the shared A30 prevent overlap, and either
-  use independent node queues for real overlap or document that the scheduler
-  relies on full-chunk pipelining. Correctness must never depend on overlap.
+- [x] **P1: exploit or document queue overlap.** Resolved by documentation
+  (P04, PR #45 at `e86adb73e41a5f70f4c9839c58895f7a789691ac`): the
+  `tools/queue_probe.sh` timed two-queue run with the same-queue baseline
+  measured overlap 4/5 on the shared `hal` A30, 5/5 on CPU and HIP, and the
+  committed probe's single `no` verdict at 20,000,000 delay iterations was
+  shown to be a `std::this_thread::yield()` polling-resolution artifact, not
+  stream serialization; it is `yes` at 100,000,000 and 400,000,000
+  iterations. The scheduler keeps one in-flight batch per node at the default
+  depth of 1 and relies on full-chunk pipelining; with
+  `Tuning::inflightBatches` above 1, independent per-node batches overlap.
+  The verdict stays advisory and correctness never depends on overlap
+  (see [known-limitations.md](known-limitations.md#queue-overlap-is-advisory-and-the-cuda-probe-is-timing-sensitive)).
 - [x] **P1: device-aware chunk sizing.** The device-aware policy is in main
   (T1) and the integrated T13 matrix is recorded (`docs/benchmarks.md`).
   Closed boundary: the policy default `P=16384` exceeds the measured A30
@@ -134,10 +141,17 @@ resource or decision is missing.
 
 ## 2. Execution pipeline
 
-- [ ] **P1: batch-level classify/plan/scatter.** The current host plan is
-  per chunk. Extend `total[B]`, `next[B]`, `binBase[B]`, and `outChunks[R]` to a
-  multi-chunk batch; verify `next[bin]==total[bin]` after scatter across the
-  batch; keep the exact fill levels.
+- [x] **P1: batch-level classify/plan/scatter.** Covered by the P01
+  in-flight-depth work (PR #46) and the T5 batching work (PR #6): a batch of
+  up to `Q` input chunks runs one classify and one scatter launch, the host
+  accumulates the batch-level `total[B]` from the per-chunk counts
+  (`m_totals` in `PartitionStage`), and `planDenseBins` builds `binBase[B]`
+  and the exact `outChunks[R]` fills over the summed totals. `next[bin]` is
+  shared by every tile descriptor of the batch
+  (`include/graphFlow/graph/ScatterKernel.hpp`), and the scatter stage
+  verifies `next[bin] == total[bin]` for every bin after the batch scatter
+  (`include/graphFlow/flow/Execution.hpp`), throwing on a mismatch. The
+  multi-chunk cases pass on CPU, CUDA, and HIP (246/246, 306/306, 297/297).
 - [ ] **P1: direct versus shared-staging scatter (GPU Direct open).** P03 at
   `ad7208f80fbb6a07d9a87767e947abc057c00e84` added the `Direct` dense-scatter
   alternative beside the shared-staging default and measured both on fwk394 CPU
@@ -156,12 +170,19 @@ resource or decision is missing.
   `2*T`/`4*T` agreement at overlapping bins, and the dense-limit helper.
   Table-full remains a hard batch error. End-to-end scatter/dense/distribution
   throughput is still blocked under the measurement-matrix item below.
-- [ ] **P2: host round-trip profiling and device-side planning experiment.**
-  The profile shows the host round trip and poll path matter. Measure classify,
-  D2H total/status, host planning, H2D table, scatter, and event latency. If the
-  round trip still dominates after batching, implement a device-side output
-  planning variant (global prefix over bin totals) and compare; otherwise
-  document why the host path stays.
+- [x] **P2: host round-trip profiling and device-side planning experiment.**
+  Resolved by measurement and the keep-host-side-planning decision (P04, PR
+  #45 at `e86adb73e41a5f70f4c9839c58895f7a789691ac`): an `nsys` profile of
+  `graphFlow_particle_feedback` on the `hal` A30 (`N=1e6`, `C=1024`,
+  `P=8192`) records classify, D2H total/status, host planning, H2D table,
+  scatter, memset, and the per-batch event/dispatch round trip; Q=8 batching
+  removes about 99x of the handoffs and drops the total traced round trip
+  from 10.88 s to 116 ms. The remaining cost is event and dispatch latency
+  that device-side planning does not remove, because the host still reserves
+  output chunks and builds the scatter table. Device-side planning stays
+  out of scope for v1 and is revisited only with a device-resident output
+  chunk pool or a many-bin workload where the O(B) plan is measurable
+  (see [known-limitations.md](known-limitations.md#host-planning-stays-batching-amortizes-the-round-trip)).
 - [ ] **P1: error and abort coverage (real-driver injection open).** Host tests
   cover invalid classifier and updater results, counter and weight overflow, a
   full hash table, pool exhaustion, an injected completion-event enqueue
@@ -244,9 +265,14 @@ resource or decision is missing.
   added only when `8N` bytes plus the pool payload exceeds the device budget.
   The policy is recorded in [known-limitations.md](known-limitations.md) and
   the README.
-- [ ] **P2: CLI contract tests.** Assert the selected backend and device in the
-  example output, invalid backend/device exit codes, `N=0` header-only output,
-  and `C=0` rejection.
+- [x] **P2: CLI contract tests.** Done (P06, PR #51 at
+  `a4c523ae6693a9c71e07b804dffd6787d2e8966e`): `tests/unit/test_cli_contract.cpp`
+  asserts the selected backend and device in the example output, pins the real
+  `graphFlow_particle_feedback` exit codes for help, usage errors, out-of-range
+  devices, run-stage overflow, and the compiled/uncompiled backend split, and
+  the `example_cli.cmake` matrix covers `N=0` header-only output and `C=0`
+  rejection. The cases run in the 246/246 CPU, 306/306 CUDA, and 297/297 HIP
+  suites.
 
 ## 4. CI, format, REUSE, and repository policy
 
@@ -277,10 +303,13 @@ resource or decision is missing.
   `docs/numerics.md`, `docs/known-limitations.md`, `docs/benchmarks.md`, and
   `docs/public-api.md` are in main and linked from the README. The hosted
   workflow is documented in `docs/ci.md`.
-- [ ] **P1: complete the alpaka API map.** `docs/alpaka-api-map.md` covers the
-  main primitives; add an entry for every new accelerator helper, with searched
-  symbols, pinned path, selected API, tested backends, and the reason for any
-  project-owned code.
+- [x] **P1: complete the alpaka API map.** Done (P08, PR #55 at
+  `82dd2cec795357ea748bd7782144df74e71bf1f2`): `docs/alpaka-api-map.md` now
+  covers every accelerator helper graphFlow uses, with the searched symbols,
+  the pinned path at alpaka revision `eb677e8d7f70d79b35df25d9002f94ba669b6f44`,
+  the exact API form, the backend evidence per capability, and the reason for
+  each project-owned code path. The new accelerator helpers added since the
+  first map (frame launch, queue probe, scatter mode) are all listed.
 - [ ] **P1: repository policy (branch protection pending operator).** The
   repository is public, the README carries the CI badge, and the PR flow is
   documented in [ci.md](ci.md) (feature branch -> PR to `main`, CI jobs plus
@@ -371,9 +400,15 @@ resource or decision is missing.
   binary) are historical context; `hal` is shared (`sharing=unknown`) and not a
   usable TSAN host. No TSAN suppressions were used; suppressions are allowed
   only with evidence and must not hide a race.
-- [ ] **P1: stress tests.** Cover `N >> P`, small `P`, pool exhaustion, event
-  and staging exhaustion, feedback cycles, max-visits, abort during in-flight
-  work, and repeated runs with generation reuse.
+- [x] **P1: stress tests.** Done (P06, PR #51 at
+  `a4c523ae6693a9c71e07b804dffd6787d2e8966e`, plus the error/abort coverage
+  at PR #47/PR #48): `tests/integration/test_pressure.cpp` covers `N >> P`
+  across `Q`, `P` below `C`, and a tight pool that reaches its physical
+  capacity and reuses every chunk; `tests/integration/test_particle_feedback.cpp`
+  covers the max-visits cap, feedback cycles, and the zero-weight and empty
+  input cases; the failure-path cases (PR #48 at `e6e1a97`) cover pool
+  exhaustion and abort during in-flight work. The cases pass on CPU, CUDA,
+  and HIP (246/246, 306/306, 297/297).
 - [ ] **P1: asynchronous failure propagation.** Enqueue-failure and abort paths
   are exercised by the host failure tests and by the CUDA/HIP failure cases
   added at `e6e1a97` (invalid classifier and updater results, full hash table,
@@ -445,8 +480,13 @@ resource or decision is missing.
 - **Pool memory:** the payload budget and chunk clamp are implemented; the open
   memory item is the unchecked `ChunkLedger` generation/lease increment. A
   slot-based pool remains an optional optimization.
-- **Queue overlap:** the CUDA probe reports no overlap between distinct queues.
-  Decide whether to investigate further or document the full-chunk strategy.
+- **Queue overlap:** resolved. The timed two-queue probe (P04, PR #45 at
+  `e86adb73e41a5f70f4c9839c58895f7a789691ac`) shows real overlap on the
+  `hal` A30, CPU, and HIP; the single committed-probe `no` verdict at
+  20,000,000 delay iterations is a polling-resolution artifact. The scheduler
+  documents its full-chunk pipelining strategy at the default depth of 1 and
+  uses per-node batch overlap only when `Tuning::inflightBatches` is above 1.
+  Correctness never depends on overlap.
 - **Policy-default budget boundary:** resolved. The policy default
   `C=8192`, `P=16384` exceeds the actual A30 payload budget of 3,171,090,432 B
   (it needs 3,221,225,472 B), so the T13 `N=1e8` run used `P=16128`
@@ -524,9 +564,11 @@ closed.
    were not observed, and no H100 was used. With the default CpuOmpBlocks plus
    OpenMP the TSAN suite fails 105/210 with reports inside the alpaka async
    CPU queue (upstream alpaka races, not graphFlow).
- - [x] Format, REUSE, docs, and the API map are complete and green. T14b
-  (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
-  format gate.
+- [x] Format, REUSE, docs, and the API map are complete and green. T14b
+   (tree-wide format and SPDX sweep) is complete and hosted CI enforces the
+   format gate. The alpaka API map was completed in P08 (PR #55 at
+   `82dd2cec795357ea748bd7782144df74e71bf1f2`) and covers every accelerator
+   helper graphFlow uses.
 - [ ] The repository is public with CI configured; branch protection for
   `main` is pending operator action.
 - [ ] An independent review confirms the final integrated state and the
