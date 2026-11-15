@@ -3,18 +3,20 @@
 
 # graphFlow acceptance record
 
-## Current state at `9fb15f1`
+## Current state at `9ace795`
 
 This is the canonical current-state block. Every older total in this document is
-historical. Code main is `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69, the
-full SYCL test matrix; `561b9a4c` is the previous total).
+historical. The SYCL matrix was measured at
+`9ace795798c0e8db9f4e74885cc131ef05bc5163`, on top of
+`1fbdbf3bbf7c67bb3a546de323358d67142daf63`, and adds the environment-scoped FP64
+case to the PR #69 matrix (`9fb15f1` recorded 71/71).
 
 | Configuration | Host / device | Toolchain | Result |
 | --- | --- | --- | --- |
 | CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **255/255 passed** |
 | CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **316/316 passed** |
 | HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **307/307 passed** |
-| SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **71/71 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **72/72 passed** |
 
 No test is skipped. CTest reports `100% tests passed, 0 tests failed` for each
 suite, and a compiled backend without a usable device fails its cases instead of
@@ -28,13 +30,14 @@ the six `[scheduler]` cases (five `[scheduler][debug]` and one
 `[scheduler][release]` case in `tests/integration/test_scheduler_validation.cpp`,
 registered in every backend suite) on top of the PR #63 public-Flow cases;
 they are included in the totals above
-and pass 6/6 on CPU, CUDA, and HIP. PR #69 registers the 71-case SYCL matrix on
+and pass 6/6 on CPU, CUDA, and HIP. PR #69 registered the 71-case SYCL matrix on
 `hal` Arc A770: 33 in-process Catch2 cases (the `test_sycl_kernel` dispatch and
 scalar cases plus the typed Flow, failure, photon, async/depth, FrameSpec and
 particle pressure matrices under the `sycl` label), 24 particle CLI cases
 (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`), 3 cross-backend
-exact-histogram cases, 10 photon CLI cases, and 1 photon output case; `ctest -L
-sycl` selects the whole matrix. The `ffe4074` totals 249/249, 310/310
+exact-histogram cases, 10 photon CLI cases, and 1 photon output case. This branch
+adds the environment-scoped `test_photon_scattering_sycl_fp64` case, so `ctest -L
+sycl` selects 72 cases. The `ffe4074` totals 249/249, 310/310
 and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
 totals 246/246, 306/306 and 297/297, and the earlier `a610281` totals 239/239,
 299/299 and 290/290 are historical.
@@ -102,15 +105,15 @@ ctest --test-dir build-sycl --output-on-failure --no-tests=error -L sycl
 ```
 
 Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**, SYCL
-**71/71** (`ctest -L sycl` on the Arc A770, PR #69 matrix); each
+**72/72** (`ctest -L sycl` on the Arc A770, PR #69 matrix plus the FP64 case); each
 log ends with `100% tests passed, 0 tests failed`. No label or configuration
 excluded a registered CPU, CUDA, or HIP case from those runs; the SYCL run
 selects the `sycl` label on purpose. The retained JUnit XML reports 246
 CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
 were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307,
-71/71) of the tree at `9fb15f1`, which add the P02b `ChunkLedger` overflow
-test, the PR #63 public-Flow cases, the PR #65 scheduler cases, and the PR #69
-SYCL matrix on top of them. The `hal` A30 driver
+72/72) of the tree at `9ace795`, which add the P02b `ChunkLedger` overflow
+test, the PR #63 public-Flow cases, the PR #65 scheduler cases, the PR #69
+SYCL matrix, and the environment-scoped FP64 case on top of them. The `hal` A30 driver
 is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
 archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
 
@@ -262,7 +265,7 @@ The current builds are in the current-state block. Historical build records:
 
 ## Tests (historical)
 
-The current suites are CPU 255/255, CUDA 316/316, HIP 307/307, and SYCL 71/71.
+The current suites are CPU 255/255, CUDA 316/316, HIP 307/307, and SYCL 72/72.
 The previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
 earlier 239/239, 299/299 and 290/290 at `a610281` are historical. The table below records the earlier totals, including the

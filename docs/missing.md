@@ -13,8 +13,9 @@ repository state at code main `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR
   protection is pending operator action.
 - **Current validation:** CPU **255/255** (fwk394 Release, g++ 13.3), CUDA
   **316/316** on `hal` A30 `sm_80` (CUDA 13.4), HIP **307/307** on `hal`
-  RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **71/71** on `hal` Arc A770
-  `spir64` (oneAPI 2026.2, PR #69 matrix, fp32 photons). No case is skipped or
+  RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **72/72** on `hal` Arc A770
+  `spir64` (oneAPI 2026.2, PR #69 matrix plus the FP64 case; fp32 photons by
+  default, double in the opt-in case). No case is skipped or
   filtered; PR #63
   adds the public-Flow routed-axis and rejection cases, PR #65 adds the six
   `[scheduler]` cases (6/6 on CPU, CUDA and HIP), and PR #69 registers the 71-case
@@ -365,13 +366,17 @@ resource or decision is missing.
   `N=1e8` acceptance run, and no performance claim while `hal` reports
   `sharing=unknown`.
 - [x] **P0: SYCL execution gate.** Done at
-  `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69) on `hal` with an Intel
-  Arc A770 (`spir64`, oneAPI 2026.2, icpx 2026.2.0): **71/71** CTest via
-  `ctest -L sycl` (33 in-process Catch2 cases, 24 particle CLI, 3
-  cross-backend exact-histogram, 10 photon CLI, 1 photon output). The Arc
-  A770 lacks the SYCL `fp64` aspect, so the oneAPI photon path runs fp32;
-  AOT compilation with `ocloc` (`-fsycl-targets=spir64_gen`) crashes on
-  `hal`, so the build stays JIT-compiled SPIR-V. GitHub-hosted SYCL remains
+  `9ace795798c0e8db9f4e74885cc131ef05bc5163` (on top of PR #69) on `hal` with
+  an Intel Arc A770 (`spir64`, oneAPI 2026.2, icpx 2026.2.0): **72/72** CTest
+  via `ctest -L sycl` (34 in-process Catch2 cases including the
+  environment-scoped FP64 case, 24 particle CLI, 3 cross-backend
+  exact-histogram, 10 photon CLI, 1 photon output). By default
+  the Arc A770 lacks the SYCL `fp64` aspect, so the oneAPI photon path runs
+  fp32; an environment-scoped `test_photon_scattering_sycl_fp64` case opts into Intel FP64 emulation.
+  AOT compilation with `ocloc` is not used: `ocloc` is present and a plain
+  invocation does not crash, but it rejects double
+  (`-fsycl-targets=spir64_gen`), so the build stays JIT-compiled SPIR-V.
+  GitHub-hosted SYCL remains
   compile-only in the `sycl-compile` job; no SYCL runtime claim is made for
   GitHub CI, and no SYCL performance run is recorded while `hal` reports
   `sharing=unknown`. Remaining SYCL work: a second Intel device and an

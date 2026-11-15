@@ -172,18 +172,45 @@ ctest --test-dir build-sycl --output-on-failure --no-tests=error
 The SYCL runtime cases fail when no Intel GPU is visible instead of skipping.
 `ctest -L sycl` selects the in-process typed Flow, failure, photon, async/depth,
 FrameSpec and particle pressure matrix, together with the SYCL CLI and
-cross-backend exact-histogram cases: 33 in-process Catch2 cases, 24 particle
-CLI, 3 cross-backend, 10 photon CLI and 1 photon output case. The validated
-device is `hal` with an Intel Arc A770 (`spir64`, oneAPI 2026.2), where the
-matrix passes 71/71 at current main
-`9fb15f1e6ce13f252b31d4cb60cc410862d56511`; the GitHub-hosted `sycl-compile`
-job compiles the same target but runs no CTest. The Arc A770 does not
-advertise the SYCL `fp64` aspect, so the oneAPI photon path
-runs single precision (fp32) and converts the result to the public
-`ScatteringResult`; the CPU, CUDA and HIP photon runs keep double. AOT
-compilation with `ocloc` (`-fsycl-targets=spir64_gen`) crashes on `hal`, so the
-build stays JIT-compiled SPIR-V. Check the compiler and device
-visibility before a run:
+cross-backend exact-histogram cases: 33 in-process Catch2 cases plus the
+environment-scoped FP64 case, 24 particle CLI, 3 cross-backend, 10 photon CLI
+and 1 photon output case. The validated device is `hal` with an Intel Arc A770
+(`spir64`, oneAPI 2026.2), where the 71-case device matrix recorded at
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511` passes 71/71; this change adds one
+environment-scoped FP64 case, so `ctest -L sycl` reports 72 cases on `hal`. The
+GitHub-hosted `sycl-compile` job compiles the same target but runs no CTest.
+By default the Arc A770 does not advertise the SYCL `fp64` aspect, so the
+oneAPI photon path runs single
+precision (fp32) and converts the result to the public `ScatteringResult`; the
+CPU, CUDA and HIP photon runs keep double. Explicit Intel FP64 emulation is an
+environment-scoped opt-in: the `test_photon_scattering_sycl_fp64` CTest case sets
+`GRAPHFLOW_SYCL_FP64_EMULATION=1`, `IGC_EnableDPEmulation=1` and
+`OverrideDefaultFP64Settings=1` for a fresh process. Together those variables
+make `sycl::aspect::fp64` true and `double_fp_config` non-empty, and
+`runPhotonScatteringAuto()` then runs the oneAPI photon physics in double. The
+same function throws when the switch is set but either IGC variable is missing
+or `double_fp_config` is empty; it never falls back silently, because
+`OverrideDefaultFP64Settings=1` alone leaves double kernels incorrect. DG2
+sub-group reductions that combine `reqd_sub_group_size` with subgroup
+collectives can hang or lose the device (upstream issue #1036), so the photon
+kernels stay on block barriers and atomics only and the opt-in case runs under
+a 300 s CTest timeout. The double oneAPI photon path is compiled in its own
+translation unit, `PhotonScatteringFp64OneApi.cpp`, at `-O0` because icpx 2026.2
+corrupts a 32-byte double functor passed as a kernel argument under FP64
+emulation at `-O1` and above; the isolate is the `ProposeFlightT<double>`
+functor in `PhotonFunctors.hpp`. The separate translation unit also keeps the
+double kernels out of the fp32 device image, so the default path never requires
+the fp64 aspect. The fp32 path and the rest of the suite stay optimized. AOT
+compilation with `ocloc`: `ocloc` is present on `hal` and a plain invocation
+does not crash, but it rejects double
+(`-fsycl-targets=spir64_gen`), so the build stays JIT-compiled SPIR-V and the
+first kernel run pays the SPIR-V JIT cost. Run the opt-in case with:
+
+```sh
+ctest --test-dir build-sycl -R fp64 --output-on-failure
+```
+
+Check the compiler and device visibility before a run:
 
 ```sh
 icpx --version
@@ -243,9 +270,9 @@ compiled checks. The scheduler adds its conservation, fill-level and
 exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
 each violation and `[scheduler][release]` proves the checks are compiled out.
 The recorded Release suite is **255/255 CPU**, **316/316 CUDA**, **307/307
-HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **71/71 SYCL** at
-`9fb15f1e6ce13f252b31d4cb60cc410862d56511` (see
-`docs/acceptance.md`);
+HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **72/72 SYCL** at
+`9ace795798c0e8db9f4e74885cc131ef05bc5163` (71/71 at `9fb15f1` before the FP64
+case; see `docs/acceptance.md`);
 the six `[scheduler]` cases are included in those totals, the
 `[scheduler][release]` case among them. PR #63 adds the public-Flow routed-axis
 cases on top of the P07b 7/7. The `ffe4074` totals 249/249, 310/310 and
@@ -341,8 +368,8 @@ revision, and this documentation commit does not claim a new build or test run.
  **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
  `56c11ac`, the **290/290** at `a610281` and the earlier **245/245** with 43
  HIP cases at `b972eaa` are historical. The SYCL runtime CTest on `hal` (Arc
- A770 `spir64`, oneAPI 2026.2) passes **71/71** at
- `9fb15f1e6ce13f252b31d4cb60cc410862d56511` via
+ A770 `spir64`, oneAPI 2026.2) passes **72/72** at
+ `9ace795798c0e8db9f4e74885cc131ef05bc5163` via
  `ctest -L sycl`; the GitHub-hosted `sycl-compile` job compiles the target but
  runs no CTest and makes no SYCL runtime claim. The `sm_75` CUDA
 build still fails with the CUDA 12.5 nvcc internal compiler error
