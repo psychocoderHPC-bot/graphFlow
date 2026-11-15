@@ -488,7 +488,7 @@ resource or decision is missing.
   TSAN (non-PIE, OMP off, CpuOmpBlocks off). The historical 202-case final main
   was green (CPU 202/202 Release and Debug, ASAN+UBSAN Debug 202/202);
   `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; CUDA and HIP jobs
-  are compile-only; no self-hosted runner, SYCL job, or GitLab pipeline. The
+  are compile-only; no self-hosted runner, SYCL runtime job, or GitLab pipeline. The
   P10 fwk394 run at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235
   with 0 reports, and the hosted `tsan`/`leak` runtimes were not observed. The
   CUDA or HIP runtime gate still needs a device host with a known sharing and

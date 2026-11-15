@@ -36,6 +36,7 @@ setting is changed from this repository.
 | `tsan` | `ubuntu-latest` | none | CPU | Debug, non-PIE | yes, CTest |
 | `cuda-compile` | `ubuntu-latest` | `nvidia/cuda:12.6.3-devel-ubuntu24.04` | CUDA | Release, `sm_70` | no, compile only |
 | `hip-compile` | `ubuntu-latest` | `rocm/dev-ubuntu-24.04:7.2` | HIP | Release, `gfx90a` | no, compile only |
+| `sycl-compile` | `ubuntu-latest` | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` | SYCL (Intel GPU only) | Release | no, compile only |
 | `reuse` | `ubuntu-latest` | none | none | none | `reuse lint` |
 | `format` | `ubuntu-latest` | none | none | none | `clang-format --dry-run --Werror` |
 | `icpx-cpu` | `ubuntu-latest` | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` | CPU | Release | yes, CTest |
@@ -57,6 +58,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394`; the `561b9a4c` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
 | CUDA device runtime | **316** at `561b9a4c` on `hal` A30 `sm_80`, CUDA 13.4; 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
 | HIP `gfx1100` | **307** at `561b9a4c` on `hal` RX 7900 XTX, ROCm 7.2; 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
+| SYCL Intel GPU | none | the hosted `sycl-compile` job builds without a device and produces no CTest result |
 
 The CPU suite registers 255 cases at `561b9a4c`; the 249 count at `ffe4074`, the
 247 count at `88de14f` and the 246 count at `56c11ac` are historical. Release compiles the per-event
@@ -294,8 +296,9 @@ ctest --test-dir build --output-on-failure --no-tests=error \
   --output-junit ctest-icpx.xml
 ```
 
-The job does not set `alpaka_DEP_ONEAPI`, so it makes no SYCL claim. It is a
-host-compiler portability gate for the CPU backend. `alpaka_COMPILE_PEDANTIC` stays off for this job: it adds `-Werror`,
+The CPU job does not set `alpaka_DEP_ONEAPI`; the separate `sycl-compile` job
+owns the SYCL compile gate. This job is a host-compiler portability gate for
+the CPU backend. `alpaka_COMPILE_PEDANTIC` stays off for this job: it adds `-Werror`,
 and icpx (unlike GCC) warns on the brace-initialized `RouteTable{{1u}}` scalars
 in the tests. The GCC CPU, sanitizer, and TSAN jobs keep the strict gate.
 
@@ -308,13 +311,31 @@ passed 247/247 in 506 s on the same loaded host (that run is at `88de14f`; the
 `ffe4074` re-validation used g++ 13.3 on `fwk394`). Pinning the team size keeps
 the gate stable without changing the tested executor.
 
-## No hosted SYCL job
+## SYCL compile-only
 
-`GRAPHFLOW_ENABLE_SYCL=ON` is implemented and validated on `hal` with an Intel
-Arc A770, but the GitHub-hosted runners have no Intel GPU. No hosted job
-enables the SYCL backend, so there is no SYCL CI runtime claim. The `icpx-cpu`
-job above still exercises the CPU backend with Intel's host compiler only. See
-[build.md](build.md#sycl-intel-gpu) for the local device command.
+The `sycl-compile` job sets `GRAPHFLOW_ENABLE_SYCL=ON` with `icpx` in the oneAPI
+2025.3 container. The graphFlow option enables `alpaka_DEP_ONEAPI=ON` and
+`alpaka_ONEAPI_IntelGpu=ON`, and disables the SYCL CPU, NVIDIA, and AMD device
+kinds, so only the Intel GPU device kind is compiled. `alpaka_COMPILE_PEDANTIC`
+stays off for the same icpx warning on the brace-initialized `RouteTable{{1u}}`
+scalars in the tests that keeps it off for `icpx-cpu`.
+
+```sh
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=icpx \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$PWD/.alpaka" \
+  -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+  -DGRAPHFLOW_ENABLE_SYCL=ON \
+  -Dalpaka_COMPILE_PEDANTIC=OFF
+cmake --build build -j "$(nproc)"
+```
+
+The job only compiles the SYCL test translation unit and the examples. It does
+not use `sycl-ls` as a device gate, does not run CTest, and does not execute an
+example. The GitHub-hosted runner has no Intel GPU, so this job makes no SYCL
+runtime claim. The validated device run stays on `hal` with an Intel Arc A770;
+see [build.md](build.md#sycl-intel-gpu).
 
 ## Format
 
@@ -342,7 +363,7 @@ not change program behavior.
 ## Not included
 
 - Self-hosted runners or labels (`fwk394`, `a30`, `rocm`).
-- CUDA or HIP execution; both jobs are compile-only.
+- CUDA, HIP, or SYCL execution; all three jobs are compile-only.
 - H100 was not used for the sanitizer evidence, and no H100 claim is made.
 - GitLab CI.
 - H100 or any other specific GPU target: H100 was not used and no final H100
@@ -357,9 +378,9 @@ image and the extra `git` install before checkout.
 
 ## Status
 
-The hosted workflow on `561b9a4c` defines `cpu (Release)`, `cpu (Debug)`,
-`sanitizers (ASAN+UBSAN)`, `tsan`, `cuda-compile`, `hip-compile`, `format`, and
-`reuse`. Each current CPU job runs 255 CTest cases (Release and Debug); the
+The hosted workflow defines `cpu (Release)`, `cpu (Debug)`,
+`sanitizers (ASAN+UBSAN)`, `tsan`, `cuda-compile`, `hip-compile`,
+`sycl-compile`, `format`, and `reuse`. Each current CPU job runs 255 CTest cases (Release and Debug); the
 `sanitizers` job runs ASAN+UBSAN over the same CPU suite plus its `leak` step.
 The N=1e6 smoke, source-admission, stall-diagnostics, cross-backend equality,
 visit-cap, pool-pressure, CLI-contract, kernel-axis, and in-flight cases run in
@@ -367,7 +388,8 @@ the ordinary CTest job without a skip. P07b contributes 7/7 of those cases.
 The `format` job enforces the T14b sweep with clang-format 20.1.8. The `sm_70`
 workaround clears the nvcc internal compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example without a
 GPU. `hip-compile` builds the HIP sources and the HIP example without an AMD
-GPU. `icpx-cpu` runs on every push and pull request; the local validation passes
+GPU. `sycl-compile` builds the Intel-GPU-only SYCL backend without a device;
+it is compile-only and makes no SYCL runtime claim. `icpx-cpu` runs on every push and pull request; the local validation passes
 the 255-case CPU suite (g++ 13.3 on `fwk394` at `561b9a4c`; the icpx evidence at
 `88de14f` passes the then-current 247-case suite). At `cf3bc8a`
 on `gf/p10-sanitizers`, the historical fwk394 evidence is ASAN+UBSAN 236/236,
@@ -383,7 +405,9 @@ Container jobs set `shell: bash` because container jobs default to `sh`, which
 rejects `set -o pipefail`.
 
 Validation for the icpx job covered YAML parsing, `actionlint`, `bash -n` on
-the embedded shell, the container image tag, and the alpaka pin. Locally on
+the embedded shell, the container image tag, and the alpaka pin. Validation for
+the `sycl-compile` job covered YAML parsing and `actionlint`; no SYCL compile was
+run locally and no GitHub-hosted runtime was observed. Locally on
 `hal`, the CPU backend configured and built with icpx 2026.2.0 and with icpx
 2025.3.3 (the same 2025.3 line as the container) against the pinned alpaka
 checkout, and both `ctest` runs passed 247/247 with `OMP_NUM_THREADS=4` (that
