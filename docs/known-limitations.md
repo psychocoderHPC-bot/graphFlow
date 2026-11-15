@@ -277,7 +277,7 @@ used by the example.
 ## CI is hosted and GPU builds are compile-only
 
 CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
-(`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 246
+(`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 247
 CPU CTest cases in Release and Debug, `sanitizers` runs ASAN+UBSAN plus a
 dedicated `leak` step over the error paths, and a separate `tsan` job runs the
 host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off). The CUDA and
