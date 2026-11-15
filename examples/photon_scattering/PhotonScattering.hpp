@@ -10,11 +10,18 @@
 
 #include <alpaka/alpaka.hpp>
 
+#if ALPAKA_LANG_ONEAPI
+#    include <sycl/sycl.hpp>
+#endif
+
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
+#include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -252,18 +259,113 @@ namespace graphFlow::photon
         return result;
     }
 
+    /** True only when the caller set `GRAPHFLOW_SYCL_FP64_EMULATION=1` in the environment.
+     *
+     * The variable is read at call time, so a process can query it before it creates a SYCL queue.
+     * A value other than the literal `1` leaves the default single-precision path in place.
+     */
+    inline bool syclFp64EmulationRequested()
+    {
+        char const* const value = std::getenv("GRAPHFLOW_SYCL_FP64_EMULATION");
+        return value != nullptr && std::string_view{value} == "1";
+    }
+
+    /** True when the selected oneAPI device reports at least one double floating-point config.
+     *
+     * The Arc A770 reports an empty `double_fp_config` by default and a non-empty one only when
+     * `IGC_EnableDPEmulation=1` and `OverrideDefaultFP64Settings=1` were present when the SYCL
+     * runtime created the device. The query is deliberately made on the device rather than
+     * trusting the environment alone: `OverrideDefaultFP64Settings=1` on its own does not make
+     * double kernels correct. Non-oneAPI devices always return true.
+     */
+    template<typename TDevice>
+    bool syclDeviceSupportsDouble([[maybe_unused]] TDevice const& device)
+    {
+#if ALPAKA_LANG_ONEAPI
+        if constexpr(std::same_as<ALPAKA_TYPEOF(device.getApi()), alpaka::api::OneApi>)
+        {
+            auto [syclDevice, syclContext] = device.getNativeHandle();
+            (void) syclContext;
+            return !syclDevice.template get_info<sycl::info::device::double_fp_config>().empty();
+        }
+#endif
+        return true;
+    }
+
+    /** Validate an explicit FP64-emulation request or throw instead of falling back to fp32.
+     *
+     * Both IGC variables must be present when the process starts, because the Intel runtime reads
+     * them before the first queue is created. A missing variable or an empty `double_fp_config`
+     * is an error: silently running single precision would make the opt-in a lie.
+     */
+    template<typename TDevice>
+    void requireSyclFp64Emulation(TDevice const& device)
+    {
+        char const* const enable = std::getenv("IGC_EnableDPEmulation");
+        if(enable == nullptr || std::string_view{enable} != "1")
+            throw std::runtime_error{"GRAPHFLOW_SYCL_FP64_EMULATION=1 also requires IGC_EnableDPEmulation=1"};
+        char const* const overrideValue = std::getenv("OverrideDefaultFP64Settings");
+        if(overrideValue == nullptr || std::string_view{overrideValue} != "1")
+            throw std::runtime_error{"GRAPHFLOW_SYCL_FP64_EMULATION=1 also requires OverrideDefaultFP64Settings=1"};
+        if(!syclDeviceSupportsDouble(device))
+            throw std::runtime_error{"GRAPHFLOW_SYCL_FP64_EMULATION=1 requested, but the device reports an empty "
+                                     "double_fp_config; set both IGC variables before the process starts"};
+    }
+
+    /** Double-precision oneAPI photon run, defined in its own translation unit.
+     *
+     * Keeping the definition in `PhotonScatteringFp64OneApi.cpp` puts the double kernels in a
+     * separate SYCL device image from the default fp32 path. If both were instantiated in the
+     * caller translation unit, loading the fp32 device image would require the fp64 aspect before
+     * `runPhotonScatteringAuto()` can check the runtime opt-in. The specialization is compiled at
+     * `-O0` for the icpx 2026.2 FP64-emulation kernel-argument miscompile.
+     */
+    template<typename TDevice>
+    ScatteringResult runPhotonScatteringDoubleOneApi(
+        TDevice device,
+        Parameters const& parameters,
+        graphFlow::Tuning tuning);
+
+#if ALPAKA_LANG_ONEAPI
+    /** Concrete oneAPI Intel GPU device type used by the double-path specialization. */
+    using OneApiSyclDevice
+        = decltype(alpaka::onHost::makeDeviceSelector(
+                       alpaka::onHost::DeviceSpec{alpaka::api::OneApi{}, alpaka::deviceKind::intelGpu})
+                       .makeDevice(0u));
+
+    template<>
+    ScatteringResult runPhotonScatteringDoubleOneApi<OneApiSyclDevice>(
+        OneApiSyclDevice device,
+        Parameters const& parameters,
+        graphFlow::Tuning tuning);
+#endif
+
     /** Run with the precision the selected device supports.
      *
-     * Intel GPUs exposed by the oneAPI backend do not advertise the SYCL fp64 aspect, so the SYCL
-     * device image would reject every double kernel at submission. The oneAPI path therefore runs
-     * the same physics in single precision; the CPU, CUDA and HIP paths keep double. The result is
-     * converted back to the public double type so callers see one result type.
+     * Intel GPUs exposed by the oneAPI backend do not advertise the SYCL fp64 aspect by default,
+     * so the oneAPI path runs the same physics in single precision and converts the result back to
+     * the public double type. Double precision is available only behind an explicit opt-in:
+     * `GRAPHFLOW_SYCL_FP64_EMULATION=1` together with `IGC_EnableDPEmulation=1` and
+     * `OverrideDefaultFP64Settings=1` in the process environment. A half-configured opt-in throws
+     * from `requireSyclFp64Emulation()` rather than running fp32. The CPU, CUDA and HIP paths keep
+     * double.
+     *
+     * The oneAPI photon kernels use block barriers and atomics only, no warp or sub-group
+     * collectives. They therefore do not exercise the DG2 sub-group reduction path that can hang
+     * with `reqd_sub_group_size` (upstream issue #1036).
      */
     template<typename TDevice>
     ScatteringResult runPhotonScatteringAuto(TDevice device, Parameters const& parameters, graphFlow::Tuning tuning)
     {
         if constexpr(std::same_as<ALPAKA_TYPEOF(device.getApi()), alpaka::api::OneApi>)
+        {
+            if(syclFp64EmulationRequested())
+            {
+                requireSyclFp64Emulation(device);
+                return runPhotonScatteringDoubleOneApi(std::move(device), parameters, tuning);
+            }
             return toDouble(runPhotonScatteringAs<float>(std::move(device), parameters, tuning));
+        }
         else
             return runPhotonScattering(std::move(device), parameters, tuning);
     }

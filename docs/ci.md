@@ -341,9 +341,13 @@ runtime claim. The validated device run is 71/71 at current main
 `9fb15f1e6ce13f252b31d4cb60cc410862d56511` on `hal` with an Intel Arc A770
 (`spir64`, oneAPI 2026.2), where the PR #69 matrix (33 in-process, 24 particle
 CLI, 3 cross-backend, 10 photon CLI, 1 photon output) passes with
-`ctest -L sycl`; the Arc A770 lacks the SYCL `fp64` aspect, so the oneAPI
-photon path runs fp32, and AOT via `ocloc` crashes there, so the build stays
-JIT-compiled SPIR-V. See [build.md](build.md#sycl-intel-gpu).
+`ctest -L sycl`; by default the Arc A770 lacks the SYCL `fp64` aspect, so the
+oneAPI photon path runs fp32. An environment-scoped
+`test_photon_scattering_sycl_fp64` case opts into Intel FP64 emulation on
+`hal`; the hosted job never runs it. AOT via `ocloc` is
+not used: `ocloc` is present and a plain invocation does not crash, but it
+rejects double, so the build stays JIT-compiled SPIR-V. See
+[build.md](build.md#sycl-intel-gpu).
 
 ## Format
 

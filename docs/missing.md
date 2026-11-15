@@ -368,10 +368,13 @@ resource or decision is missing.
   `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69) on `hal` with an Intel
   Arc A770 (`spir64`, oneAPI 2026.2, icpx 2026.2.0): **71/71** CTest via
   `ctest -L sycl` (33 in-process Catch2 cases, 24 particle CLI, 3
-  cross-backend exact-histogram, 10 photon CLI, 1 photon output). The Arc
-  A770 lacks the SYCL `fp64` aspect, so the oneAPI photon path runs fp32;
-  AOT compilation with `ocloc` (`-fsycl-targets=spir64_gen`) crashes on
-  `hal`, so the build stays JIT-compiled SPIR-V. GitHub-hosted SYCL remains
+  cross-backend exact-histogram, 10 photon CLI, 1 photon output). By default
+  the Arc A770 lacks the SYCL `fp64` aspect, so the oneAPI photon path runs
+  fp32; an environment-scoped `test_photon_scattering_sycl_fp64` case opts into Intel FP64 emulation.
+  AOT compilation with `ocloc` is not used: `ocloc` is present and a plain
+  invocation does not crash, but it rejects double
+  (`-fsycl-targets=spir64_gen`), so the build stays JIT-compiled SPIR-V.
+  GitHub-hosted SYCL remains
   compile-only in the `sycl-compile` job; no SYCL runtime claim is made for
   GitHub CI, and no SYCL performance run is recorded while `hal` reports
   `sharing=unknown`. Remaining SYCL work: a second Intel device and an

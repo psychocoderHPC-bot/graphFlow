@@ -63,14 +63,38 @@ compiles the target but runs no CTest, so no SYCL runtime claim is made for
 GitHub CI. No performance run is recorded and
 `hal` reports `sharing=unknown`.
 
-The Arc A770 does not advertise the SYCL `fp64` aspect (`sycl::aspect::fp64` is
-false on both the Level Zero and OpenCL plugins), so a double kernel is
-rejected at submission even though OpenCL reports `cl_khr_fp64`. The oneAPI
-path therefore runs the photon physics in single precision through
-`runPhotonScatteringAs<float>` and `runPhotonScatteringAuto`; the CPU, CUDA and
-HIP paths keep double and the public result is still `ScatteringResult`. Event
-counts and the terminal sum stay exact, while float physics checks use
-single-precision margins.
+By default the Arc A770 does not advertise the SYCL `fp64` aspect
+(`sycl::aspect::fp64` is false on both the Level Zero and OpenCL plugins), so a
+double kernel is rejected at submission even though OpenCL reports
+`cl_khr_fp64`. The oneAPI path therefore runs the photon physics in single
+precision through `runPhotonScatteringAs<float>` and
+`runPhotonScatteringAuto`; the CPU, CUDA and HIP paths keep double and the
+public result is still `ScatteringResult`. Event counts and the terminal sum
+stay exact, while float physics checks use single-precision margins.
+
+Explicit FP64 emulation is opt-in. A fresh process with
+`GRAPHFLOW_SYCL_FP64_EMULATION=1`, `IGC_EnableDPEmulation=1` and
+`OverrideDefaultFP64Settings=1` exposes `sycl::aspect::fp64` and a non-empty
+`double_fp_config`, and `runPhotonScatteringAuto` then runs oneAPI photon
+physics in double. `OverrideDefaultFP64Settings=1` alone is not enough: the
+runtime aborts on the first double buffer. A half-configured opt-in throws
+instead of using fp32, so emulation is never selected silently. The CTest case
+`test_photon_scattering_sycl_fp64` supplies all three variables and runs a
+bounded case with a 300 s timeout.
+
+DG2 sub-group reductions that combine `reqd_sub_group_size` with subgroup
+collectives can hang or produce `DEVICE_LOST` (upstream issue #1036). The
+photon kernels use block barriers and atomics only, no subgroup collectives, so
+the FP64 case avoids that path; a hang still fails through the CTest timeout.
+icpx 2026.2 also miscompiles the double photon functor at `-O1` and above with
+FP64 emulation: a 32-byte functor kernel argument (`SlabT<double>` plus a
+runtime scalar) arrives corrupted, the transform writes an invalid payload, and
+the device can report `DEVICE_LOST`. The double oneAPI photon path is
+therefore compiled in its own translation unit,
+`PhotonScatteringFp64OneApi.cpp`, at `-O0`; the separate unit also keeps the
+double kernels out of the fp32 device image, so a default run never requires
+the fp64 aspect. Other translation units and the fp32 SYCL path stay
+optimized.
 
 The alpaka pin `eb677e8d7f70d79b35df25d9002f94ba669b6f44` cannot set
 relocatable device code for SYCL: its `cmake/alpakaOneApi.cmake` omits the
@@ -78,9 +102,9 @@ relocatable device code for SYCL: its `cmake/alpakaOneApi.cmake` omits the
 `alpaka_RELOCATABLE_DEVICE_CODE=DEFAULT` and sanitizes the stray `INTERFACE`
 argument from the `-fsycl-targets` call in `CMakeLists.txt`; the external
 alpaka tree stays unmodified. No upstream `dev_v3.x` commit carries a fix, so
-the pin is unchanged. AOT compilation is also unavailable on the validated
-host: `ocloc` (the `ocloc` used by `-fsycl-targets=spir64_gen`) crashes with
-signal 11 on `hal` under oneAPI 2026.2, so the SYCL build stays
+the pin is unchanged. AOT compilation is not used on the validated host:
+`ocloc` is present on `hal` and a plain invocation does not crash, but it
+rejects double (`-fsycl-targets=spir64_gen`), so the SYCL build stays
 JIT-compiled SPIR-V; the first kernel run pays the SPIR-V JIT cost.
 
 ## CPU OMP execution

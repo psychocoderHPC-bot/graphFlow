@@ -234,6 +234,12 @@ if(GRAPHFLOW_BUILD_EXAMPLES)
     alpaka_finalize(graphFlow_particle_feedback)
 
     add_executable(graphFlow_photon_scattering examples/photon_scattering/main.cpp)
+    if(GRAPHFLOW_ENABLE_SYCL)
+        target_sources(
+            graphFlow_photon_scattering
+            PRIVATE examples/photon_scattering/PhotonScatteringFp64OneApi.cpp
+        )
+    endif()
     target_link_libraries(graphFlow_photon_scattering PRIVATE graphFlow::graphFlow)
     target_include_directories(
         graphFlow_photon_scattering
@@ -323,8 +329,18 @@ if(GRAPHFLOW_BUILD_TESTS)
                 tests/integration/test_async_execution_sycl.cpp
                 tests/integration/test_framespec_sycl.cpp
                 tests/integration/test_particle_pressure_sycl.cpp
+                tests/integration/test_photon_scattering_sycl_fp64.cpp
+                examples/photon_scattering/PhotonScatteringFp64OneApi.cpp
         )
     endif()
+    # icpx 2026.2 miscompiles a 32-byte double functor passed as a kernel argument under
+    # Intel FP64 emulation at -O1 and above: the transform writes an invalid payload and the
+    # device can be lost. Keep only the double oneAPI photon translation unit unoptimized; the
+    # fp32 path and the rest of the suite stay optimized.
+    set_source_files_properties(
+        examples/photon_scattering/PhotonScatteringFp64OneApi.cpp
+        PROPERTIES COMPILE_OPTIONS "-O0"
+    )
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(
         graphFlow_tests
@@ -341,7 +357,7 @@ if(GRAPHFLOW_BUILD_TESTS)
     # Large statistical photon runs are opt-in. The default suite keeps only fast cases.
     # SYCL cases are discovered under their own label so `ctest -L sycl` selects the whole
     # device matrix; the other specs exclude that tag to keep every case registered once.
-    catch_discover_tests(graphFlow_tests TEST_SPEC "~[diagnostics]~[sycl]")
+    catch_discover_tests(graphFlow_tests TEST_SPEC "~[diagnostics]~[sycl]~[sycl-fp64]")
     if(GRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS)
         catch_discover_tests(
             graphFlow_tests
@@ -355,6 +371,26 @@ if(GRAPHFLOW_BUILD_TESTS)
             graphFlow_tests
             TEST_SPEC "[sycl]"
             PROPERTIES LABELS "sycl"
+        )
+        # Explicit Intel FP64 emulation is environment-scoped: the IGC variables are read by the
+        # SYCL runtime before the first queue exists, so they can only be supplied to a fresh
+        # process. `cmake -E env` gives this one Catch2 case the three variables without touching
+        # the other SYCL tests. The case is kept out of the default and [sycl] discovery specs and
+        # runs with a hard timeout for the known DG2 hang/DEVICE_LOST failure mode (upstream issue
+        # #1036).
+        add_test(
+            NAME test_photon_scattering_sycl_fp64
+            COMMAND
+                ${CMAKE_COMMAND} -E env
+                GRAPHFLOW_SYCL_FP64_EMULATION=1
+                IGC_EnableDPEmulation=1
+                OverrideDefaultFP64Settings=1
+                $<TARGET_FILE:graphFlow_tests>
+                "SYCL photon FP64 emulation runs the exact double path"
+        )
+        set_tests_properties(
+            test_photon_scattering_sycl_fp64
+            PROPERTIES LABELS "sycl;fp64;emulation" TIMEOUT 300
         )
     endif()
 

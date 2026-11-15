@@ -540,13 +540,17 @@ yet; that is an operator action and is not changed from this repository. See
   GitHub-hosted HIP remains compile-only because its runners have no AMD GPU.
 - SYCL execution is validated on one Intel device: `hal` with an Intel Arc
   A770 (`spir64`, oneAPI 2026.2), **71/71 CTest at
-  `9fb15f1e6ce13f252b31d4cb60cc410862d56511`**. The Arc A770 does not
-  advertise the SYCL `fp64` aspect, so the oneAPI photon path runs in fp32
-  while the CPU, CUDA and HIP photon runs keep double. AOT compilation with
-  `ocloc` (`-fsycl-targets=spir64_gen`) crashes on `hal`; the build stays
-  JIT-compiled SPIR-V. `hal` reports `sharing=unknown`, so there is no SYCL
-  performance claim. GitHub-hosted SYCL remains compile-only in the
-  `sycl-compile` job because its runners have no Intel GPU.
+  `9fb15f1e6ce13f252b31d4cb60cc410862d56511`**. By default the Arc A770 does
+  not advertise the SYCL `fp64` aspect, so the oneAPI photon path runs in fp32
+  while the CPU, CUDA and HIP photon runs keep double. An environment-scoped
+  `test_photon_scattering_sycl_fp64` case opts into Intel FP64 emulation
+  (`GRAPHFLOW_SYCL_FP64_EMULATION=1` plus both IGC variables) and runs the
+  double physics. AOT compilation with `ocloc` is not used: `ocloc` is present
+  and a plain invocation does not crash, but it rejects double
+  (`-fsycl-targets=spir64_gen`), so the build stays JIT-compiled SPIR-V. `hal`
+  reports `sharing=unknown`, so there is no SYCL performance claim.
+  GitHub-hosted SYCL remains compile-only in the `sycl-compile` job because its
+  runners have no Intel GPU.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
   CUDA 13.4 is the validated compiler on A30 `sm_80`; nvcc 12.6.85 builds V100
   `sm_70` with the explicit concept-parameter workaround.
