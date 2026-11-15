@@ -79,7 +79,7 @@ namespace
     {
         graphFlow::photon::Parameters const& parameters = resolved.parameters;
         graphFlow::photon::ScatteringResult const result
-            = graphFlow::photon::runPhotonScattering(device, parameters, resolved.tuning);
+            = graphFlow::photon::runPhotonScatteringAuto(device, parameters, resolved.tuning);
 
         std::cout << "# graphFlow_photon_scattering backend=" << graphFlow::backendName(backend)
                   << " device=" << parameters.deviceIndex << " device-name=" << deviceName

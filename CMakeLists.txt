@@ -310,9 +310,20 @@ if(GRAPHFLOW_BUILD_TESTS)
         )
     endif()
     if(GRAPHFLOW_ENABLE_SYCL)
-        # Runtime smoke: it fails when no Intel GPU is visible. Hosted CI compiles this target
-        # in the sycl-compile job but runs no CTest; the device gate runs on hal with an Arc A770.
-        target_sources(graphFlow_tests PRIVATE tests/unit/test_sycl_kernel.cpp)
+        # Runtime coverage: every case fails when no Intel GPU is visible. Hosted CI compiles this
+        # target in the sycl-compile job but runs no CTest; the full device matrix runs on hal with
+        # an Arc A770.
+        target_sources(
+            graphFlow_tests
+            PRIVATE
+                tests/unit/test_sycl_kernel.cpp
+                tests/integration/test_flow_execution_sycl.cpp
+                tests/integration/test_failure_paths_sycl.cpp
+                tests/integration/test_photon_scattering_sycl.cpp
+                tests/integration/test_async_execution_sycl.cpp
+                tests/integration/test_framespec_sycl.cpp
+                tests/integration/test_particle_pressure_sycl.cpp
+        )
     endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
     target_include_directories(
@@ -328,13 +339,22 @@ if(GRAPHFLOW_BUILD_TESTS)
 
     include(Catch)
     # Large statistical photon runs are opt-in. The default suite keeps only fast cases.
-    catch_discover_tests(graphFlow_tests TEST_SPEC "~[diagnostics]")
+    # SYCL cases are discovered under their own label so `ctest -L sycl` selects the whole
+    # device matrix; the other specs exclude that tag to keep every case registered once.
+    catch_discover_tests(graphFlow_tests TEST_SPEC "~[diagnostics]~[sycl]")
     if(GRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS)
         catch_discover_tests(
             graphFlow_tests
-            TEST_SPEC "[diagnostics]"
+            TEST_SPEC "[diagnostics]~[sycl]"
             TEST_PREFIX "diagnostics."
             PROPERTIES LABELS "diagnostics"
+        )
+    endif()
+    if(GRAPHFLOW_ENABLE_SYCL)
+        catch_discover_tests(
+            graphFlow_tests
+            TEST_SPEC "[sycl]"
+            PROPERTIES LABELS "sycl"
         )
     endif()
 
@@ -424,6 +444,9 @@ if(GRAPHFLOW_BUILD_TESTS)
             if(GRAPHFLOW_ENABLE_HIP)
                 graphflow_add_example_cli_test(hip ${particles} ${chunk_size})
             endif()
+            if(GRAPHFLOW_ENABLE_SYCL)
+                graphflow_add_example_cli_test(sycl ${particles} ${chunk_size})
+            endif()
         endforeach()
     endforeach()
 
@@ -480,6 +503,9 @@ if(GRAPHFLOW_BUILD_TESTS)
     endif()
     if(GRAPHFLOW_ENABLE_HIP)
         list(APPEND GRAPHFLOW_CROSS_BACKEND_BACKENDS hip)
+    endif()
+    if(GRAPHFLOW_ENABLE_SYCL)
+        list(APPEND GRAPHFLOW_CROSS_BACKEND_BACKENDS sycl)
     endif()
     set(GRAPHFLOW_CROSS_BACKEND_LABELS "example;cli;cross-backend;long")
     foreach(backend IN LISTS GRAPHFLOW_CROSS_BACKEND_BACKENDS)
@@ -580,6 +606,9 @@ if(GRAPHFLOW_BUILD_TESTS)
             if(GRAPHFLOW_ENABLE_HIP)
                 graphflow_add_photon_cli_test(hip ${photons} ${chunk_size} forward 1.0 0.0 64 42)
             endif()
+            if(GRAPHFLOW_ENABLE_SYCL)
+                graphflow_add_photon_cli_test(sycl ${photons} ${chunk_size} forward 1.0 0.0 64 42)
+            endif()
         endforeach()
     endforeach()
     graphflow_add_photon_cli_test(cpu 4097 31 isotropic 0.7 0.3 256 7)
@@ -591,6 +620,10 @@ if(GRAPHFLOW_BUILD_TESTS)
     if(GRAPHFLOW_ENABLE_HIP)
         graphflow_add_photon_cli_test(hip 4097 31 isotropic 0.7 0.3 256 7)
         graphflow_add_photon_cli_test(hip 512 31 forward 1.0 0.0 2 42)
+    endif()
+    if(GRAPHFLOW_ENABLE_SYCL)
+        graphflow_add_photon_cli_test(sycl 4097 31 isotropic 0.7 0.3 256 7)
+        graphflow_add_photon_cli_test(sycl 512 31 forward 1.0 0.0 2 42)
     endif()
 
     function(graphflow_add_photon_output_test backend)
@@ -618,5 +651,8 @@ if(GRAPHFLOW_BUILD_TESTS)
     endif()
     if(GRAPHFLOW_ENABLE_HIP)
         graphflow_add_photon_output_test(hip)
+    endif()
+    if(GRAPHFLOW_ENABLE_SYCL)
+        graphflow_add_photon_output_test(sycl)
     endif()
 endif()

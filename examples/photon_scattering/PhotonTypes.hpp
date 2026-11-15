@@ -41,23 +41,30 @@ namespace graphFlow::photon
         isotropic = 1u
     };
 
-    /** Three-dimensional vector in double precision. */
-    struct Vec3
+    /** Three-dimensional vector in the photon scalar type. */
+    template<typename T>
+    struct Vec3T
     {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
+        T x = T{0};
+        T y = T{0};
+        T z = T{0};
 
-        friend constexpr bool operator==(Vec3 const&, Vec3 const&) = default;
+        friend constexpr bool operator==(Vec3T const&, Vec3T const&) = default;
     };
+
+    /** Double-precision photon vector used by the CPU, CUDA and HIP backends. */
+    using Vec3 = Vec3T<double>;
 
     /** Homogeneous plane-parallel slab in inverse-length units. */
-    struct Slab
+    template<typename T>
+    struct SlabT
     {
-        double thickness = 1.0;
-        double sigmaS = 0.0;
-        double sigmaA = 0.0;
+        T thickness = T{1};
+        T sigmaS = T{0};
+        T sigmaA = T{0};
     };
+
+    using Slab = SlabT<double>;
 
     /** Flight proposal carried inside the payload.
      *
@@ -65,12 +72,15 @@ namespace graphFlow::photon
      * the input geometry is non-finite or impossible; the partition then rejects the item through
      * `Status` before publishing any output.
      */
-    struct Proposal
+    template<typename T>
+    struct ProposalT
     {
         Event event = Event::absorbed;
-        double distance = 0.0;
+        T distance = T{0};
         bool valid = false;
     };
+
+    using Proposal = ProposalT<double>;
 
     /** Photon payload of the public `Flow` API.
      *
@@ -78,26 +88,32 @@ namespace graphFlow::photon
      * every flight decision, collision-kind decision and angular draw depends only on the packed
      * `(seed, id, scatterCount, purpose)` engine position.
      */
-    struct Photon
+    template<typename T>
+    struct PhotonT
     {
         std::uint64_t id = 0u;
-        Vec3 position{};
-        Vec3 direction{0.0, 0.0, 1.0};
+        Vec3T<T> position{};
+        Vec3T<T> direction{T{0}, T{0}, T{1}};
         std::uint32_t scatterCount = 0u;
-        Proposal proposal{};
+        ProposalT<T> proposal{};
     };
+
+    using Photon = PhotonT<double>;
 
     static_assert(std::is_trivially_copyable_v<Photon>);
     static_assert(std::is_default_constructible_v<Photon>);
 
     /** Application-owned terminal record written by the shared sink. */
-    struct TerminalRecord
+    template<typename T>
+    struct TerminalRecordT
     {
         Event event = Event::absorbed;
         std::uint32_t scatterCount = 0u;
-        Vec3 position{};
-        Vec3 direction{};
+        Vec3T<T> position{};
+        Vec3T<T> direction{};
     };
+
+    using TerminalRecord = TerminalRecordT<double>;
 
     static_assert(std::is_trivially_copyable_v<TerminalRecord>);
     static_assert(std::is_default_constructible_v<TerminalRecord>);
@@ -114,13 +130,16 @@ namespace graphFlow::photon
     };
 
     /** One bounded trace vertex: event kind, completed scatters, position and outgoing direction. */
-    struct TraceVertex
+    template<typename T>
+    struct TraceVertexT
     {
         TraceKind kind = TraceKind::source;
         std::uint32_t scatterCount = 0u;
-        Vec3 position{};
-        Vec3 direction{};
+        Vec3T<T> position{};
+        Vec3T<T> direction{};
     };
+
+    using TraceVertex = TraceVertexT<double>;
 
     static_assert(std::is_trivially_copyable_v<TraceVertex>);
     static_assert(std::is_default_constructible_v<TraceVertex>);
@@ -139,13 +158,16 @@ namespace graphFlow::photon
     };
 
     /** Host-side trace of one selected photon. */
-    struct PhotonTrace
+    template<typename T>
+    struct PhotonTraceT
     {
         std::uint64_t id = 0u;
         std::uint32_t count = 0u;
         bool truncated = false;
-        std::vector<TraceVertex> vertices;
+        std::vector<TraceVertexT<T>> vertices;
     };
+
+    using PhotonTrace = PhotonTraceT<double>;
 
     /** Sentinel event for a result slot that no terminal sink reached. */
     inline constexpr Event missingEvent = static_cast<Event>(0xFFFF'FFFFu);
@@ -176,15 +198,20 @@ namespace graphFlow::photon
     };
 
     /** Total macroscopic cross-section, `sigmaS + sigmaA`. */
-    constexpr double sigmaTotal(Slab const& slab)
+    template<typename T>
+    constexpr T sigmaTotal(SlabT<T> const& slab)
     {
         return slab.sigmaS + slab.sigmaA;
     }
 
     /** Resolve the domain parameters into the slab every stage shares. */
-    constexpr Slab slabOf(Parameters const& parameters)
+    template<typename T = double>
+    constexpr SlabT<T> slabOf(Parameters const& parameters)
     {
-        return Slab{parameters.thickness, parameters.sigmaS, parameters.sigmaA};
+        return SlabT<T>{
+            static_cast<T>(parameters.thickness),
+            static_cast<T>(parameters.sigmaS),
+            static_cast<T>(parameters.sigmaA)};
     }
 
     /** Validate a resolved slab once on the host.
@@ -258,9 +285,10 @@ namespace graphFlow::photon
     };
 
     /** Host-side result of one photon-scattering run. */
-    struct ScatteringResult
+    template<typename T>
+    struct ScatteringResultT
     {
-        std::vector<TerminalRecord> terminal; // final record indexed by photon id
+        std::vector<TerminalRecordT<T>> terminal; // final record indexed by photon id
         std::vector<std::uint32_t> terminalVisits; // terminal sink writes per id
         std::vector<OutcomeHistogramRow> histograms; // sorted by event, then scatter count
         std::uint64_t eventCounts[eventBins]{}; // terminal records per event
@@ -268,8 +296,10 @@ namespace graphFlow::photon
         std::uint64_t terminated = 0u; // records with exactly one terminal write
         std::uint64_t inconsistent = 0u; // ids without exactly one terminal write
         std::uint32_t liveParticles = 0u; // configured source-admission capacity P
-        std::vector<PhotonTrace> traces; // opt-in bounded deterministic traces
+        std::vector<PhotonTraceT<T>> traces; // opt-in bounded deterministic traces
         std::uint64_t traceTruncated = 0u; // selected ids whose vertex buffer overflowed
         SchedulerStats stats;
     };
+
+    using ScatteringResult = ScatteringResultT<double>;
 } // namespace graphFlow::photon

@@ -170,8 +170,14 @@ ctest --test-dir build-sycl --output-on-failure --no-tests=error
 ```
 
 The SYCL runtime cases fail when no Intel GPU is visible instead of skipping.
-The validated device is `hal` with an Intel Arc A770 (`spir64`, oneAPI 2026.2).
-Check the compiler and device visibility before a run:
+`ctest -L sycl` selects the in-process typed Flow, failure, photon, async/depth,
+FrameSpec and particle pressure matrix, together with the SYCL CLI and
+cross-backend exact-histogram cases. The validated device is `hal` with an
+Intel Arc A770 (`spir64`, oneAPI 2026.2), where the matrix passes 71/71. The
+Arc A770 does not advertise the SYCL `fp64` aspect, so the oneAPI photon path
+runs single precision and converts the result to the public `ScatteringResult`;
+the CPU, CUDA and HIP photon runs keep double. Check the compiler and device
+visibility before a run:
 
 ```sh
 icpx --version

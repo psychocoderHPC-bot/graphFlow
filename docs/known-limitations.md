@@ -44,15 +44,28 @@ remain unrecorded. `hal` reports `sharing=unknown`, so no HIP performance claim
 is made. The historical `gfx90a` compile-only gate is not an AMD runtime
 result.
 
-## SYCL is a minimal Intel-GPU backend
+## SYCL is validated on one Intel GPU and uses fp32 photons
 
 `GRAPHFLOW_ENABLE_SYCL=ON` adds the `Backend::sycl` dispatcher
-(`api::oneApi`/`deviceKind::intelGpu`) and one scalar smoke test. It does not
-add SYCL copies of the typed CUDA/HIP Flow, particle, or photon cases, and no
-performance run is recorded. The SYCL build disables the OpenCL CPU device kind
+(`api::oneApi`/`deviceKind::intelGpu`) and a runtime matrix with typed Flow
+execution, failure paths, photon scattering, async/depth, FrameSpec, and
+particle feedback/pressure cases. `ctest -L sycl` selects that matrix; the
+build registers every device case under the `sycl` label, plus the SYCL CLI
+and cross-backend exact-histogram cases. On `hal` with an Arc A770 (`spir64`,
+oneAPI 2026.2) the matrix passes 71/71, and the CPU-only build passes 255/255 on
+`fwk394`. The SYCL build disables the OpenCL CPU device kind
 (`alpaka_ONEAPI_Cpu=OFF`), so a missing Intel GPU fails the backend contract
-instead of falling back to the host. Only `hal` with an Arc A770 (`spir64`,
-oneAPI 2026.2) is validated.
+instead of falling back to the host. No performance run is recorded and
+`hal` reports `sharing=unknown`.
+
+The Arc A770 does not advertise the SYCL `fp64` aspect (`sycl::aspect::fp64` is
+false on both the Level Zero and OpenCL plugins), so a double kernel is
+rejected at submission even though OpenCL reports `cl_khr_fp64`. The oneAPI
+path therefore runs the photon physics in single precision through
+`runPhotonScatteringAs<float>` and `runPhotonScatteringAuto`; the CPU, CUDA and
+HIP paths keep double and the public result is still `ScatteringResult`. Event
+counts and the terminal sum stay exact, while float physics checks use
+single-precision margins.
 
 The alpaka pin `eb677e8d7f70d79b35df25d9002f94ba669b6f44` cannot set
 relocatable device code for SYCL: its `cmake/alpakaOneApi.cmake` omits the

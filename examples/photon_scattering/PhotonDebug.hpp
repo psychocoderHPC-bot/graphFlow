@@ -10,11 +10,14 @@
 #include <alpaka/alpaka.hpp>
 
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 
 namespace graphFlow::photon
 {
     /** Component-wise finiteness of a three-vector. */
-    ALPAKA_FN_ACC inline bool finite(Vec3 const& value)
+    template<typename T>
+    ALPAKA_FN_ACC inline bool finite(Vec3T<T> const& value)
     {
         return alpaka::math::isfinite(value.x) && alpaka::math::isfinite(value.y) && alpaka::math::isfinite(value.z);
     }
@@ -24,12 +27,13 @@ namespace graphFlow::photon
      * The release build compiles the body to `true`; the device hot loop keeps no per-event state
      * branch. Host setup already validated the slab and the configuration.
      */
-    ALPAKA_FN_ACC inline bool validatePhoton(Slab const& slab, Photon const& photon)
+    template<typename T>
+    ALPAKA_FN_ACC inline bool validatePhoton(SlabT<T> const& slab, PhotonT<T> const& photon)
     {
         if constexpr(!graphFlow::debug::checksEnabled)
             return true;
         else
-            return finite(photon.position) && finite(photon.direction) && photon.position.z >= 0.0
+            return finite(photon.position) && finite(photon.direction) && photon.position.z >= T{0}
                    && photon.position.z <= slab.thickness;
     }
 
@@ -38,30 +42,32 @@ namespace graphFlow::photon
      * Face events must land on their plane after the proposed distance. Collision events must
      * remain inside the slab. The release build compiles the body to `true`.
      */
-    ALPAKA_FN_ACC inline bool validateProposal(Slab const& slab, Photon const& photon)
+    template<typename T>
+    ALPAKA_FN_ACC inline bool validateProposal(SlabT<T> const& slab, PhotonT<T> const& photon)
     {
         if constexpr(!graphFlow::debug::checksEnabled)
             return true;
         else
         {
-            Proposal const& proposal = photon.proposal;
+            ProposalT<T> const& proposal = photon.proposal;
             if(!proposal.valid)
                 return false;
-            if(!alpaka::math::isfinite(proposal.distance) || proposal.distance < 0.0)
+            if(!alpaka::math::isfinite(proposal.distance) || proposal.distance < T{0})
                 return false;
             if(static_cast<std::uint32_t>(proposal.event) >= eventBins)
                 return false;
 
-            double const scale = slab.thickness > 1.0 ? slab.thickness : 1.0;
-            double const tolerance = 1e-12 * scale;
-            double const nextZ = photon.position.z + proposal.distance * photon.direction.z;
+            T const scale = slab.thickness > T{1} ? slab.thickness : T{1};
+            T const tolerance
+                = std::is_same_v<T, double> ? T{1e-12} * scale : T{64} * std::numeric_limits<T>::epsilon() * scale;
+            T const nextZ = photon.position.z + proposal.distance * photon.direction.z;
             switch(proposal.event)
             {
             case Event::transmitted:
-                return photon.direction.z > 0.0 && nextZ >= slab.thickness - tolerance
+                return photon.direction.z > T{0} && nextZ >= slab.thickness - tolerance
                        && nextZ <= slab.thickness + tolerance;
             case Event::reflected:
-                return photon.direction.z < 0.0 && nextZ >= -tolerance && nextZ <= tolerance;
+                return photon.direction.z < T{0} && nextZ >= -tolerance && nextZ <= tolerance;
             default:
                 return nextZ >= -tolerance && nextZ <= slab.thickness + tolerance;
             }
