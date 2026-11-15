@@ -302,7 +302,8 @@ jobs:
             -DCMAKE_HIP_COMPILER="${ROCM_PATH}/llvm/bin/amdclang++" \
             -DCMAKE_HIP_ARCHITECTURES=gfx90a \
             -DCMAKE_PREFIX_PATH="${ROCM_PATH}" \
-            -Dalpaka_DEP_OMP=OFF
+            -Dalpaka_DEP_OMP=OFF \
+            -Dalpaka_COMPILE_PEDANTIC=ON
 
       # Compile-only gate: the hosted runner has no AMD GPU, so no CTest run
       # and no example execution.
