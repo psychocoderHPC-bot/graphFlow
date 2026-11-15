@@ -109,7 +109,8 @@ is derived from it.
 ## P07b: Q/C re-run and kernel-axis e2e
 
 Provenance: graphFlow main `a61028192884bb92e0107b32f20e12b5c9ca76c9` plus the
-P07b kernel-workload CLI on branch `gf/p07b-e2e`. One exclusive
+P07b kernel-workload CLI on branch `gf/p07b-e2e`, merged as
+`56c11acbca6d10ea82fd85d213abcb4f9050dbf8`. One exclusive
 `gpu-v100-int` allocation on `rosi_v100` (`gv001`), Tesla V100-SXM2-32GB,
 driver 570.158.01, CUDA 12.6.85, `sm_70`, Release. Binary SHA-256
 `23c2bbeed6b9b7b0216ffaf865eaa081a80176b44d14ab05f163ba8a749775b4`. Every
