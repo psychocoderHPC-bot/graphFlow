@@ -24,18 +24,20 @@ Documentation:
 
 ## Status
 
-Current code main: `56c11acbca6d10ea82fd85d213abcb4f9050dbf8` (P07b). The
-full CTest suites pass with no skipped or filtered cases:
+Current code main: `ffe4074ba11fadbe1d901d724d04231c055a5d59` (PR #63, the
+measured kernel axes routed through the public `Flow`). The full CTest suites
+pass with no skipped or filtered cases:
 
 | Configuration | Host / device | Result |
 | --- | --- | --- |
-| CPU Release | fwk394, g++ 13.3 | **246/246 passed** |
-| CUDA Release | `hal`, A30 `sm_80`, CUDA 13.4 | **306/306 passed** |
-| HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **297/297 passed** |
+| CPU Release | fwk394, g++ 13.3 | **249/249 passed** |
+| CUDA Release | `hal`, A30 `sm_80`, CUDA 13.4 | **310/310 passed** |
+| HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **301/301 passed** |
 
 Pins, commands, the no-skip assertion, and the historical totals are in the
-[acceptance record](docs/acceptance.md). P07b adds 7/7 cases (five
-`[kernel-axes]` integration and two CLI contract), included above; the previous
+[acceptance record](docs/acceptance.md). PR #63 adds 2/2 CPU, 3/3 CUDA and
+3/3 HIP cases on top of the P07b 7/7; the previous `88de14f` totals 247/247, 307/307
+and 298/298, the `56c11ac` totals 246/246, 306/306 and 297/297, and the
 `a610281` totals 239/239, 299/299 and 290/290 are historical. The public API
 is implemented: the typed `Flow<TPayload, TDevice, TStorage>` topology,
 execution, storage, and status path described in
@@ -50,9 +52,10 @@ The latest exclusive performance record is P07b on `rosi_v100` (merged as
 `P=16384`, Q=8 median 12,987,013 particles/s, with 260 rows summing to exactly
 100,000,000. The frozen 13,000,000 target with its 10 percent tolerance
 (floor 11,700,000) passes. P07b also records the kernel-axis end-to-end matrix
-for scatter, dense/hash and the four distributions; the public `Flow` graph now
-routes the same axes through `Tuning`, while the recorded performance matrix
-remains kernel-level. The earlier P07 run at `64d4a1e` (Q=8 median
+for scatter, dense/hash and the four distributions; PR #63 routes the same
+axes through the public `Flow` at
+[435a82ed26dc73bf440e77ce2927bd8bf2a605b3](https://github.com/psychocoderHPC-bot/graphFlow/commit/435a82ed26dc73bf440e77ce2927bd8bf2a605b3), while the recorded
+performance matrix remains kernel-level. The earlier P07 run at `64d4a1e` (Q=8 median
 7.690 s and 1.300e7 particles/s) is historical. The record is in
 [benchmarks](docs/benchmarks.md). H100 was not used for any current validation
 or performance claim; the earlier JURECA `jrc0880.jureca` run remains
@@ -79,6 +82,10 @@ landed; the hosted `format` job enforces it with clang-format 20.1.8. See
 
 Historical totals, kept for comparison and **not current**:
 
+- `88de14f691a51edda5ad48e153dbbe353bef7c9e`: CPU 247/247, CUDA 307/307 and
+  HIP 298/298 (P02b).
+- `56c11acbca6d10ea82fd85d213abcb4f9050dbf8`: CPU 246/246, CUDA 306/306 and
+  HIP 297/297 (P07b).
 - `f3ef3552c60c0cfe0d202a73a08b808746ad11ce`: CPU 210/210, CUDA 264/264 on
   `hal` A30 `sm_80`, HIP 255/255 on `hal` RX 7900 XTX. The same commit has the
   last full integrated TSAN run, 210/210 with 0 reports (see
@@ -236,7 +243,7 @@ REUSE commands are in [build](docs/build.md).
 `[photon][debug]` CTest cases run in both modes: Release asserts that the hot
 path has no per-event state branch, and Debug exercises the compiled checks.
 Host setup validates the run configuration once. The current tree passes
-246/246 CPU, 306/306 CUDA, and 297/297 HIP in Release; the
+249/249 CPU, 310/310 CUDA, and 301/301 HIP in Release; the
 [acceptance record](docs/acceptance.md) carries the current block. The
 `rosi_v100` Release totals 202/202 CPU and 254/254 CUDA are historical. The
 `Debug` build was not re-run on `rosi_v100` after the seven hash cases; the last
@@ -361,10 +368,11 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP execution is validated
 on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2); the HIP photon CLI and
-output cases are part of the current 297/297 run at `56c11ac`; the previous
-290/290 at `a610281` and 245/245 at `b972eaa` are historical. CUDA execution is
-part of the current 306/306 run on `hal` A30 `sm_80` (CUDA 13.4); the
-`rosi_v100` V100 `sm_70` 254/254 run is historical.
+output cases are part of the current 301/301 run at `ffe4074`; the previous
+298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at `a610281` and 245/245
+at `b972eaa` are historical. CUDA execution is part of the current 310/310 run
+on `hal` A30 `sm_80` (CUDA 13.4); the `rosi_v100` V100 `sm_70` 254/254 run is
+historical.
 
 ## Semantics
 
@@ -507,9 +515,9 @@ yet; that is an operator action and is not changed from this repository. See
   `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
   the host backend uses a unit frame extent.
 - HIP execution is validated on one AMD device: `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2), **297/297 CTest at `56c11ac`**. The previous
-  290/290 at `a610281` and 245/245 with 43 HIP cases at `b972eaa` are
-  historical. Other AMD architectures and the hash path are not run on HIP.
+  7900 XTX (`gfx1100`, ROCm 7.2), **301/301 CTest at `ffe4074`**. The previous
+  298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at `a610281` and
+  245/245 with 43 HIP cases at `b972eaa` are historical. Other AMD architectures and the hash path are not run on HIP.
   `hal` reports `sharing=unknown`, so there is no HIP performance claim.
   GitHub-hosted HIP remains compile-only because its runners have no AMD GPU.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
@@ -522,7 +530,7 @@ yet; that is an operator action and is not changed from this repository. See
   added at `2fefe54c6d32e9156be5c08ea497119d0bacc21e` runs the same
   configuration. `hal` still cannot run TSAN: the kernel aborts with
   `unexpected memory mapping`. The 210-case TSAN run predates the current
-  246-case suite, so no full TSAN result exists for `56c11ac`; the hosted
+  249-case suite, so no full TSAN result exists for `ffe4074`; the hosted
   `tsan` job runtime was not observed.
 - `hal` is shared. The historical throughput is a baseline, not an exclusive
   acceptance number. JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
@@ -535,26 +543,26 @@ yet; that is an operator action and is not changed from this repository. See
   through `Tuning::inflightBatches`.
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
-  multi-region pathology is not observed. The current CPU suite is 246/246 in
+  multi-region pathology is not observed. The current CPU suite is 249/249 in
   Release. The `rosi_v100` 202/202 Release and pre-hash 195/195 Debug totals
   are historical.
 - CUDA V100 `sm_70` on `rosi_v100` passed 254/254 (CUDA 12.6.85 Release) with
   the explicit concept-parameter workaround; that total is historical. The
-  current CUDA suite is 306/306 on `hal` A30 `sm_80` (CUDA 13.4).
+  current CUDA suite is 310/310 on `hal` A30 `sm_80` (CUDA 13.4).
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both
   builds.
 - CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
   compile-only there, and no self-hosted runner is provisioned.
-- The dense/hash threshold is static. The public `Flow` API routes both paths
-  through `Tuning::binPath` and both dense scatter modes through
-  `Tuning::scatterMode`, so the opt-in `--workload kernel` path makes the P03
-  scatter mode, the dense/hash bin table and the four distributions reachable
-  end to end through the public graph. P07b's recorded numbers remain
-  kernel-level; no public-API performance matrix is claimed.
+- The dense/hash threshold is static. PR #63 routes the measured kernel axes
+  through the public `Flow`: `Tuning::scatterMode` and `Tuning::binPath`
+  select the dense/hash and shared/direct paths, `Config::validate()` rejects
+  an unsupported axis combination before any device work, and the CUDA/HIP
+  typed cases run the routed axes end to end. P07b's recorded numbers remain
+  kernel-level; no public-Flow performance matrix is recorded.
 - The hash path is CPU-tested and runs through the public `Flow` API in the
   new correctness cases; P07b also runs it at kernel level on `rosi_v100` CUDA.
-  No public `Flow` performance run or HIP `Direct` execution is recorded. The
+  No public-Flow performance run or HIP `Direct` execution is recorded. The
   dense limit stays at the measured 1024-bin threshold.
 - The integrated performance run is recorded in
   [docs/benchmarks.md](docs/benchmarks.md). The older numbers in this README are

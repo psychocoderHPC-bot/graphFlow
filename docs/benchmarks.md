@@ -107,8 +107,8 @@ staging versus direct 5.48 vs 15.85 ms (balanced), 2.13 vs 48.31 ms (one-hot),
 scatter path was measured on CPU by P03 and on CUDA at kernel level by P07b; no
 HIP `Direct` performance run is recorded. P07b closes the kernel-level
 scatter/dense/distribution gap and exercises the dense `direct` mode on
-`rosi_v100` CUDA. The public `Flow` graph now routes the same axes, but no
-public-path performance matrix is recorded, so the measurement-matrix item
+`rosi_v100` CUDA. PR #63 routes the same axes through the public `Flow`, but no
+public-Flow performance matrix is recorded, so the measurement-matrix item
 stays open for those numbers.
 
 ## Historical environment
@@ -267,9 +267,9 @@ H100 claim is made.
   exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
   acceptance table is historical.
  - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-   `gfx1100`, ROCm 7.2); the current suite is 298/298 at `88de14f` and the
-   previous 297/297 at `56c11ac`, the 290/290 at `a610281`, and the 245/245 run
-   at `b972eaa` are historical.
+   `gfx1100`, ROCm 7.2); the current suite is 301/301 at `ffe4074` and the
+   previous 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
+   `a610281`, and the 245/245 run at `b972eaa` are historical.
   No HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.

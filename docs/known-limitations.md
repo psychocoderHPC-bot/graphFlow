@@ -27,8 +27,9 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The current HIP CTest run passes **298/298** at `88de14f`; the
-previous 297/297 at `56c11ac` and the 290/290 at `a610281` are historical. The
+ROCm 7.2. The current HIP CTest run passes **301/301** at `ffe4074`; the
+previous 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at
+`a610281` are historical. The
 original gate passed 245/245
 with 43 HIP cases: 8 typed Flow cases, 24 particle CLI cases, 10 photon CLI
 cases, and 1 photon output case, measured on
@@ -45,7 +46,7 @@ result.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 247/247; the
+spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 249/249; the
 `rosi_v100` 202/202 OMP=ON Release total is historical. CPU OpenMP wall times
 at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
@@ -58,8 +59,8 @@ with passive spinning.
 The last full integrated TSAN CTest passed 210/210 with 0 reports in 202.83 s
 on `rosi_v100` at `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` (non-PIE Debug
  with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). That suite
- predates the current 247-case suite, so no full TSAN result exists for
- `88de14f`. Since `gf/p10-sanitizers` at
+ predates the current 249-case suite, so no full TSAN result exists for
+ `ffe4074`. Since `gf/p10-sanitizers` at
 `cf3bc8a72942b01c4a1ed32e4db7b260e22cb750` (merged as
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e`), hosted CI runs a dedicated
 `tsan` job on `ubuntu-latest` with the same accepted configuration (non-PIE,
@@ -96,8 +97,8 @@ the CPU CTest passed 202/202 in Release; the `f3ef355` runs (CPU 210/210, TSAN
 210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the same
 workaround. The `Debug` build was not re-run after the seven hash cases, so the
 measured historical `Debug` totals are the pre-hash 247/247 CUDA and 195/195
- CPU. The current tree is 247/247 CPU, 307/307 CUDA on `hal` A30 `sm_80`, and
- 298/298 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
+ CPU. The current tree is 249/249 CPU, 310/310 CUDA on `hal` A30 `sm_80`, and
+ 301/301 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
 rerun remains open; H100 was not used. The historical full device suites at
 `f3ef355` were CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
 HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
@@ -119,16 +120,18 @@ particles/s, with 260 rows summing to exactly 100,000,000, and the D2D copy
 reference remains 409.733 GB/s. The frozen target is 13,000,000 particles/s at
 Q8 with a 10 percent tolerance (floor 11,700,000) and the measured median
 passes. P07b also records the kernel-axis end-to-end matrix for scatter,
-dense/hash and the four distributions; the public `Flow` graph now routes those
-axes through `Tuning`, while the recorded matrix remains kernel-level. The
+dense/hash and the four distributions; PR #63 routes those axes through the
+public `Flow` (`Tuning::scatterMode` and `Tuning::binPath`), while the recorded
+matrix remains kernel-level. The
 earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
 particles/s) and the `f3ef355` run (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s) are
 historical.
 
-The current test totals are CPU 247/247, CUDA 307/307 on `hal` A30 `sm_80`, and
-HIP 298/298 on `hal` RX 7900 XTX; P07b adds 7/7 of those cases. The previous
-246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281` are
-historical. The `rosi_v100` CPU 210/210 and TSAN
+The current test totals are CPU 249/249, CUDA 310/310 on `hal` A30 `sm_80`, and
+HIP 301/301 on `hal` RX 7900 XTX; PR #63 adds the public-Flow routed-axis cases
+on top of the P07b 7/7. The previous 247/247, 307/307 and 298/298 at `88de14f`,
+the 246/246, 306/306 and 297/297 at `56c11ac`, and the 239/299/290 at `a610281`
+are historical. The `rosi_v100` CPU 210/210 and TSAN
 210/210 runs at `f3ef355` and the CPU 202/202 / CUDA 254/254 totals at `2ad7d86` are
 historical. The `Debug` build was not re-run after the seven hash cases
 (measured historical `Debug` 195/195 CPU and 247/247 CUDA). H100 was not used
@@ -286,7 +289,7 @@ HIP jobs compile only, because the hosted runners have no NVIDIA or AMD GPU; a
 CUDA or HIP runtime gate needs a device host. TSAN was validated on the
 exclusive `rosi_v100` host (210/210, 0 reports, 202.83 s at `f3ef355`,
  non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
- run is historical and no full TSAN run exists for `88de14f`. The P10 fwk394 run
+ run is historical and no full TSAN run exists for `ffe4074`. The P10 fwk394 run
 at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235 with 0 reports, and
 the hosted `tsan` and `leak` runtimes were not observed. No self-hosted
 runner, project GPU label, or GitLab pipeline is configured, and no H100 was
@@ -310,7 +313,7 @@ CUDA and HIP are mutually exclusive in a single build, and the CPU backend
 stays enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair
 each ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with
  the row comparisons exact against the CPU reference. The current full device
- suites are CUDA 307/307 on `hal` A30 `sm_80` (CUDA 13.4) and HIP 298/298 on
+ suites are CUDA 310/310 on `hal` A30 `sm_80` (CUDA 13.4) and HIP 301/301 on
  `hal` RX 7900 XTX `gfx1100` (ROCm 7.2), correctness only; the `f3ef355` totals
 264/264 and 255/255 are historical.
 
@@ -336,12 +339,13 @@ because `hal` is shared.
 
 The dense path is the correctness reference. The shared-memory hash path is
 exercised by CPU integration tests and by P07b at kernel level on `rosi_v100`
-CUDA through the opt-in `--workload kernel` path. The public `Flow` API now
-routes the same axes through `Tuning::binPath` and `Tuning::scatterMode`, and
-the kernel workload runs through `Flow`; the new CPU and device correctness
-cases cover dense shared/direct and hash shared. No public-API performance
-matrix and no HIP `Direct` execution are recorded, so the measurement-matrix
-item stays open for those numbers. The dense limit stays at 1024 bins from the
+CUDA through the opt-in `--workload kernel` path. PR #63 routes the same axes
+through the public `Flow`: `Tuning::scatterMode` and `Tuning::binPath` select
+the dense/hash and shared/direct paths, `Config::validate()` rejects an
+unsupported axis combination before any device work, and the new CPU and device
+correctness cases cover the routed axes including the rejection cases. No
+public-Flow performance matrix and no HIP `Direct` execution are recorded, so
+the measurement-matrix item stays open for those numbers. The dense limit stays at 1024 bins from the
 P03 fwk394 CPU measurement; no end-to-end device crossover is recorded.
 
 ## Result storage is explicit v1
@@ -363,10 +367,10 @@ only when `8N` bytes plus the payload pool exceeds the device budget.
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
   build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
-   typed Flow cases. The current CTest totals are 247/247 CPU, 307/307 CUDA on
-   `hal` A30 `sm_80`, and 298/298 HIP on `hal` RX 7900 XTX; the previous
-   246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281`
-   are historical. The other historical integrated totals are 194/194 CPU on
+   typed Flow cases. The current CTest totals are 249/249 CPU, 310/310 CUDA on
+   `hal` A30 `sm_80`, and 301/301 HIP on `hal` RX 7900 XTX; the previous
+   247/247, 307/307 and 298/298 at `88de14f`, the 246/246, 306/306 and 297/297
+   at `56c11ac`, and the 239/299/290 at `a610281` are historical. The other historical integrated totals are 194/194 CPU on
    fwk394, 246/246 CUDA on hal, 202/202 CPU
   and 254/254 CUDA on `rosi_v100` V100 `sm_70`, and 245/245 HIP at `b972eaa`.
   The `Debug` build was not re-run after the seven hash cases (measured

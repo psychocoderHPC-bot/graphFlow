@@ -117,9 +117,9 @@ The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
  the particle and photon CLI/output cases for the HIP backend. The current tree
- passes **298/298** on `hal` at `88de14f`; the previous 297/297 at `56c11ac`
- and the 290/290 at `a610281` and the original 245/245 run with 43 HIP cases at
- `b972eaa` are historical and recorded in
+ passes **301/301** on `hal` at `ffe4074`; the previous 298/298 at `88de14f`,
+ 297/297 at `56c11ac`, the 290/290 at `a610281` and the original 245/245 run
+ with 43 HIP cases at `b972eaa` are historical and recorded in
  `/home/agent/final-hip-b972eaa/ctest.log`.
 
 ```sh
@@ -183,10 +183,11 @@ The option adds `GRAPHFLOW_DEBUG_VALIDATION=1` to the `graphFlow` interface
 target. Release hot loops keep no per-event state branch. The two
 `[photon][debug]` CTest cases run in both modes: the Release case asserts that
 the hot path has no per-event state branch, and the Debug case exercises the
- compiled checks. The current Release suite is **247/247 CPU**, **307/307
- CUDA**, and **298/298 HIP** (see `docs/acceptance.md`); P07b adds 7/7 of those
- cases. The previous 246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290
- at `a610281` are historical. The `rosi_v100`
+ compiled checks. The current Release suite is **249/249 CPU**, **310/310
+ CUDA**, and **301/301 HIP** (see `docs/acceptance.md`); PR #63 adds the
+ public-Flow routed-axis cases on top of the P07b 7/7. The previous 247/247,
+ 307/307 and 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`,
+ and the 239/299/290 at `a610281` are historical. The `rosi_v100`
 **202/202 CPU** and **254/254 CUDA** Release totals and the pre-hash
 **195/195 CPU** and **247/247 CUDA** Debug totals are historical; the `Debug`
 build was not re-run on `rosi_v100` after the seven hash cases. Hosted CI runs
@@ -273,9 +274,9 @@ CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
  The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passes
- **298/298** at `88de14f`; the previous **297/297** at `56c11ac` and the
- **290/290** at `a610281` and the earlier **245/245** with 43 HIP cases at
- `b972eaa` are historical. The `sm_75` CUDA
+ **301/301** at `ffe4074`; the previous **298/298** at `88de14f`, **297/297**
+ at `56c11ac`, the **290/290** at `a610281` and the earlier **245/245** with 43
+ HIP cases at `b972eaa` are historical. The `sm_75` CUDA
 build still fails with the CUDA 12.5 nvcc internal compiler error
 (`docs/known-limitations.md`). Format and REUSE metadata are present; the
 hosted `reuse` job checks `reuse lint`, the
