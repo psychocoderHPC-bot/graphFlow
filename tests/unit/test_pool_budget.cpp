@@ -6,6 +6,7 @@
 #include "ParticleStages.hpp"
 #include "ScalarModel.hpp"
 #include "TestDevice.hpp"
+#include "graphFlow/core/ChunkLedger.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/Config.hpp"
 #include "graphFlow/core/DevicePolicy.hpp"
@@ -20,6 +21,23 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+
+namespace graphFlow::detail
+{
+    /** Test hook for the private counter vectors; the header only forward-declares this type. */
+    struct ChunkLedgerTestAccess
+    {
+        static void setGeneration(ChunkLedger& ledger, std::uint32_t index, std::uint32_t generation)
+        {
+            ledger.m_generations[index] = generation;
+        }
+
+        static void setLease(ChunkLedger& ledger, std::uint32_t index, std::uint32_t lease)
+        {
+            ledger.m_leases[index] = lease;
+        }
+    };
+} // namespace graphFlow::detail
 
 TEST_CASE("pool payload bytes are derived from the pool arrays", "[pool][budget]")
 {
@@ -520,6 +538,41 @@ TEST_CASE("pool slot counts and lifecycle counters reject overflow", "[pool][bud
     CHECK_THROWS_AS(
         checkedCounterIncrement(std::numeric_limits<std::uint32_t>::max(), "graphFlow::test"),
         std::overflow_error);
+}
+
+TEST_CASE("ChunkLedger raises instead of wrapping generation or lease counters", "[pool][budget][overflow]")
+{
+    using namespace graphFlow;
+
+    detail::ChunkLedger ledger{1u};
+    std::uint32_t const maxCounter = std::numeric_limits<std::uint32_t>::max();
+
+    // A generation at its limit must raise before it wraps to zero and revives a stale handle.
+    auto const handle = ledger.acquire();
+    detail::ChunkLedgerTestAccess::setGeneration(ledger, handle.index, maxCounter);
+    ChunkHandle const atLimit{handle.index, maxCounter};
+    CHECK(ledger.isLive(atLimit));
+    CHECK_THROWS_AS(ledger.release(atLimit), std::overflow_error);
+    // The failed release leaves the chunk live and the generation un-wrapped.
+    CHECK(ledger.generation(atLimit.index) == maxCounter);
+    CHECK(ledger.isLive(atLimit));
+    CHECK(ledger.leaseCount(atLimit) == 0u);
+    CHECK_THROWS_AS(ledger.release(atLimit), std::overflow_error);
+    CHECK_FALSE(ledger.isLive(ChunkHandle{atLimit.index, 0u}));
+
+    // A lease count at its limit must raise instead of wrapping to zero and admitting a release.
+    detail::ChunkLedgerTestAccess::setLease(ledger, atLimit.index, maxCounter);
+    CHECK_THROWS_AS(ledger.acquireLease(atLimit), std::overflow_error);
+    CHECK(ledger.leaseCount(atLimit) == maxCounter);
+    CHECK_THROWS_AS(ledger.release(atLimit), std::logic_error);
+
+    // Normal counters still increment one by one.
+    detail::ChunkLedgerTestAccess::setLease(ledger, atLimit.index, 0u);
+    ledger.acquireLease(atLimit);
+    CHECK(ledger.leaseCount(atLimit) == 1u);
+    ledger.releaseLease(atLimit);
+    CHECK(ledger.leaseCount(atLimit) == 0u);
+    CHECK(ledger.generation(atLimit.index) == maxCounter);
 }
 
 TEST_CASE("the chunk pool clamps payload memory and keeps every slot addressable", "[pool][budget][memory]")
