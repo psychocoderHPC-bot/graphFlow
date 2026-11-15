@@ -206,6 +206,14 @@ target_include_directories(
     graphFlow
     INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+# Vendored llamaLite (MPL-2.0, unmodified): export only its public header root so
+# consumers include <llamaLite/llamaLite.hpp>. See
+# include/graphFlow/thirdparty/llamaLite/UPSTREAM.md for origin and pinned SHA.
+target_include_directories(
+    graphFlow
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/graphFlow/thirdparty/llamaLite/include>
+)
 target_link_libraries(graphFlow INTERFACE alpaka::alpaka)
 if(GRAPHFLOW_ENABLE_SYCL)
     # The SYCL build compiles oneAPI kernels; link the dependency target explicitly even though
@@ -691,4 +699,11 @@ if(GRAPHFLOW_BUILD_TESTS)
     if(GRAPHFLOW_ENABLE_SYCL)
         graphflow_add_photon_output_test(sycl)
     endif()
+
+    # Host-only smoke test for the vendored llamaLite subtree. It proves the exported
+    # include root and the public headers compile and run without a backend or device.
+    add_executable(graphFlow_llamalite_smoke tests/thirdparty/llamalite_smoke.cpp)
+    target_link_libraries(graphFlow_llamalite_smoke PRIVATE graphFlow::graphFlow)
+    add_test(NAME thirdparty.llamalite.smoke COMMAND graphFlow_llamalite_smoke)
+    set_tests_properties(thirdparty.llamalite.smoke PROPERTIES LABELS "thirdparty;llamalite")
 endif()
