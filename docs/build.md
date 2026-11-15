@@ -270,9 +270,9 @@ compiled checks. The scheduler adds its conservation, fill-level and
 exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
 each violation and `[scheduler][release]` proves the checks are compiled out.
 The recorded Release suite is **255/255 CPU**, **316/316 CUDA**, **307/307
-HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **71/71 SYCL** at
-`9fb15f1e6ce13f252b31d4cb60cc410862d56511` (see
-`docs/acceptance.md`);
+HIP** at `561b9a4c9435e37b164623bb6be60a3051783eb4` and **72/72 SYCL** at
+`9ace795798c0e8db9f4e74885cc131ef05bc5163` (71/71 at `9fb15f1` before the FP64
+case; see `docs/acceptance.md`);
 the six `[scheduler]` cases are included in those totals, the
 `[scheduler][release]` case among them. PR #63 adds the public-Flow routed-axis
 cases on top of the P07b 7/7. The `ffe4074` totals 249/249, 310/310 and
@@ -368,8 +368,8 @@ revision, and this documentation commit does not claim a new build or test run.
  **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
  `56c11ac`, the **290/290** at `a610281` and the earlier **245/245** with 43
  HIP cases at `b972eaa` are historical. The SYCL runtime CTest on `hal` (Arc
- A770 `spir64`, oneAPI 2026.2) passes **71/71** at
- `9fb15f1e6ce13f252b31d4cb60cc410862d56511` via
+ A770 `spir64`, oneAPI 2026.2) passes **72/72** at
+ `9ace795798c0e8db9f4e74885cc131ef05bc5163` via
  `ctest -L sycl`; the GitHub-hosted `sycl-compile` job compiles the target but
  runs no CTest and makes no SYCL runtime claim. The `sm_75` CUDA
 build still fails with the CUDA 12.5 nvcc internal compiler error

@@ -33,7 +33,7 @@ runs pass with no skipped case; the SYCL row is the `-L sycl` device matrix:
 | CPU Release | fwk394, g++ 13.3 | **255/255 passed** |
 | CUDA Release | `hal`, A30 `sm_80`, CUDA 13.4 | **316/316 passed** |
 | HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **307/307 passed** |
-| SYCL Release | `hal`, Intel Arc A770 `spir64`, oneAPI 2026.2 | **71/71 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64`, oneAPI 2026.2 | **72/72 passed** |
 
 Pins, commands, the no-skip assertion, and the historical totals are in the
 [acceptance record](docs/acceptance.md). PR #65 adds 6/6 CPU, 6/6 CUDA and
@@ -254,7 +254,7 @@ and REUSE commands are in [build](docs/build.md).
 `[photon][debug]` CTest cases run in both modes: Release asserts that the hot
 path has no per-event state branch, and Debug exercises the compiled checks.
 Host setup validates the run configuration once. The current tree passes
-255/255 CPU, 316/316 CUDA, 307/307 HIP, and 71/71 SYCL on `hal` Arc A770 in
+255/255 CPU, 316/316 CUDA, 307/307 HIP, and 72/72 SYCL on `hal` Arc A770 in
 Release; the
 [acceptance record](docs/acceptance.md) carries the current block. The
 `rosi_v100` Release totals 202/202 CPU and 254/254 CUDA are historical. The
@@ -383,8 +383,10 @@ are not part of the default CTest suite. Configure with
 on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2); the HIP photon CLI and
 output cases are part of the current 307/307 run at
 `561b9a4c9435e37b164623bb6be60a3051783eb4`; the SYCL photon CLI and output
-cases are part of the current 71/71 run at
-`9fb15f1e6ce13f252b31d4cb60cc410862d56511` on the Arc A770 in fp32. The previous
+cases are part of the 72/72 run at
+`9ace795798c0e8db9f4e74885cc131ef05bc5163` on the Arc A770. The default fp32
+path covers those cases, and the environment-scoped FP64 case adds the double
+run. The previous
 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
 `a610281` and 245/245 at `b972eaa` are historical. CUDA execution is part of
 the current 316/316 run on `hal` A30 `sm_80` (CUDA 13.4); the `rosi_v100`
@@ -539,8 +541,8 @@ yet; that is an operator action and is not changed from this repository. See
   `hal` reports `sharing=unknown`, so there is no HIP performance claim.
   GitHub-hosted HIP remains compile-only because its runners have no AMD GPU.
 - SYCL execution is validated on one Intel device: `hal` with an Intel Arc
-  A770 (`spir64`, oneAPI 2026.2), **71/71 CTest at
-  `9fb15f1e6ce13f252b31d4cb60cc410862d56511`**. By default the Arc A770 does
+  A770 (`spir64`, oneAPI 2026.2), **72/72 CTest at
+  `9ace795798c0e8db9f4e74885cc131ef05bc5163`**. By default the Arc A770 does
   not advertise the SYCL `fp64` aspect, so the oneAPI photon path runs in fp32
   while the CPU, CUDA and HIP photon runs keep double. An environment-scoped
   `test_photon_scattering_sycl_fp64` case opts into Intel FP64 emulation

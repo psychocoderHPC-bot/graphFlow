@@ -51,10 +51,12 @@ result.
 execution, failure paths, photon scattering, async/depth, FrameSpec, and
 particle feedback/pressure cases. `ctest -L sycl` selects that matrix; the
 build registers every device case under the `sycl` label, plus the SYCL CLI
-and cross-backend exact-histogram cases: 71 cases total (33 in-process Catch2,
-24 particle CLI, 3 cross-backend, 10 photon CLI, 1 photon output). On `hal`
-with an Arc A770 (`spir64`, oneAPI 2026.2) the matrix passes 71/71 at current
-main `9fb15f1e6ce13f252b31d4cb60cc410862d56511`, and the CPU-only build passes
+and cross-backend exact-histogram cases: 72 cases total (33 in-process Catch2
+plus the environment-scoped FP64 case, 24 particle CLI, 3 cross-backend, 10
+photon CLI, 1 photon output). On `hal` with an Arc A770 (`spir64`, oneAPI
+2026.2) the matrix passes 72/72 at
+`9ace795798c0e8db9f4e74885cc131ef05bc5163` (71/71 at `9fb15f1` before the FP64
+case), and the CPU-only build passes
 255/255 on
 `fwk394`. The SYCL build disables the OpenCL CPU device kind
 (`alpaka_ONEAPI_Cpu=OFF`), so a missing Intel GPU fails the backend contract
@@ -370,7 +372,8 @@ Most Catch2 cases construct the CPU device. The CUDA build adds
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
 GPU and fails when no GPU is visible. The HIP build adds 8 typed Flow cases
 that fail when no AMD GPU is visible. The SYCL build (PR #69) adds the 71-case
-device matrix on `hal` Arc A770, whose cases likewise fail instead of skipping
+device matrix on `hal` Arc A770, and the environment-scoped FP64 case brings it
+to 72; those cases likewise fail instead of skipping
 when no Intel GPU is visible. The automated cross-backend histogram
 equality cases are `example.particle_feedback.cross_backend.Q{1,2,8}`
 (`N=1e6`, `C=128`, `P=1024`, seed 42), added on `gf/cross-backend-equality`:
