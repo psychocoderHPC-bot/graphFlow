@@ -10,12 +10,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      run_icpx:
-        description: "Run the optional oneAPI icpx CPU job (non-gating)"
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -359,18 +353,23 @@ jobs:
           test "$(clang-format --version)" = "clang-format version 20.1.8"
           clang-format --dry-run --Werror "${files[@]}"
 
-  # Optional and manual only. graphFlow has no SYCL backend, so this job does
-  # not enable one: it builds and tests the CPU backend with Intel's host
-  # compiler. It is not part of the push/PR gate.
+  # graphFlow has no SYCL backend, so this job does not enable one: it builds
+  # and tests the CPU backend with Intel's host compiler. The oneAPI image and
+  # icpx CPU target match the alpaka pin's supported compiler matrix.
   icpx-cpu:
-    name: icpx-cpu (optional, CPU backend)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_icpx }}
+    name: icpx-cpu (oneAPI CPU backend)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     container:
       image: intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04
     env:
       GRAPHFLOW_ALPAKA_SOURCE_DIR: ${{ github.workspace }}/.alpaka
+      # Cap the Intel OpenMP team at the hosted runner's vCPU count. graphFlow's
+      # host scheduler launches many small regions, and -fiopenmp team creation
+      # at a large core count dominates the runtime: the N=1e6 smoke hit its
+      # 900 s driver timeout with 64 threads and finishes in under a minute with
+      # four.
+      OMP_NUM_THREADS: 4
     defaults:
       run:
         shell: bash
@@ -396,11 +395,21 @@ jobs:
           git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" checkout --detach "$ALPAKA_COMMIT"
           test "$(git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" rev-parse HEAD)" = "$ALPAKA_COMMIT"
 
+      - name: Record oneAPI compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          which icpx
+          icpx --version
+          sycl-ls
+
+      # alpaka_COMPILE_PEDANTIC stays off here: it adds -Werror, and icpx warns
+      # on the brace-initialized RouteTable scalars in the tests. The GCC jobs
+      # keep the strict warning gate.
       - name: Configure
         shell: bash
         run: |
           set -euo pipefail
-          source /opt/intel/oneapi/setvars.sh
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER=icpx \
@@ -411,14 +420,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source /opt/intel/oneapi/setvars.sh
           cmake --build build -j "$(nproc)"
 
       - name: Test
         shell: bash
         run: |
           set -euo pipefail
-          source /opt/intel/oneapi/setvars.sh
           ctest --test-dir build --output-on-failure --no-tests=error \
             --output-junit ctest-icpx.xml
 
