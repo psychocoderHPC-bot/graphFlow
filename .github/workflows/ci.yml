@@ -304,6 +304,69 @@ jobs:
       - name: Build (compile only)
         run: cmake --build build -j "$(nproc)"
 
+  # Compile-only SYCL gate. graphFlow's SYCL option enables only the Intel GPU
+  # device kind; the hosted runner has no Intel GPU, so the job stops after the
+  # build: no CTest run, no example execution, and no runtime claim.
+  sycl-compile:
+    name: sycl-compile (IntelGpu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04
+    env:
+      GRAPHFLOW_ALPAKA_SOURCE_DIR: ${{ github.workspace }}/.alpaka
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install git for checkout
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Check out graphFlow
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ catch2
+
+      - name: Record oneAPI compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          which icpx
+          icpx --version
+
+      - name: Clone pinned alpaka
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/alpaka-group/alpaka.git "$GRAPHFLOW_ALPAKA_SOURCE_DIR"
+          git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" checkout --detach "$ALPAKA_COMMIT"
+          test "$(git -C "$GRAPHFLOW_ALPAKA_SOURCE_DIR" rev-parse HEAD)" = "$ALPAKA_COMMIT"
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$GRAPHFLOW_ALPAKA_SOURCE_DIR" \
+            -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+            -DGRAPHFLOW_ENABLE_SYCL=ON \
+            -Dalpaka_COMPILE_PEDANTIC=OFF
+
+      # Compile-only gate: the hosted runner has no Intel GPU, so there is no
+      # CTest run and no example execution.
+      - name: Build (compile only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build -j "$(nproc)"
+
   reuse:
     name: reuse lint
     runs-on: ubuntu-latest
@@ -353,9 +416,9 @@ jobs:
           test "$(clang-format --version)" = "clang-format version 20.1.8"
           clang-format --dry-run --Werror "${files[@]}"
 
-  # graphFlow has no SYCL backend, so this job does not enable one: it builds
-  # and tests the CPU backend with Intel's host compiler. The oneAPI image and
-  # icpx CPU target match the alpaka pin's supported compiler matrix.
+  # CPU portability gate with Intel's host compiler. The SYCL compile gate is
+  # the separate sycl-compile job. The oneAPI image and icpx CPU target match
+  # the alpaka pin's supported compiler matrix.
   icpx-cpu:
     name: icpx-cpu (oneAPI CPU backend)
     runs-on: ubuntu-latest

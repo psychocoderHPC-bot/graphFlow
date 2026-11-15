@@ -510,7 +510,8 @@ exceeds the device budget. See [known limitations](docs/known-limitations.md).
 
 The repository is public. Changes land through a feature branch and a pull
 request targeting `main`; the PR runs the hosted `cpu`, `sanitizers`, `leak`,
-`tsan`, `cuda-compile`, `hip-compile`, `reuse`, and `format` jobs plus review.
+`tsan`, `cuda-compile`, `hip-compile`, `sycl-compile`, `reuse`, and `format`
+jobs plus review.
 The CI badge above points at `main`. Branch protection for `main` is not enabled
 yet; that is an operator action and is not changed from this repository. See
 [CI](docs/ci.md).
@@ -563,8 +564,8 @@ yet; that is an operator action and is not changed from this repository. See
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both
   builds.
-- CI runs on GitHub-hosted runners and public containers; CUDA and HIP are
-  compile-only there, and no self-hosted runner is provisioned.
+- CI runs on GitHub-hosted runners and public containers; CUDA, HIP, and SYCL
+  are compile-only there, and no self-hosted runner is provisioned.
 - The dense/hash threshold is static. PR #63 routes the measured kernel axes
   through the public `Flow`: `Tuning::scatterMode` and `Tuning::binPath`
   select the dense/hash and shared/direct paths, `Config::validate()` rejects

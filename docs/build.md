@@ -20,7 +20,7 @@ builds so `--backend cpu` remains available.
 | Ninja | 1.11.1 | `-G Ninja` |
 | CUDA | 13.4 | validated on the A30 with `sm_80`; `sm_75` is the RTX 2080 Ti target |
 | ROCm | 7.2.0, `amdclang++` from `/opt/rocm` | runtime `gfx1100` gate on `hal`; GitHub-hosted HIP is compile-only |
-| oneAPI | 2026.2, `icpx` from `/opt/intel/oneapi` | SYCL `spir64` gate on `hal` Arc A770; not part of hosted CI |
+| oneAPI | 2026.2, `icpx` from `/opt/intel/oneapi` | SYCL `spir64` gate on `hal` Arc A770; GitHub-hosted SYCL is compile-only |
 | C++ | C++20 | `CMAKE_CXX_STANDARD 20`, extensions off |
 
 The integrated CPU run used g++ 13.3 on fwk394; the CUDA run used hal. A
