@@ -166,9 +166,10 @@ seed, offset, or purpose.
 ## Backend validation
 
 The contract is exercised on CPU, CUDA, and HIP. The current suites are
-**246/246 CPU**, **306/306 CUDA** on `hal` A30 `sm_80`, and **297/297 HIP** on
-`hal` RX 7900 XTX at `56c11ac`; P07b adds 7/7 cases. The previous 239/299/290 at
-`a610281` are historical. The original HIP gate at `b972eaa` ran 245/245 with
+**247/247 CPU**, **307/307 CUDA** on `hal` A30 `sm_80`, and **298/298 HIP** on
+`hal` RX 7900 XTX at `88de14f`; P07b adds 7/7 cases. The previous 246/246,
+306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281` are
+historical. The original HIP gate at `b972eaa` ran 245/245 with
 43 HIP cases, including 8 typed Flow cases through the public `Flow` API
 plus the particle and photon example CLI/output cases; that total is
 historical and recorded in `/home/agent/final-hip-b972eaa/ctest.log`. The typed
