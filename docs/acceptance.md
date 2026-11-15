@@ -3,17 +3,18 @@
 
 # graphFlow acceptance record
 
-## Current state at `561b9a4c`
+## Current state at `9fb15f1`
 
 This is the canonical current-state block. Every older total in this document is
-historical. Code main is `561b9a4c9435e37b164623bb6be60a3051783eb4` (PR #65, the
-debug scheduler conservation checks; `ffe4074` is the previous total).
+historical. Code main is `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69, the
+full SYCL test matrix; `561b9a4c` is the previous total).
 
 | Configuration | Host / device | Toolchain | Result |
 | --- | --- | --- | --- |
 | CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **255/255 passed** |
 | CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **316/316 passed** |
 | HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **307/307 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **71/71 passed** |
 
 No test is skipped or filtered. CTest reports `100% tests passed, 0 tests
 failed` for each suite, and a compiled backend without a usable device fails its
@@ -24,12 +25,20 @@ the six `[scheduler]` cases (five `[scheduler][debug]` and one
 `[scheduler][release]` case in `tests/integration/test_scheduler_validation.cpp`,
 registered in every backend suite) on top of the PR #63 public-Flow cases;
 they are included in the totals above
-and pass 6/6 on CPU, CUDA, and HIP. The `ffe4074` totals 249/249, 310/310
+and pass 6/6 on CPU, CUDA, and HIP. PR #69 registers the 71-case SYCL matrix on
+`hal` Arc A770: 33 in-process Catch2 cases (the `test_sycl_kernel` dispatch and
+scalar cases plus the typed Flow, failure, photon, async/depth, FrameSpec and
+particle pressure matrices under the `sycl` label), 24 particle CLI cases
+(`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`), 3 cross-backend
+exact-histogram cases, 10 photon CLI cases, and 1 photon output case; `ctest -L
+sycl` selects the whole matrix. The `ffe4074` totals 249/249, 310/310
 and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
 totals 246/246, 306/306 and 297/297, and the earlier `a610281` totals 239/239,
 299/299 and 290/290 are historical.
 `hal` reports `sharing=unknown` and `fwk394` is shared, so the runs are
-correctness results, not performance claims. H100 was not used and no H100
+correctness results, not performance claims. GitHub-hosted CI runs no SYCL
+CTest: the `sycl-compile` job is the compile-only gate and makes no SYCL
+runtime claim. H100 was not used and no H100
 compile or run is recorded.
 
 ## HAL acceptance record
@@ -38,13 +47,14 @@ The HAL record covers the `d71935c` device suites. Platform and pins:
 
 | Item | Value |
 | --- | --- |
-| code main (JUnit run) | `d71935c` (the current main `561b9a4c9435e37b164623bb6be60a3051783eb4` is newer) |
+| code main (JUnit run) | `d71935c` (the current main `9fb15f1e6ce13f252b31d4cb60cc410862d56511` is newer) |
 | alpaka | `eb677e8d7f70d79b35df25d9002f94ba669b6f44` (3.0.0) |
 | Catch2 | 3.4.0 |
 | CMake / Ninja | 3.28.3 / 1.11.1 |
 | CPU compiler | g++ 13.3 |
 | CUDA | 13.4, `sm_80`, NVIDIA A30 24 GiB on `hal`, driver 615.71.09 |
 | ROCm | 7.2, hipcc 7.2.26015, `gfx1100`, AMD Radeon RX 7900 XTX on `hal` |
+| oneAPI | 2026.2, icpx 2026.2.0, `spir64`, Intel Arc A770 on `hal` |
 | C++ / build | C++20, Release, `-Dalpaka_COMPILE_PEDANTIC=ON` |
 
 Commands:
@@ -76,15 +86,27 @@ cmake -S . -B build-hip -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-hip -j 14
 ROCR_VISIBLE_DEVICES=0 ctest --test-dir build-hip \
   --output-on-failure --no-tests=error
+
+# SYCL, hal Arc A770
+source /opt/intel/oneapi/setvars.sh
+cmake -S . -B build-sycl -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$PWD/.alpaka" \
+  -DCMAKE_CXX_COMPILER=icpx \
+  -DGRAPHFLOW_ENABLE_SYCL=ON -DGRAPHFLOW_ENABLE_OPENMP=OFF \
+  -Dalpaka_COMPILE_PEDANTIC=ON
+cmake --build build-sycl -j 14
+ctest --test-dir build-sycl --output-on-failure --no-tests=error -L sycl
 ```
 
-Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**; each
+Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**, SYCL
+**71/71** (`ctest -L sycl` on the Arc A770, PR #69 matrix); each
 log ends with `100% tests passed, 0 tests failed`. No label or configuration
 excluded a registered case from these runs. The retained JUnit XML reports 246
 CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
-were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307)
-at `561b9a4c`, which add the P02b `ChunkLedger` overflow test, the PR #63
-public-Flow cases, and the PR #65 scheduler cases on top of them. The `hal` A30 driver
+were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307,
+71/71) at `9fb15f1`, which add the P02b `ChunkLedger` overflow test, the PR #63
+public-Flow cases, the PR #65 scheduler cases, and the PR #69 SYCL matrix on top
+of them. The `hal` A30 driver
 is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
 archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
 
@@ -236,8 +258,8 @@ The current builds are in the current-state block. Historical build records:
 
 ## Tests (historical)
 
-The current suites are CPU 255/255, CUDA 316/316, and HIP 307/307. The
-previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
+The current suites are CPU 255/255, CUDA 316/316, HIP 307/307, and SYCL 71/71.
+The previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
 earlier 239/239, 299/299 and 290/290 at `a610281` are historical. The table below records the earlier totals, including the
 intermediate branch counts:

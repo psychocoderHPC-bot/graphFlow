@@ -58,7 +58,7 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394`; the `561b9a4c` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
 | CUDA device runtime | **316** at `561b9a4c` on `hal` A30 `sm_80`, CUDA 13.4; 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
 | HIP `gfx1100` | **307** at `561b9a4c` on `hal` RX 7900 XTX, ROCm 7.2; 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
-| SYCL Intel GPU | none | the hosted `sycl-compile` job builds without a device and produces no CTest result |
+| SYCL Intel GPU | **71/71** at `9fb15f1` on `hal` Arc A770, oneAPI 2026.2 (PR #69 matrix, `ctest -L sycl`); no earlier SYCL device total is historical | `hal` device run; the hosted `sycl-compile` job builds without a device and produces no CTest result |
 
 The CPU suite registers 255 cases at `561b9a4c`; the 249 count at `ffe4074`, the
 247 count at `88de14f` and the 246 count at `56c11ac` are historical. Release compiles the per-event
@@ -74,8 +74,9 @@ so it is part of the ASAN+UBSAN run but not of the separate TSAN build. The
 hosted `sanitizers` (including its `leak` step) and `tsan` job runtimes were
 not observed for this branch. The CUDA and HIP counts are device-run totals, not hosted CTest
 results: the hosted `cuda-compile` and `hip-compile` jobs produce no CTest
-result. The HIP runtime total is the recorded `hal` run; see
-[HIP compile-only](#hip-compile-only).
+result. The HIP and SYCL runtime totals are the recorded `hal` runs; see
+[HIP compile-only](#hip-compile-only) and
+[SYCL compile-only](#sycl-compile-only).
 
 The N=1e6 CPU smoke (`example.particle_feedback.smoke.N1000000`) and the two
 source-admission cases register unconditionally in the ordinary CTest job, so
@@ -112,7 +113,8 @@ source-admission cases and N=1e6 smoke; 207/207 with the stall diagnostics;
 HIP device suites were executed at `f3ef355`: CUDA 264/264 on `hal` A30
 `sm_80` (CUDA 13.4, 400.98 s) and HIP 255/255 on `hal` RX 7900 XTX `gfx1100`
 (ROCm 7.2, 99.44 s), correctness only. The current suites are 255/255,
-316/316, and 307/307; the previous 249/310/301 at `ffe4074`, 247/307/298 at
+316/316, 307/307, and 71/71 SYCL at `9fb15f1`; the previous 249/310/301 at
+`ffe4074`, 247/307/298 at
 `88de14f`, 246/306/297 at `56c11ac`, and the 239/299/290 at `a610281` are
 historical.
 The format sweep changed whitespace, line breaks, include and `using` order, and
@@ -254,7 +256,7 @@ build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **307/307** at
-`561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous 301/301 at `ffe4074`,
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511`; the previous 301/301 at `ffe4074`,
 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at `a610281` are
 historical. The original
 245/245 run with 43 HIP cases (8 typed Flow, 24 particle CLI, 10 photon CLI,
@@ -334,8 +336,13 @@ cmake --build build -j "$(nproc)"
 The job only compiles the SYCL test translation unit and the examples. It does
 not use `sycl-ls` as a device gate, does not run CTest, and does not execute an
 example. The GitHub-hosted runner has no Intel GPU, so this job makes no SYCL
-runtime claim. The validated device run stays on `hal` with an Intel Arc A770;
-see [build.md](build.md#sycl-intel-gpu).
+runtime claim. The validated device run is 71/71 at current main
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511` on `hal` with an Intel Arc A770
+(`spir64`, oneAPI 2026.2), where the PR #69 matrix (33 in-process, 24 particle
+CLI, 3 cross-backend, 10 photon CLI, 1 photon output) passes with
+`ctest -L sycl`; the Arc A770 lacks the SYCL `fp64` aspect, so the oneAPI
+photon path runs fp32, and AOT via `ocloc` crashes there, so the build stays
+JIT-compiled SPIR-V. See [build.md](build.md#sycl-intel-gpu).
 
 ## Format
 
@@ -398,8 +405,8 @@ the hosted `tsan` and `leak` runtimes were not observed, and no H100 was used.
 On the exclusive `rosi_v100` host at `f3ef355` the historical CPU CTest is
 210/210 and the full integrated TSAN CTest is 210/210 with 0 reports (202.83 s,
 non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). The
-current device totals are 316/316 CUDA on `hal` A30 `sm_80` and 307/307 HIP on
-`hal` RX 7900 XTX; see `docs/acceptance.md`.
+current device totals are 316/316 CUDA on `hal` A30 `sm_80`, 307/307 HIP on
+`hal` RX 7900 XTX, and 71/71 SYCL on `hal` Arc A770; see `docs/acceptance.md`.
 
 Container jobs set `shell: bash` because container jobs default to `sh`, which
 rejects `set -o pipefail`.

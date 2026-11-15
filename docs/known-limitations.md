@@ -51,11 +51,16 @@ result.
 execution, failure paths, photon scattering, async/depth, FrameSpec, and
 particle feedback/pressure cases. `ctest -L sycl` selects that matrix; the
 build registers every device case under the `sycl` label, plus the SYCL CLI
-and cross-backend exact-histogram cases. On `hal` with an Arc A770 (`spir64`,
-oneAPI 2026.2) the matrix passes 71/71, and the CPU-only build passes 255/255 on
+and cross-backend exact-histogram cases: 71 cases total (33 in-process Catch2,
+24 particle CLI, 3 cross-backend, 10 photon CLI, 1 photon output). On `hal`
+with an Arc A770 (`spir64`, oneAPI 2026.2) the matrix passes 71/71 at current
+main `9fb15f1e6ce13f252b31d4cb60cc410862d56511`, and the CPU-only build passes
+255/255 on
 `fwk394`. The SYCL build disables the OpenCL CPU device kind
 (`alpaka_ONEAPI_Cpu=OFF`), so a missing Intel GPU fails the backend contract
-instead of falling back to the host. No performance run is recorded and
+instead of falling back to the host. The GitHub-hosted `sycl-compile` job
+compiles the target but runs no CTest, so no SYCL runtime claim is made for
+GitHub CI. No performance run is recorded and
 `hal` reports `sharing=unknown`.
 
 The Arc A770 does not advertise the SYCL `fp64` aspect (`sycl::aspect::fp64` is
@@ -73,7 +78,10 @@ relocatable device code for SYCL: its `cmake/alpakaOneApi.cmake` omits the
 `alpaka_RELOCATABLE_DEVICE_CODE=DEFAULT` and sanitizes the stray `INTERFACE`
 argument from the `-fsycl-targets` call in `CMakeLists.txt`; the external
 alpaka tree stays unmodified. No upstream `dev_v3.x` commit carries a fix, so
-the pin is unchanged.
+the pin is unchanged. AOT compilation is also unavailable on the validated
+host: `ocloc` (the `ocloc` used by `-fsycl-targets=spir64_gen`) crashes with
+signal 11 on `hal` under oneAPI 2026.2, so the SYCL build stays
+JIT-compiled SPIR-V; the first kernel run pays the SPIR-V JIT cost.
 
 ## CPU OMP execution
 
@@ -317,9 +325,11 @@ CI runs on GitHub-hosted `ubuntu-latest` runners and public containers
 (`.github/workflows/ci.yml`, see [ci.md](ci.md)). The `cpu` jobs run the 255
 CPU CTest cases in Release and Debug, `sanitizers` runs ASAN+UBSAN plus a
 dedicated `leak` step over the error paths, and a separate `tsan` job runs the
-host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off). The CUDA and
-HIP jobs compile only, because the hosted runners have no NVIDIA or AMD GPU; a
-CUDA or HIP runtime gate needs a device host. TSAN was validated on the
+host scheduler under TSAN (non-PIE, OMP off, CpuOmpBlocks off). The CUDA,
+HIP, and SYCL jobs compile only, because the hosted runners have no NVIDIA,
+AMD, or Intel GPU; the `sycl-compile` job builds the Intel-GPU-only SYCL target
+in the oneAPI 2025.3 container and runs no CTest. A CUDA, HIP, or SYCL runtime
+gate needs a device host. TSAN was validated on the
 exclusive `rosi_v100` host (210/210, 0 reports, 202.83 s at `f3ef355`,
  non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
    run is historical and no full TSAN run exists for
@@ -335,7 +345,9 @@ points.
 Most Catch2 cases construct the CPU device. The CUDA build adds
 `tests/unit/test_cuda_kernel.cpp`, which runs a kernel on the selected NVIDIA
 GPU and fails when no GPU is visible. The HIP build adds 8 typed Flow cases
-that fail when no AMD GPU is visible. The automated cross-backend histogram
+that fail when no AMD GPU is visible. The SYCL build (PR #69) adds the 71-case
+device matrix on `hal` Arc A770, whose cases likewise fail instead of skipping
+when no Intel GPU is visible. The automated cross-backend histogram
 equality cases are `example.particle_feedback.cross_backend.Q{1,2,8}`
 (`N=1e6`, `C=128`, `P=1024`, seed 42), added on `gf/cross-backend-equality`:
 each compiled backend runs the same seed/N/C/P/Q and the cases require exact

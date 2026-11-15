@@ -24,31 +24,35 @@ Documentation:
 
 ## Status
 
-Current code main: `561b9a4c9435e37b164623bb6be60a3051783eb4` (PR #65, the
-debug scheduler conservation checks; `ffe4074` is the previous total). The
-full CTest suites pass with no skipped or filtered cases:
+Current code main: `9fb15f1e6ce13f252b31d4cb60cc410862d56511` (PR #69, the
+full SYCL test matrix; `561b9a4c` is the previous total). The full CTest
+suites pass with no skipped or filtered cases:
 
 | Configuration | Host / device | Result |
 | --- | --- | --- |
 | CPU Release | fwk394, g++ 13.3 | **255/255 passed** |
 | CUDA Release | `hal`, A30 `sm_80`, CUDA 13.4 | **316/316 passed** |
 | HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **307/307 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64`, oneAPI 2026.2 | **71/71 passed** |
 
 Pins, commands, the no-skip assertion, and the historical totals are in the
 [acceptance record](docs/acceptance.md). PR #65 adds 6/6 CPU, 6/6 CUDA and
 6/6 HIP `[scheduler]` cases (six host cases registered in every backend suite)
 on top of the PR #63 public-Flow routed-axis
-cases (2/2 CPU, 3/3 CUDA, 3/3 HIP); the `ffe4074` totals 249/249, 310/310
-and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
-totals 246/246, 306/306 and 297/297, and the `a610281` totals 239/239,
-299/299 and 290/290 are historical. The public API
+cases (2/2 CPU, 3/3 CUDA, 3/3 HIP); PR #69 registers the 71-case SYCL matrix
+(33 in-process Catch2, 24 particle CLI, 3 cross-backend, 10 photon CLI and
+1 photon output case). The `ffe4074` totals 249/249, 310/310 and 301/301, the
+`88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac` totals 246/246,
+306/306 and 297/297, and the `a610281` totals 239/239, 299/299 and 290/290 are
+historical. The public API
 is implemented: the typed `Flow<TPayload, TDevice, TStorage>` topology,
 execution, storage, and status path described in
-[public API contract](docs/public-api.md). CPU, CUDA, and HIP execution are
-validated on real devices. GitHub-hosted HIP builds remain compile-only because
-those runners have no AMD GPU; no HIP runtime claim is made for GitHub CI.
-`hal` reports `sharing=unknown`, so the device runs are correctness results, not
-performance claims.
+[public API contract](docs/public-api.md). CPU, CUDA, HIP, and SYCL execution
+are validated on real devices. GitHub-hosted HIP and SYCL builds remain
+compile-only because those runners have no AMD or Intel GPU; the
+`sycl-compile` job builds the Intel-GPU-only SYCL backend and makes no
+runtime claim. `hal` reports `sharing=unknown`, so the device runs are
+correctness results, not performance claims.
 
 The latest exclusive performance record is P07b on `rosi_v100` (merged as
 `56c11ac`, V100-SXM2-32GB, CUDA 12.6.85, `sm_70`): `N=1e8`, `C=8192`,
@@ -378,8 +382,10 @@ are not part of the default CTest suite. Configure with
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP execution is validated
 on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2); the HIP photon CLI and
 output cases are part of the current 307/307 run at
-`561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous 301/301 at
-`ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
+`561b9a4c9435e37b164623bb6be60a3051783eb4`; the SYCL photon CLI and output
+cases are part of the current 71/71 run at
+`9fb15f1e6ce13f252b31d4cb60cc410862d56511` on the Arc A770 in fp32. The previous
+301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
 `a610281` and 245/245 at `b972eaa` are historical. CUDA execution is part of
 the current 316/316 run on `hal` A30 `sm_80` (CUDA 13.4); the `rosi_v100`
 V100 `sm_70` 254/254 run is historical.
@@ -532,6 +538,15 @@ yet; that is an operator action and is not changed from this repository. See
   `a610281` and 245/245 with 43 HIP cases at `b972eaa` are historical. Other AMD architectures and the hash path are not run on HIP.
   `hal` reports `sharing=unknown`, so there is no HIP performance claim.
   GitHub-hosted HIP remains compile-only because its runners have no AMD GPU.
+- SYCL execution is validated on one Intel device: `hal` with an Intel Arc
+  A770 (`spir64`, oneAPI 2026.2), **71/71 CTest at
+  `9fb15f1e6ce13f252b31d4cb60cc410862d56511`**. The Arc A770 does not
+  advertise the SYCL `fp64` aspect, so the oneAPI photon path runs in fp32
+  while the CPU, CUDA and HIP photon runs keep double. AOT compilation with
+  `ocloc` (`-fsycl-targets=spir64_gen`) crashes on `hal`; the build stays
+  JIT-compiled SPIR-V. `hal` reports `sharing=unknown`, so there is no SYCL
+  performance claim. GitHub-hosted SYCL remains compile-only in the
+  `sycl-compile` job because its runners have no Intel GPU.
 - CUDA 12.5 nvcc hits an internal compiler error in `HashScatterKernel.hpp`.
   CUDA 13.4 is the validated compiler on A30 `sm_80`; nvcc 12.6.85 builds V100
   `sm_70` with the explicit concept-parameter workaround.
