@@ -11,6 +11,8 @@ self-hosted runners, no project GPU labels, and no GitLab pipeline.
 ## Triggers and controls
 
 - `push` to `main`, `pull_request` targeting `main`, and `workflow_dispatch`.
+  Every job below runs for pushes and pull requests; `workflow_dispatch`
+  re-runs the same set manually.
 - `permissions: contents: read`; the workflow needs no secrets.
 - A `concurrency` group cancels superseded runs for the same pull request or
   ref.
@@ -36,7 +38,7 @@ setting is changed from this repository.
 | `hip-compile` | `ubuntu-latest` | `rocm/dev-ubuntu-24.04:7.2` | HIP | Release, `gfx90a` | no, compile only |
 | `reuse` | `ubuntu-latest` | none | none | none | `reuse lint` |
 | `format` | `ubuntu-latest` | none | none | none | `clang-format --dry-run --Werror` |
-| `icpx-cpu` | `ubuntu-latest` | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` | CPU | Release | manual dispatch only |
+| `icpx-cpu` | `ubuntu-latest` | `intel/oneapi-hpckit:2025.3.0-0-devel-ubuntu24.04` | CPU | Release | yes, CTest |
 
 The CPU and sanitizer jobs install `cmake`, `ninja-build`, `g++`, and `catch2`
 from the Ubuntu 24.04 archive and clone alpaka from source. The CUDA, HIP, and
@@ -52,10 +54,12 @@ oneAPI jobs do the same inside their container; they install `git` before
 | CPU, ASAN+UBSAN Debug, fwk394 | 236/236 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `sanitizers` runtime was not observed |
 | CPU, leak (error-path, `-L leak`) | 1/1 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `leak` step runtime was not observed |
 | CPU, TSAN Debug non-PIE, no OMP executor | 235/235, 0 reports at `cf3bc8a` (historical); 210/210, 0 reports, 202.83 s at `f3ef355` on `rosi_v100` (historical; no full TSAN at `56c11ac`) | local `fwk394` run; the hosted `tsan` runtime was not observed |
+| CPU, icpx Release | **247/247** at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4` | local run; the hosted `icpx-cpu` job runs the same suite |
 | CUDA device runtime | **306** at `56c11ac` on `hal` A30 `sm_80`, CUDA 13.4; 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
 | HIP `gfx1100` | **297** at `56c11ac` on `hal` RX 7900 XTX, ROCm 7.2; 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
 
-The CPU count is 246 in Release and Debug. Release compiles the per-event
+The CPU suite registers 247 cases at `88de14f`; the 246 count at `56c11ac` is
+historical. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
 both modes. The opt-in `[diagnostics]` photon cases are excluded from the
 default suite. The `fwk394` sanitizer rows are the historical local P10
@@ -265,13 +269,45 @@ The `reuse` job checks every tracked file against `.reuse/dep5` and
 the workflow and documentation files added here; the previous hosted run
 passed with every tracked file covered.
 
+## oneAPI icpx CPU
+
+The `icpx-cpu` job is part of the push and pull-request gate. It runs in the
+same oneAPI 2025.3 container and with the same CPU-only `icpx` target that the
+alpaka pin lists in its supported compiler matrix, and it exercises the CPU
+backend with Intel's host compiler:
+
+```sh
+# The oneAPI image already initializes PATH, LD_LIBRARY_PATH and
+# CMAKE_PREFIX_PATH, so the job does not source setvars.sh.
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=icpx \
+  -DGRAPHFLOW_ALPAKA_SOURCE_DIR="$PWD/.alpaka" \
+  -DGRAPHFLOW_ENABLE_OPENMP=OFF
+cmake --build build -j "$(nproc)"
+ctest --test-dir build --output-on-failure --no-tests=error \
+  --output-junit ctest-icpx.xml
+```
+
+graphFlow has no SYCL backend, so the job does not set `alpaka_DEP_ONEAPI` and
+makes no SYCL claim. It is a host-compiler portability gate for the CPU
+backend. `alpaka_COMPILE_PEDANTIC` stays off for this job: it adds `-Werror`,
+and icpx (unlike GCC) warns on the brace-initialized `RouteTable{{1u}}` scalars
+in the tests. The GCC CPU, sanitizer, and TSAN jobs keep the strict gate.
+
+The job pins `OMP_NUM_THREADS=4`, matching the hosted runner's vCPU count. The
+Intel OpenMP runtime (`-fiopenmp`) pays team-creation cost per region, and
+graphFlow's host scheduler launches many small regions. With the default team
+size of a large host (64 threads on `hal`) the N=1e6 smoke reached its 900 s
+driver timeout; with four threads it finished in 59 s and the full suite
+passed 247/247 in 506 s on the same loaded host. Pinning the team size keeps
+the gate stable without changing the tested executor.
+
 ## No SYCL backend
 
 graphFlow has no SYCL backend, so there is no SYCL job and no job pretends to
-run one. The optional `icpx-cpu` job compiles and tests the CPU backend with
-Intel's host compiler in a oneAPI container. It runs only when a maintainer
-starts `workflow_dispatch` with `run_icpx` enabled; it is not part of the
-push/PR gate.
+run one. The `icpx-cpu` job above compiles and tests the CPU backend with
+Intel's host compiler only.
 
 ## Format
 
@@ -324,7 +360,8 @@ the ordinary CTest job without a skip. P07b contributes 7/7 of those cases.
 The `format` job enforces the T14b sweep with clang-format 20.1.8. The `sm_70`
 workaround clears the nvcc internal compiler error, so `cuda-compile` builds the CUDA sources and the CUDA example without a
 GPU. `hip-compile` builds the HIP sources and the HIP example without an AMD
-GPU. `icpx-cpu` is manual and skipped on push and pull requests. At `cf3bc8a`
+GPU. `icpx-cpu` runs on every push and pull request; the local `hal` validation
+passes the 247-case CPU suite with icpx. At `cf3bc8a`
 on `gf/p10-sanitizers`, the historical fwk394 evidence is ASAN+UBSAN 236/236,
 leak 1/1, and TSAN 235/235 with 0 reports (non-PIE, OMP off, CpuOmpBlocks off);
 the hosted `tsan` and `leak` runtimes were not observed, and no H100 was used.
@@ -338,5 +375,10 @@ Container jobs set `shell: bash` because container jobs default to `sh`, which
 rejects `set -o pipefail`.
 
 Validation for this change covers YAML parsing, `actionlint`, `bash -n` on the
-embedded shell, the container image tags, and the alpaka pin. No local project
-build or test was run.
+embedded shell, the container image tag, and the alpaka pin. Locally on `hal`,
+the CPU backend configured and built with icpx 2026.2.0 and with icpx 2025.3.3
+(the same 2025.3 line as the container) against the pinned alpaka checkout, and
+both `ctest` runs passed 247/247 with `OMP_NUM_THREADS=4`. The exact hosted
+container revision 2025.3.0 was not run here; 2025.3.3 is the closest
+available build of that compiler line. No GitHub-hosted job runtime was
+observed for this branch.
