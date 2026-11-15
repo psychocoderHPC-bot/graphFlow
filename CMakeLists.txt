@@ -310,8 +310,8 @@ if(GRAPHFLOW_BUILD_TESTS)
         )
     endif()
     if(GRAPHFLOW_ENABLE_SYCL)
-        # Runtime smoke: it fails when no Intel GPU is visible. The SYCL build is not part of
-        # hosted CI; the device gate runs on hal with an Arc A770.
+        # Runtime smoke: it fails when no Intel GPU is visible. Hosted CI compiles this target
+        # in the sycl-compile job but runs no CTest; the device gate runs on hal with an Arc A770.
         target_sources(graphFlow_tests PRIVATE tests/unit/test_sycl_kernel.cpp)
     endif()
     target_link_libraries(graphFlow_tests PRIVATE graphFlow::graphFlow Catch2::Catch2WithMain)
