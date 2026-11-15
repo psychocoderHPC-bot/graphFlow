@@ -276,6 +276,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_backend.cpp
         tests/unit/test_launch_policy.cpp
         tests/unit/test_cli_contract.cpp
+        tests/unit/test_attributes_static.cpp
         tests/unit/test_chunk_pool.cpp
         tests/unit/test_payload_storage.cpp
         tests/unit/test_payload_slot_storage.cpp
