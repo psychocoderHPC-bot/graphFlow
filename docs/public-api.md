@@ -432,10 +432,12 @@ seed, offset, or purpose.
 
 ## Backend validation
 
-The contract is exercised on CPU, CUDA, and HIP. The current suites are
-**255/255 CPU**, **316/316 CUDA** on `hal` A30 `sm_80`, and **307/307 HIP** on
-`hal` RX 7900 XTX at `561b9a4c9435e37b164623bb6be60a3051783eb4`; PR #63 adds
-the public-Flow routed-axis and rejection cases and PR #65 adds the six
+The contract is exercised on CPU, CUDA, and HIP. The current suite counts are
+**258/258 CPU**, **319/319 CUDA** on `hal` A30 `sm_80`, and **310/310 HIP** on
+`hal` RX 7900 XTX; the last full recorded run passed 255/255, 316/316 and
+307/307 at `561b9a4c9435e37b164623bb6be60a3051783eb4`. The AoS-over-SoA matrix
+adds three cases per backend, which takes SYCL to **74/74**. PR #63 adds the
+public-Flow routed-axis and rejection cases and PR #65 adds the six
 `[scheduler]` cases on top of the P07b 7/7. The `ffe4074` totals 249/249,
 310/310 and 301/301, the 247/247, 307/307 and 298/298 at `88de14f`, the
 246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281`
