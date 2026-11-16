@@ -255,6 +255,17 @@ namespace graphFlow
         access_type m_access{};
     };
 
+    /** Mutable proxy type of a record value, for functors that name the parameter type.
+     *
+     * `flow.transform<Set<Tags...>>(...)` hands its functor this proxy over a local record copy.
+     */
+    template<typename TRecord, typename TSet>
+    using MutableRecordProxy = RecordProxy<detail::RefRecordAccess<TRecord>, TSet>;
+
+    /** Read-only proxy type of a record value. */
+    template<typename TRecord, typename TSet>
+    using ConstRecordProxy = RecordProxy<detail::ConstRefRecordAccess<TRecord>, TSet>;
+
     /** Value record with named attributes and value semantics.
      *
      * The value storage is a one-element `llama_lite::SoA` over the `llama_lite::Record` descriptor,

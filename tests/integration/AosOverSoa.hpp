@@ -58,6 +58,18 @@ namespace graphFlow::test::aos
         }
     };
 
+    using ValueSubset = graphFlow::Set<ValueTag>;
+    using ValueSubsetProxy = graphFlow::MutableRecordProxy<Payload, ValueSubset>;
+
+    /** Same bump through the registration-site subset overload; Id stays untouched. */
+    struct BumpValueSubset
+    {
+        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ValueSubsetProxy& proxy) const
+        {
+            proxy.template set<ValueTag>(proxy.template get<ValueTag>() + 5u);
+        }
+    };
+
     struct IdMod3
     {
         static constexpr std::uint32_t maxBins = 3u;
@@ -161,9 +173,9 @@ namespace graphFlow::test::aos
         return records;
     }
 
-    /** End-to-end AoS flow: source, one-attribute transform, wide partition, shared sink. */
-    template<typename TDevice>
-    Outcome runFlow(TDevice& device, std::uint64_t particles, std::uint32_t batchChunks)
+    /** End-to-end AoS flow: source, one transform, wide partition, shared sink. */
+    template<bool UseSubset, typename TDevice>
+    Outcome runFlowImpl(TDevice& device, std::uint64_t particles, std::uint32_t batchChunks)
     {
         constexpr std::uint32_t capacity = 8u;
         std::size_t const size = static_cast<std::size_t>(std::max<std::uint64_t>(particles, 1u));
@@ -176,7 +188,13 @@ namespace graphFlow::test::aos
 
         graphFlow::Flow<Payload, TDevice, Storage<TDevice>> flow{device};
         auto source = flow.source("source", Generate{});
-        auto bump = flow.transform("bump", BumpValue{});
+        auto bump = [&]()
+        {
+            if constexpr(UseSubset)
+                return flow.template transform<ValueSubset>("bump", BumpValueSubset{});
+            else
+                return flow.transform("bump", BumpValue{});
+        }();
         auto split = flow.partition("split", IdMod3{}, AddBin{});
         using ResultView = decltype(results.getView());
         auto sink = flow.sink("record", RecordValue<ResultView>{results.getView()});
@@ -192,6 +210,18 @@ namespace graphFlow::test::aos
         outcome.values = readBack<TDevice, std::uint32_t>(device, results, size);
         outcome.values.resize(static_cast<std::size_t>(particles));
         return outcome;
+    }
+
+    template<typename TDevice>
+    Outcome runFlow(TDevice& device, std::uint64_t particles, std::uint32_t batchChunks)
+    {
+        return runFlowImpl<false>(device, particles, batchChunks);
+    }
+
+    template<typename TDevice>
+    Outcome runSubsetFlow(TDevice& device, std::uint64_t particles, std::uint32_t batchChunks)
+    {
+        return runFlowImpl<true>(device, particles, batchChunks);
     }
 
     /** Scalar host oracle of the same source, transform, classifier and update. */
@@ -229,6 +259,22 @@ namespace graphFlow::test::aos
                 std::accumulate(outcome.values.begin(), outcome.values.end(), std::uint64_t{0u})
                 == std::accumulate(expected.begin(), expected.end(), std::uint64_t{0u}));
             CHECK(histogramOf(outcome.values) == histogramOf(expected));
+            CHECK(outcome.stats.poolChunks != 0u);
+            CHECK(outcome.stats.peakLiveChunks <= outcome.stats.poolChunks);
+        }
+    }
+
+    template<typename TDevice>
+    void checkSubsetFlowAgainstOracle(TDevice& device, std::uint64_t particles)
+    {
+        CAPTURE(particles);
+        std::vector<std::uint32_t> const expected = oracleValues(particles);
+        for(std::uint32_t batchChunks : {1u, 2u})
+        {
+            CAPTURE(batchChunks);
+            Outcome const outcome = runSubsetFlow(device, particles, batchChunks);
+            REQUIRE(outcome.values.size() == expected.size());
+            CHECK(outcome.values == expected);
             CHECK(outcome.stats.poolChunks != 0u);
             CHECK(outcome.stats.peakLiveChunks <= outcome.stats.poolChunks);
         }
@@ -350,6 +396,44 @@ namespace graphFlow::test::aos
             {
                 // BumpValue writes only Value; copy-all keeps the untouched Id.
                 CHECK(records[i].get<IdTag>() == 1000u + i);
+                CHECK(records[i].get<ValueTag>() == i + 5u);
+            }
+            for(graphFlow::ChunkDescriptor const& output : outputs)
+                storage.release(output.handle);
+            storage.release(input);
+        }
+
+        {
+            auto const input = storage.acquire();
+            std::vector<Payload> const seed{
+                Payload{2000u, 0u},
+                Payload{2001u, 1u},
+                Payload{2002u, 2u},
+                Payload{2003u, 3u}};
+            writeRecords(device, storage, static_cast<std::uint32_t>(storage.base(input)), seed);
+
+            graphFlow::ChunkDescriptor const chunk{input, capacity, 0u};
+            graphFlow::detail::TransformStage<TDevice, StorageType, Payload, BumpValueSubset, ValueSubset> stage{
+                device,
+                storage,
+                config,
+                BumpValueSubset{}};
+            typename Runner::Batch const batch{{chunk}, 0u};
+            stage.launch(queue, batch);
+            drain(device, queue);
+            std::uint32_t allocated = 0u;
+            CHECK_FALSE(stage.advance(queue, batch, allocated));
+            CHECK(stage.launches() == 1u);
+
+            std::vector<graphFlow::ChunkDescriptor> outputs;
+            stage.finish(batch, outputs);
+            REQUIRE(outputs.size() == 1u);
+            std::vector<Payload> const records
+                = readRecords(device, storage, static_cast<std::uint32_t>(storage.base(outputs[0].handle)), capacity);
+            for(std::uint32_t i = 0u; i < capacity; ++i)
+            {
+                // The subset functor can only name Value; copy-all keeps Id and the other attributes.
+                CHECK(records[i].get<IdTag>() == 2000u + i);
                 CHECK(records[i].get<ValueTag>() == i + 5u);
             }
             for(graphFlow::ChunkDescriptor const& output : outputs)

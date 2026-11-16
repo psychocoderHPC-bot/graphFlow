@@ -229,6 +229,34 @@ namespace graphFlow
             return TransformHandle{m_identity, key, 1u, m_nodes[key].name};
         }
 
+        /** Register a single-output transform whose functor receives a `RecordProxy`.
+         *
+         * This overload is additive: `flow.transform<Set<Tags...>>(name, functor)` narrows the
+         * functor argument to the declared attributes, while `transform(name, functor)` keeps the
+         * full `Record&` contract. The stage loads and stores the complete record, so attributes
+         * outside the set keep their values and copy-all semantics stay unchanged.
+         */
+        template<typename TSet, typename TFunctor>
+        requires AttributeSubset<TPayload, TSet> && SubsetTransformFor<TFunctor, TPayload, TSet>
+        TransformHandle transform(std::string name, TFunctor functor)
+        {
+            auto functorPtr = std::make_shared<TFunctor>(std::move(functor));
+            StageFactory makeStage
+                = [functorPtr](TDevice const& device, TStorage& storage, Config const& config, std::uint32_t purpose)
+                -> std::unique_ptr<Stage>
+            {
+                return std::make_unique<detail::TransformStage<TDevice, TStorage, TPayload, TFunctor, TSet>>(
+                    device,
+                    storage,
+                    config,
+                    *functorPtr,
+                    purpose);
+            };
+            auto const key
+                = appendNode(std::move(name), NodeRole::transform, 1u, functorPtr, nullptr, std::move(makeStage));
+            return TransformHandle{m_identity, key, 1u, m_nodes[key].name};
+        }
+
         /** Register a sink node. */
         template<typename TFunctor>
         requires SinkFor<TFunctor, TPayload>

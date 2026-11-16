@@ -80,9 +80,10 @@ a `RecordProxy`; `get<Tag>()` and `set<Tag>()` outside that set fail at compile
 time. `load()`, the conversion to `record_type`, and `store()` operate on the
 whole record: copying a proxy into a `Record` copies every attribute, including
 attributes outside the set. The proxy narrows access, not the record layout or
-the copy. The typed `Flow` stages pass the full `Record` payload to their
-functors; a `Set` narrows proxy access where the application asks for a proxy,
-it does not change the payload type the scheduler loads and stores.
+the copy. `transform(name, functor)` passes the full `Record` payload.
+`flow.transform<Set<Tags...>>(name, functor)` is an additive overload that hands
+the functor a `RecordProxy` limited to the set; the scheduler still loads and
+stores the complete record, so attributes outside the set keep their values.
 
 `SoAStorage<TDevice, Fields...>` implements `PayloadStorage` and
 `ChunkStorage`. It allocates one `onHost::alloc<value_type>` column per
@@ -174,7 +175,7 @@ calls below are the complete minimal surface.
 | --- | --- |
 | `source(name, functor)` | Map a logical item index to one initial payload. The node has one output. |
 | `partition(name, classifier[, update])` | `classifier` declares `static constexpr std::uint32_t maxBins` and returns one bin for an immutable payload. The optional `update` receives the selected bin and a mutable copy and runs exactly once per emitted item. |
-| `transform(name, functor)` | Update each payload and forward it on one output. No histogram or bin scatter is involved. The first version uses an out-of-place path or proves exclusive ownership for in-place reuse. |
+| `transform(name, functor)` | Update each payload and forward it on one output. No histogram or bin scatter is involved. The first version uses an out-of-place path or proves exclusive ownership for in-place reuse. `transform<Set<Tags...>>(name, functor)` keeps the same path and hands the functor a `RecordProxy` limited to the set. |
 | `sink(name, functor)` | Consume each payload once. Application result views are allowed and own their storage. |
 | `connect(output, node)` | Connect a node or output port to a node. Fan-in and feedback are allowed. Each item follows exactly one successor. |
 | `configure(tuning)` | Set the optional `graphFlow::Tuning` value for the run. |
@@ -431,10 +432,12 @@ seed, offset, or purpose.
 
 ## Backend validation
 
-The contract is exercised on CPU, CUDA, and HIP. The current suites are
-**255/255 CPU**, **316/316 CUDA** on `hal` A30 `sm_80`, and **307/307 HIP** on
-`hal` RX 7900 XTX at `561b9a4c9435e37b164623bb6be60a3051783eb4`; PR #63 adds
-the public-Flow routed-axis and rejection cases and PR #65 adds the six
+The contract is exercised on CPU, CUDA, and HIP. The current suite counts are
+**258/258 CPU**, **319/319 CUDA** on `hal` A30 `sm_80`, and **310/310 HIP** on
+`hal` RX 7900 XTX; the last full recorded run passed 255/255, 316/316 and
+307/307 at `561b9a4c9435e37b164623bb6be60a3051783eb4`. The AoS-over-SoA matrix
+adds three cases per backend, which takes SYCL to **74/74**. PR #63 adds the
+public-Flow routed-axis and rejection cases and PR #65 adds the six
 `[scheduler]` cases on top of the P07b 7/7. The `ffe4074` totals 249/249,
 310/310 and 301/301, the 247/247, 307/307 and 298/298 at `88de14f`, the
 246/246, 306/306 and 297/297 at `56c11ac` and the 239/299/290 at `a610281`
