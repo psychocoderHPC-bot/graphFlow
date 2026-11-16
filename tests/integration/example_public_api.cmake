@@ -103,6 +103,14 @@ foreach(file IN LISTS user_files)
                 )
             endif()
         endforeach()
+        # The public example payload is a Record run through the SoAFlow alias.
+        string(FIND "${content}" "graphFlow::SoAFlow<" soaflow_position)
+        if(soaflow_position EQUAL -1)
+            message(
+                FATAL_ERROR
+                "example_public_api.cmake: '${file}' must run the public graph through 'graphFlow::SoAFlow<'."
+            )
+        endif()
     endif()
     foreach(token IN LISTS required)
         string(FIND "${content}" "${token}" position)

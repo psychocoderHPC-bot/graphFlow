@@ -135,11 +135,12 @@ The public API is implemented and documented in
 [public API contract](docs/public-api.md). The typed
 `Flow<TPayload, TDevice, TStorage>` execution path runs source, transform,
 partition, and sink stages. The particle-feedback example declares its graph
-with `Flow<Particle>` handles and named outcome ports in a 121-line user file
-(`ParticleFeedback.hpp`). `ParticleStages.hpp` remains only for the older
-low-level tests. The photon-scattering example runs the same public API
-with slab geometry, five events, `Philox4x32x10` draws, typed failure status,
-CSV and trace output, and plots. The RNG API change replaced the old Philox
+with `SoAFlow<ParticleRecord>` handles and named outcome ports in a 121-line
+user file (`ParticleFeedback.hpp`). `ParticleStages.hpp` remains only for the
+older low-level tests and keeps the canonical `graphFlow::Particle` payload.
+The photon-scattering example runs the same public API with slab geometry, five
+events, `Philox4x32x10` draws, typed failure status, CSV and trace output, and
+plots. The RNG API change replaced the old Philox
 offset map with keyed engines, so fixed-seed particle and photon baselines
 changed once. The earlier 33-invocation CLI comparison predates that change.
 
@@ -188,8 +189,8 @@ examples/particle_feedback/
   Cli.hpp              option parsing and policy resolution
   main.cpp             backend selection, policy output and histogram
   ParticleFunctors.hpp domain functors and named outcome ports
-  ParticleTypes.hpp    parameters and histogram formatting
-  ParticleFeedback.hpp Flow graph construction and run function
+  ParticleTypes.hpp    Record payload, parameters and histogram formatting
+  ParticleFeedback.hpp SoAFlow graph construction and run function
   ParticleStages.hpp   deprecated low-level stages kept for older tests
 examples/record_pipeline/
   main.cpp             Record and SoAFlow attribute-column pipeline
@@ -418,6 +419,14 @@ are historical.
 
 Fields per particle: `id: uint64`, `property: uint32`, `weight: uint32`,
 `visit: uint32`. All decisions are integer only.
+
+The public example payload is a `graphFlow::Record` over the `constexpr` tags
+`idTag`, `propertyTag`, `weightTag` and `visitTag`, and the run uses
+`graphFlow::SoAFlow` so `SoAStorage` keeps one device column per attribute.
+Stages access a particle through `particle[idTag]` and the other tags. The RNG
+stream is keyed by the logical id and the visit counter, so the column layout
+never changes a draw. The deprecated low-level `ParticleStages.hpp` path keeps
+the canonical `graphFlow::Particle` struct and its `ParticleStorage` default.
 
 ```text
 Generate: property = engine(id, event 0, source)(); weight = 0; visit = 0

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ParticleTypes.hpp"
 #include "graphFlow/flow/Concepts.hpp"
 #include "graphFlow/graph/Classifier.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
@@ -26,16 +27,17 @@ namespace graphFlow::particle
     /** Source functor: materialise one fresh particle per logical item index.
      *
      * graphFlow injects the engine of the source node; the particle property is its first unsigned
-     * output. The functor never handles a seed or a draw offset.
+     * output. The functor never handles a seed or a draw offset. The record constructor assigns
+     * the value in field order: id, property, weight, visit.
      */
     struct GenerateParticles
     {
-        ALPAKA_FN_ACC graphFlow::Particle operator()(
+        ALPAKA_FN_ACC ParticleRecord operator()(
             [[maybe_unused]] auto const& accelerator,
             rng::Engine& engine,
             std::uint64_t id) const
         {
-            return graphFlow::Particle{id, engine(), 0u, 0u};
+            return ParticleRecord{id, engine(), 0u, 0u};
         }
     };
 
@@ -47,9 +49,9 @@ namespace graphFlow::particle
         ALPAKA_FN_ACC std::uint32_t operator()(
             [[maybe_unused]] auto const& accelerator,
             rng::Engine& engine,
-            graphFlow::Particle const& particle) const
+            ParticleRecord const& particle) const
         {
-            return engine() >= particle.property ? 1u : 0u;
+            return engine() >= particle[propertyTag] ? 1u : 0u;
         }
     };
 
@@ -63,11 +65,11 @@ namespace graphFlow::particle
         ALPAKA_FN_ACC Outcome operator()(
             [[maybe_unused]] auto const& accelerator,
             rng::Engine& engine,
-            graphFlow::Particle const& particle) const
+            ParticleRecord const& particle) const
         {
             if(engine() < 0x8000'0000u)
                 return Outcome::sink;
-            return particle.visit < maxVisits ? Outcome::feedback : Outcome::capped;
+            return particle[visitTag] < maxVisits ? Outcome::feedback : Outcome::capped;
         }
     };
 
@@ -79,14 +81,14 @@ namespace graphFlow::particle
         ALPAKA_FN_ACC graphFlow::UpdateResult operator()(
             [[maybe_unused]] auto const& accelerator,
             Outcome bin,
-            graphFlow::Particle& particle) const
+            ParticleRecord& particle) const
         {
             if(bin != Outcome::feedback)
                 return graphFlow::UpdateResult::success;
-            if(particle.weight > std::numeric_limits<std::uint32_t>::max() - increment)
+            if(particle[weightTag] > std::numeric_limits<std::uint32_t>::max() - increment)
                 return graphFlow::UpdateResult::overflow;
-            particle.weight += increment;
-            particle.visit += 1u;
+            particle[weightTag] += increment;
+            particle[visitTag] += 1u;
             return graphFlow::UpdateResult::success;
         }
     };
@@ -97,10 +99,9 @@ namespace graphFlow::particle
     {
         mutable TWeights weights;
 
-        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, graphFlow::Particle const& particle)
-            const
+        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ParticleRecord const& particle) const
         {
-            weights[particle.id] = particle.weight;
+            weights[particle[idTag]] = particle[weightTag];
         }
     };
 
@@ -111,11 +112,10 @@ namespace graphFlow::particle
         mutable TWeights weights;
         mutable TCappedFlags cappedFlags;
 
-        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, graphFlow::Particle const& particle)
-            const
+        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ParticleRecord const& particle) const
         {
-            weights[particle.id] = particle.weight;
-            cappedFlags[particle.id] = 1u;
+            weights[particle[idTag]] = particle[weightTag];
+            cappedFlags[particle[idTag]] = 1u;
         }
     };
 } // namespace graphFlow::particle

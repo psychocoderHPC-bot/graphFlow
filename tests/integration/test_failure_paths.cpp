@@ -106,9 +106,11 @@ namespace
     /** Emit a particle whose weight is already at the 32-bit limit. */
     struct MaxWeightSource
     {
-        ALPAKA_FN_ACC graphFlow::Particle operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
+        ALPAKA_FN_ACC graphFlow::particle::ParticleRecord operator()(
+            [[maybe_unused]] auto const& accelerator,
+            std::uint64_t id) const
         {
-            return graphFlow::Particle{id, 0u, std::numeric_limits<std::uint32_t>::max(), 0u};
+            return graphFlow::particle::ParticleRecord{id, 0u, std::numeric_limits<std::uint32_t>::max(), 0u};
         }
     };
 
@@ -119,7 +121,7 @@ namespace
 
         ALPAKA_FN_ACC graphFlow::particle::Outcome operator()(
             [[maybe_unused]] auto const& accelerator,
-            [[maybe_unused]] graphFlow::Particle const& particle) const
+            [[maybe_unused]] graphFlow::particle::ParticleRecord const& particle) const
         {
             return graphFlow::particle::Outcome::feedback;
         }
@@ -893,7 +895,7 @@ TEST_CASE("a checked weight overflow aborts the typed batch", "[integration][fai
     using Device = ALPAKA_TYPEOF(device);
 
     auto weights = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{8u}});
-    graphFlow::Flow<graphFlow::Particle, Device> flow{device};
+    graphFlow::SoAFlow<graphFlow::particle::ParticleRecord, Device> flow{device};
     auto source = flow.source("max weight", MaxWeightSource{});
     auto feedback = flow.partition("feedback", FeedbackOnlyClassifier{}, graphFlow::particle::UpdateWeight{1u});
     auto sink = flow.sink("record", graphFlow::particle::RecordWeight<decltype(weights.getView())>{weights.getView()});
