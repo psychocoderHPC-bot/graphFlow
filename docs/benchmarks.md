@@ -276,10 +276,10 @@ H100 claim is made.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
 - The current CUDA suite (334/334 at
   `3b90ffd8962084d59ebc672f7848b093f2d99582`) is the first recorded RTX 2080 Ti
-  `sm_75` run, on `fwk394`. The exclusive performance record (P07b) remains the
-  V100 `sm_70` measurement; the measured performance band of the default path is
-  unchanged, and the opt-in AoS-over-SoA storage path runs within the same
-  measured band. No new benchmark was taken in this documentation update.
+  `sm_75` run, on `fwk394`, correctness only. The exclusive performance record
+  (P07b) remains the V100 `sm_70` measurement at `56c11ac`, which predates the
+  AoS-over-SoA additions. No benchmark was taken at `3b90ffd`, so no performance
+  claim is made for the default path or the opt-in path.
 - The P07 section records a sustained D2D copy reference (`409.733` GB/s at
   3,221,225,472 B) on the V100. It is a context number, not a scatter
   bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,

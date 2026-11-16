@@ -54,9 +54,8 @@ historical. The public API
 is implemented: the typed `Flow<TPayload, TDevice, TStorage>` topology,
 execution, storage, and status path described in
 [public API contract](docs/public-api.md). The default
-storage selection is unchanged; the measured performance band of the default
-path is unchanged, and the new opt-in path runs within the same measured
-band. CPU, CUDA, HIP, and SYCL execution
+storage selection is unchanged. No benchmark was taken at the current main, so
+no performance claim is made for the new opt-in path. CPU, CUDA, HIP, and SYCL execution
 are validated on real devices. GitHub-hosted HIP and SYCL builds remain
 compile-only because those runners have no AMD or Intel GPU; the
 `sycl-compile` job builds the Intel-GPU-only SYCL backend and makes no

@@ -17,13 +17,14 @@ intended final state.
   **334/334** on `fwk394` RTX 2080 Ti `sm_75`, HIP **325/325** on `hal`
   RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **342/342** on `hal` Arc A770
   `spir64` (oneAPI 2026.2; 75 of the cases carry the `sycl` label, fp32 photons by
-  default, double in the opt-in case).
-  `spir64` (oneAPI 2026.2, PR #69 matrix plus the FP64 case; fp32 photons by
   default, double in the opt-in case). No case is skipped or
   filtered; PR #63
   adds the public-Flow routed-axis and rejection cases, PR #65 adds the six
   `[scheduler]` cases (6/6 on CPU, CUDA and HIP), and PR #69 registers the 71-case
-  SYCL device matrix, all on top of the P07b 7/7. The
+  SYCL device matrix, all on top of the P07b 7/7. The AoS attribute matrix
+  (3/3 per backend), the attribute declaration helpers (6/6), the
+  registration-site subset case (1/1), and the record-pipeline example (2/2)
+  are included in the totals. The
   `ffe4074` totals 249/310/301, the `88de14f` totals 247/307/298, the `56c11ac`
   totals 246/306/297, and the earlier `a610281` totals 239/299/290 are
   historical. The full record, commands, and pins are in
@@ -442,7 +443,7 @@ resource or decision is missing.
   `f3ef3552c60c0cfe0d202a73a08b808746ad11ce`: full integrated TSAN CTest
   **210/210, 0 reports**, 202.83 s, non-PIE Debug with
   `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`. This is the last
-  full TSAN run; it predates the current 255-case suite, so the current tree
+  full TSAN run; it predates the current 270-case suite, so the current tree
   has no full TSAN result. With the default CpuOmpBlocks plus OpenMP the same
   suite fails 105/210 with reports inside the alpaka async CPU queue; those are
   upstream alpaka races, not graphFlow races, which is why the clean gate uses
@@ -511,7 +512,7 @@ resource or decision is missing.
   used. The current 270-case suite has no full TSAN run; the hal kernel still
   rejects the TSAN memory mapping and the fwk394 non-PIE subset (14/14) is
   historical context.
-- **CI status:** the hosted CPU jobs run the 255-case CPU suite (Release and
+- **CI status:** the hosted CPU jobs run the 270-case CPU suite (Release and
   Debug) and the `sanitizers` job runs ASAN+UBSAN over it plus a dedicated
   `leak` step, with no skip. A hosted `tsan` job runs the host scheduler under
   TSAN (non-PIE, OMP off, CpuOmpBlocks off). The historical 202-case final main
