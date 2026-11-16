@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/Config.hpp"
+#include "graphFlow/flow/Attributes.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/Status.hpp"
 #include "graphFlow/rng/ParticleRng.hpp"
@@ -158,6 +159,41 @@ namespace graphFlow
           || (detail::OptionalContextInvocable<TFunctor, TPayload const&>
               && (std::is_void_v<detail::FunctorResultT<TFunctor, TPayload const&>>
                   || std::same_as<std::remove_cvref_t<detail::FunctorResultT<TFunctor, TPayload const&>>, TPayload>) );
+
+    /** A payload that is a `graphFlow::Record` and exposes its attribute list. */
+    template<typename TPayload>
+    concept AttributeRecord = requires {
+        typename TPayload::attribute_list;
+        typename TPayload::attribute_set;
+    };
+
+    /** `TSet` is a valid `Set<Tags...>` for the attributes of `TPayload`. */
+    template<typename TPayload, typename TSet>
+    concept AttributeSubset = requires {
+        typename TPayload::attribute_list;
+        requires detail::SetCompatible<TSet, typename TPayload::attribute_list>::value;
+    };
+
+    /** A subset transform functor receives a `RecordProxy` limited to `TSet`.
+     *
+     * The mutable proxy wins over the read-only one, matching the full-record overload. The functor
+     * either mutates the proxy or returns a replacement `TPayload`; the stage still loads and stores
+     * the complete record, so attributes outside `TSet` keep their values.
+     */
+    template<typename TFunctor, typename TPayload, typename TSet>
+    concept SubsetTransformFor
+        = AttributeSubset<TPayload, TSet>
+          && ((detail::OptionalContextInvocable<TFunctor, MutableRecordProxy<TPayload, TSet>&>
+               && (std::is_void_v<detail::FunctorResultT<TFunctor, MutableRecordProxy<TPayload, TSet>&>>
+                   || std::same_as<
+                       std::remove_cvref_t<detail::FunctorResultT<TFunctor, MutableRecordProxy<TPayload, TSet>&>>,
+                       TPayload>) )
+              || (detail::OptionalContextInvocable<TFunctor, ConstRecordProxy<TPayload, TSet> const&>
+                  && (std::is_void_v<detail::FunctorResultT<TFunctor, ConstRecordProxy<TPayload, TSet> const&>>
+                      || std::same_as<
+                          std::remove_cvref_t<
+                              detail::FunctorResultT<TFunctor, ConstRecordProxy<TPayload, TSet> const&>>,
+                          TPayload>) ));
 
     /** A sink functor consumes each payload once. */
     template<typename TFunctor, typename TPayload>

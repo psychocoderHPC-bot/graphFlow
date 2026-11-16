@@ -80,9 +80,10 @@ a `RecordProxy`; `get<Tag>()` and `set<Tag>()` outside that set fail at compile
 time. `load()`, the conversion to `record_type`, and `store()` operate on the
 whole record: copying a proxy into a `Record` copies every attribute, including
 attributes outside the set. The proxy narrows access, not the record layout or
-the copy. The typed `Flow` stages pass the full `Record` payload to their
-functors; a `Set` narrows proxy access where the application asks for a proxy,
-it does not change the payload type the scheduler loads and stores.
+the copy. `transform(name, functor)` passes the full `Record` payload.
+`flow.transform<Set<Tags...>>(name, functor)` is an additive overload that hands
+the functor a `RecordProxy` limited to the set; the scheduler still loads and
+stores the complete record, so attributes outside the set keep their values.
 
 `SoAStorage<TDevice, Fields...>` implements `PayloadStorage` and
 `ChunkStorage`. It allocates one `onHost::alloc<value_type>` column per
@@ -174,7 +175,7 @@ calls below are the complete minimal surface.
 | --- | --- |
 | `source(name, functor)` | Map a logical item index to one initial payload. The node has one output. |
 | `partition(name, classifier[, update])` | `classifier` declares `static constexpr std::uint32_t maxBins` and returns one bin for an immutable payload. The optional `update` receives the selected bin and a mutable copy and runs exactly once per emitted item. |
-| `transform(name, functor)` | Update each payload and forward it on one output. No histogram or bin scatter is involved. The first version uses an out-of-place path or proves exclusive ownership for in-place reuse. |
+| `transform(name, functor)` | Update each payload and forward it on one output. No histogram or bin scatter is involved. The first version uses an out-of-place path or proves exclusive ownership for in-place reuse. `transform<Set<Tags...>>(name, functor)` keeps the same path and hands the functor a `RecordProxy` limited to the set. |
 | `sink(name, functor)` | Consume each payload once. Application result views are allowed and own their storage. |
 | `connect(output, node)` | Connect a node or output port to a node. Fan-in and feedback are allowed. Each item follows exactly one successor. |
 | `configure(tuning)` | Set the optional `graphFlow::Tuning` value for the run. |

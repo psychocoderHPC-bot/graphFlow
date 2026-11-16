@@ -55,6 +55,25 @@ namespace
 
     using HelperAttributes = graphFlow::Attributes<HelperIdField, HelperValueField>;
     using HelperRecord = graphFlow::Record<HelperIdField, HelperValueField>;
+
+    using ParticleSubset = graphFlow::Set<IdTag, WeightTag>;
+    using ParticleSubsetProxy = graphFlow::MutableRecordProxy<ParticleRecord, ParticleSubset>;
+
+    struct BumpWeightSubset
+    {
+        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ParticleSubsetProxy& proxy) const
+        {
+            proxy.template set<WeightTag>(proxy.template get<WeightTag>() + 1u);
+        }
+    };
+
+    struct BumpWeightRecord
+    {
+        ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ParticleRecord& record) const
+        {
+            record.template set<WeightTag>(record.template get<WeightTag>() + 1u);
+        }
+    };
 } // namespace
 
 TEST_CASE("attribute records expose named fields and copy all attributes", "[attributes][static]")
@@ -275,4 +294,27 @@ TEST_CASE("attribute declaration helpers generate a tag and field pair", "[attri
     CHECK(record.get<HelperValueTag>() == 4u);
     record.set<HelperValueTag>(7u);
     CHECK(record.get<HelperValueTag>() == 7u);
+}
+
+TEST_CASE("subset transform registration hands the functor a RecordProxy", "[attributes][static]")
+{
+    static_assert(graphFlow::AttributeRecord<ParticleRecord>);
+    static_assert(graphFlow::AttributeSubset<ParticleRecord, ParticleSubset>);
+    static_assert(!graphFlow::AttributeSubset<ParticleRecord, graphFlow::Set<HelperIdTag>>);
+    static_assert(graphFlow::SubsetTransformFor<BumpWeightSubset, ParticleRecord, ParticleSubset>);
+    static_assert(!graphFlow::SubsetTransformFor<BumpWeightRecord, ParticleRecord, ParticleSubset>);
+
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::Flow<ParticleRecord, Device, ParticleColumns> flow{device};
+
+    // The explicit Set selects the additive overload; the plain call keeps the Record overload.
+    auto subset = flow.transform<ParticleSubset>("subset", BumpWeightSubset{});
+    auto full = flow.transform("full", BumpWeightRecord{});
+
+    static_assert(std::same_as<decltype(subset), graphFlow::TransformHandle>);
+    static_assert(std::same_as<decltype(full), graphFlow::TransformHandle>);
+    CHECK(subset.valid());
+    CHECK(full.valid());
+    CHECK(subset.name() == "subset");
+    CHECK(full.name() == "full");
 }

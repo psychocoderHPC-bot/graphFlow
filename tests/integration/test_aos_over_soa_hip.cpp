@@ -15,7 +15,10 @@ TEST_CASE("HIP AoS flow matches the scalar oracle", "[hip][flow][aos]")
 {
     auto device = graphFlow::test::makeHipDevice();
     for(std::uint64_t particles : {0ull, 1ull, 17ull, 129ull})
+    {
         graphFlow::test::aos::checkFlowAgainstOracle(device, particles);
+        graphFlow::test::aos::checkSubsetFlowAgainstOracle(device, particles);
+    }
 }
 
 TEST_CASE("HIP AoS storage keeps the bin-id scratch and one launch per stage", "[hip][flow][aos]")

@@ -11,7 +11,10 @@ TEST_CASE("CPU AoS flow matches the scalar oracle", "[integration][flow][aos]")
 {
     auto device = graphFlow::test::makeCpuDevice();
     for(std::uint64_t particles : {0ull, 1ull, 17ull, 129ull})
+    {
         graphFlow::test::aos::checkFlowAgainstOracle(device, particles);
+        graphFlow::test::aos::checkSubsetFlowAgainstOracle(device, particles);
+    }
 }
 
 TEST_CASE("CPU AoS storage keeps the bin-id scratch and one launch per stage", "[integration][flow][aos]")

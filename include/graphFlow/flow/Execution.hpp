@@ -158,6 +158,40 @@ namespace graphFlow::detail
         }
     }
 
+    /** Apply a subset transform functor through a `RecordProxy` over the full local record.
+     *
+     * The stage loads and stores the complete payload; the proxy only narrows the attribute view the
+     * functor can name. Attributes outside the set therefore keep the values loaded from storage.
+     */
+    template<typename TSet, typename TFunctor, typename TAcc, typename TEngine, typename TStatus, typename TPayload>
+    ALPAKA_FN_ACC TPayload applySubsetTransform(
+        TFunctor const& functor,
+        TAcc const& accelerator,
+        TEngine& engine,
+        TStatus& status,
+        TPayload payload)
+    {
+        using Proxy = MutableRecordProxy<TPayload, TSet>;
+        using ConstProxy = ConstRecordProxy<TPayload, TSet>;
+        if constexpr(ContextInvocable<TFunctor, TAcc, TEngine, TStatus, Proxy&>)
+        {
+            auto proxy = payload.template proxy<TSet>();
+            auto invoke
+                = [&]() -> decltype(auto) { return invokeWithContext(functor, accelerator, engine, status, proxy); };
+            return finishTransform(payload, invoke);
+        }
+        else
+        {
+            static_assert(
+                ContextInvocable<TFunctor, TAcc, TEngine, TStatus, ConstProxy const&>,
+                "graphFlow: subset transform functor must accept the mutable or read-only RecordProxy");
+            auto const proxy = std::as_const(payload).template proxy<TSet>();
+            auto invoke
+                = [&]() -> decltype(auto) { return invokeWithContext(functor, accelerator, engine, status, proxy); };
+            return finishTransform(payload, invoke);
+        }
+    }
+
     /** Apply an optional partition updater and normalise its result. */
     template<typename TInvoke>
     ALPAKA_FN_ACC UpdateResult finishUpdate(TInvoke&& invoke)
@@ -600,12 +634,13 @@ namespace graphFlow::detail
     template<
         typename TFunctor,
         typename TAccess,
+        typename TSet = void,
         typename TInViews = typename TAccess::Views,
         typename TOutViews = typename TAccess::Views>
     struct TransformKernel;
 
-    template<typename TFunctor, typename TAccess, typename... TInViews, typename... TOutViews>
-    struct TransformKernel<TFunctor, TAccess, std::tuple<TInViews...>, std::tuple<TOutViews...>>
+    template<typename TFunctor, typename TAccess, typename TSet, typename... TInViews, typename... TOutViews>
+    struct TransformKernel<TFunctor, TAccess, TSet, std::tuple<TInViews...>, std::tuple<TOutViews...>>
     {
         TFunctor functor;
         std::uint64_t seed = 0u;
@@ -650,7 +685,10 @@ namespace graphFlow::detail
                     typename TAccess::Payload payload = access.load(inSlot + offset, in...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
-                    payload = applyTransform(functor, acc, engine, status, std::move(payload));
+                    if constexpr(std::is_void_v<TSet>)
+                        payload = applyTransform(functor, acc, engine, status, std::move(payload));
+                    else
+                        payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
                     access.store(outSlot, payload, out...);
                 }
             }
@@ -1356,8 +1394,12 @@ namespace graphFlow::detail
         bool m_failed = false;
     };
 
-    /** Transform stage: one batch-wide out-of-place launch, no histogram or scatter. */
-    template<typename TDevice, typename TStorage, typename TPayload, typename TFunctor>
+    /** Transform stage: one batch-wide out-of-place launch, no histogram or scatter.
+     *
+     * `TSet` stays `void` for the full-record overload. A concrete `Set<Tags...>` selects the
+     * additive registration-site subset path, which hands the functor a `RecordProxy`.
+     */
+    template<typename TDevice, typename TStorage, typename TPayload, typename TFunctor, typename TSet = void>
     class TransformStage final : public StageBase<TDevice, TStorage>
     {
         using Base = StageBase<TDevice, TStorage>;
@@ -1475,7 +1517,7 @@ namespace graphFlow::detail
                 enqueueKernelWithInOutViews(
                     queue,
                     policy.frameSpec(),
-                    TransformKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
+                    TransformKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
                     views,
                     views,
                     m_status,
