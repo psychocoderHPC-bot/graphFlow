@@ -251,27 +251,36 @@ H100 claim is made.
 ## Measured AoS vs default (main `3ee436d`)
 
 Provenance: main `3ee436dfcdbf28999538d165517b3565902f0d07`, N=1e7, C=8192,
-P=16384, Q=8, seed 42. Three processes times five repetitions per configuration;
-each run prints the full histogram and its sum equals N exactly. Both
-configurations share the halo payload (hal shared), so the wall-time difference
-is attributable to layout, not payload. The default (SoA) path is unchanged. No
-H100 was used. No claim beyond this setup is made.
+P=16384, Q=8, T=128, seed 42. Three processes with five repetitions each per
+configuration; the first repetition of each process is a warmup, so every
+median below covers the four steady repetitions of its process (12 samples per
+configuration). Every process prints the full value histogram; its count column
+equals N exactly and the value digest `f0362124faddd01a` (258 rows) matches
+between the two storages. Both configurations run the same topology over the
+same logical payload with the same 8 GiB pool budget; the AoS slot is 16 B
+against the 24 B default slot, so the wall-time difference reflects the storage
+layout, not a different workload. The default storage selection is unchanged.
+No H100 was used. No claim beyond this setup is made.
 
-| Backend | AoS wall s | default wall s | AoS vs default |
+| Backend | AoS wall s | default wall s | AoS faster by |
 | --- | ---: | ---: | ---: |
-| CPU | 1.3211 | 1.3075 | -1.0% |
-| CUDA (A30) | 0.3036 | 0.2797 | -7.9% |
-| HIP (gfx1100) | 0.4773 | 0.4601 | -3.6% |
-| SYCL (A770) | 3.6457 | 3.5111 | -3.7% |
+| CPU | 1.3075 | 1.3211 | 1.0% |
+| CUDA (A30) | 0.2797 | 0.3036 | 7.9% |
+| HIP (gfx1100) | 0.4601 | 0.4773 | 3.6% |
+| SYCL (A770) | 3.5111 | 3.6457 | 3.7% |
 
-No storage-attributable overhead above 2% is observed in any configuration.
+The AoS median is at or below the default median in every row, so no
+configuration shows storage-attributable overhead. The HIP row has overlapping
+interquartile ranges and a 7% spread across its three processes; the SYCL row
+is bimodal, with one AoS process at 2.59 s. The three device rows ran on `hal`,
+which reports `sharing=unknown`, so they are baselines, not acceptance numbers.
 
 ## Current state and caveats
 
 - The integrated main adds device-aware `C`/`P`/`T`, multi-chunk batching with
   an adaptive prefix, and the pool payload budget. The historical numbers above
   predate those changes.
-- The T13 integrated benchmark is recorded in the section above. No number
+- The T13 integrated benchmark is recorded in the T13 section above. No number
   here goes beyond that evidence, and no new measurement was taken for this
   page.
 - The former `C=8192`, `P=65536` pool is rejected by the payload budget. Its
@@ -290,14 +299,15 @@ No storage-attributable overhead above 2% is observed in any configuration.
    `561b9a4c`, 301/301 at
    `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
    `a610281`, and the 245/245 run at `b972eaa` are historical.
-  No HIP benchmark is recorded.
-  `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
+   The measured AoS section records HIP wall times on `hal`; because `hal`
+   reports `sharing=unknown`, those are baselines, not an acceptance claim.
 - The current CUDA suite (334/334 at
   `3b90ffd8962084d59ebc672f7848b093f2d99582`) is the first recorded RTX 2080 Ti
   `sm_75` run, on `fwk394`, correctness only. The exclusive performance record
   (P07b) remains the V100 `sm_70` measurement at `56c11ac`, which predates the
-  AoS-over-SoA additions. No benchmark was taken at `3b90ffd`, so no performance
-  claim is made for the default path or the opt-in path.
+  AoS-over-SoA additions. No benchmark was taken at `3b90ffd`; the measured
+  AoS section above is the only record that compares the default and opt-in
+  storages, and it is at `3ee436d`.
 - The P07 section records a sustained D2D copy reference (`409.733` GB/s at
   3,221,225,472 B) on the V100. It is a context number, not a scatter
   bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,
