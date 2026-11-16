@@ -6,14 +6,54 @@
 
 #include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/flow/Tuning.hpp"
+#include "graphFlow/graphFlow.hpp"
+#include "graphFlow/rng/ParticleRng.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace graphFlow::particle
 {
+    /** Attribute tags of the AoS-over-SoA particle payload.
+     *
+     * The payload is a `graphFlow::Record` over these fields, so a stage reads and writes one
+     * logical particle through `particle[idTag]`, `particle[propertyTag]`, and so on while the
+     * storage keeps one column per attribute. The tags carry no runtime state.
+     *
+     * These tags belong to the example only. The canonical low-level `graphFlow::Particle` struct
+     * and its default storage stay unchanged, so the deprecated low-level stages keep compiling.
+     */
+    GRAPHFLOW_TAG(Id, idTag);
+    GRAPHFLOW_TAG(Property, propertyTag);
+    GRAPHFLOW_TAG(Weight, weightTag);
+    GRAPHFLOW_TAG(Visit, visitTag);
+
+    /** Attribute descriptors of the particle record. */
+    using ParticleIdField = graphFlow::Field<IdTag, std::uint64_t>;
+    using ParticlePropertyField = graphFlow::Field<PropertyTag, std::uint32_t>;
+    using ParticleWeightField = graphFlow::Field<WeightTag, std::uint32_t>;
+    using ParticleVisitField = graphFlow::Field<VisitTag, std::uint32_t>;
+
+    /** Particle payload of the public `Flow` API.
+     *
+     * The record stores one logical particle while `SoAStorage` keeps a separate column per
+     * attribute. The field order matches the historical `id`, `property`, `weight`, `visit` layout,
+     * so the attribute accounting stays 24 bytes per slot.
+     */
+    using ParticleRecord
+        = graphFlow::Record<ParticleIdField, ParticlePropertyField, ParticleWeightField, ParticleVisitField>;
+
+    /** AoS-over-SoA storage matching the particle record attribute pack. */
+    template<typename TDevice>
+    using ParticleSoAStorage = graphFlow::
+        SoAStorage<TDevice, ParticleIdField, ParticlePropertyField, ParticleWeightField, ParticleVisitField>;
+
+    static_assert(std::is_trivially_copyable_v<ParticleRecord>);
+    static_assert(std::is_default_constructible_v<ParticleRecord>);
+
     /** Domain knobs of the particle-feedback example.
      *
      * `chunkSize` (C), `liveParticles` (P), `tileSize` (T), `batchChunks` (Q) and `frameCap` map
@@ -168,3 +208,27 @@ namespace graphFlow::particle
         return rows;
     }
 } // namespace graphFlow::particle
+
+namespace graphFlow::rng
+{
+    /** RNG stream fields of the particle record.
+     *
+     * The generic `StreamTraits` reads data members, which a `Record` does not expose. Without this
+     * specialization every particle would share the `(0, 0)` stream position and therefore the
+     * same property, filter and feedback draws. The particle key uses the logical id and the visit
+     * counter, matching the pre-record payload and the scalar oracle.
+     */
+    template<>
+    struct StreamTraits<particle::ParticleRecord>
+    {
+        static ALPAKA_FN_ACC std::uint64_t id(particle::ParticleRecord const& payload) noexcept
+        {
+            return static_cast<std::uint64_t>(payload[particle::idTag]);
+        }
+
+        static ALPAKA_FN_ACC std::uint64_t event(particle::ParticleRecord const& payload) noexcept
+        {
+            return static_cast<std::uint64_t>(payload[particle::visitTag]);
+        }
+    };
+} // namespace graphFlow::rng

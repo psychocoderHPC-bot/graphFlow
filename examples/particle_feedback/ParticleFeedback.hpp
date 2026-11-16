@@ -55,7 +55,7 @@ namespace graphFlow::particle
             alpaka::onHost::memset(initQueue, cappedFlags, std::uint8_t{0});
         }
 
-        graphFlow::Flow<graphFlow::Particle, TDevice> flow{device};
+        graphFlow::SoAFlow<ParticleRecord, TDevice> flow{device};
         auto source = flow.source("generate", GenerateParticles{});
         auto filter = flow.partition("filter", FilterByProperty{});
         auto processA = flow.partition("process A", SelectOutcome{parameters.maxVisits}, UpdateWeight{1000u});

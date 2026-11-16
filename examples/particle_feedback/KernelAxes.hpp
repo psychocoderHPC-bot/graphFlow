@@ -86,9 +86,9 @@ namespace graphFlow::particle
 
         ALPAKA_FN_ACC std::uint32_t operator()(
             [[maybe_unused]] auto const& accelerator,
-            graphFlow::Particle const& particle) const
+            ParticleRecord const& particle) const
         {
-            return distributionBin(distribution, particle.id, T_Bins);
+            return distributionBin(distribution, particle[idTag], T_Bins);
         }
     };
 
@@ -98,9 +98,9 @@ namespace graphFlow::particle
         ALPAKA_FN_ACC graphFlow::UpdateResult operator()(
             [[maybe_unused]] auto const& accelerator,
             std::uint32_t bin,
-            graphFlow::Particle& particle) const
+            ParticleRecord& particle) const
         {
-            particle.weight = bin;
+            particle[weightTag] = bin;
             return graphFlow::UpdateResult::success;
         }
     };
@@ -133,7 +133,7 @@ namespace graphFlow::particle
             // The measured axes are public graph properties: the distribution is the classifier,
             // the scatter/bin-table choice is Tuning, and Flow derives the pool, tiles, plan and
             // completion. No runner, route table or pool is constructed here.
-            graphFlow::Flow<graphFlow::Particle, TDevice> flow{device};
+            graphFlow::SoAFlow<ParticleRecord, TDevice> flow{device};
             auto source = flow.source("generate", GenerateParticles{});
             auto transform = flow.partition(
                 "transform",

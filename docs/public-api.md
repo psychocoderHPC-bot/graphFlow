@@ -7,7 +7,7 @@ This document freezes the application-facing API of the simplified graphFlow
 interface. The public API is implemented: the typed `Flow` class lives in
 `include/graphFlow/flow/Flow.hpp`, the execution adapters in
 `flow/Execution.hpp`, and the status channel in `flow/Status.hpp`. The
-particle-feedback example declares its graph with `Flow` handles and named
+particle-feedback example declares its graph with `SoAFlow` handles and named
 outcome ports, while `ParticleStages.hpp` remains only for the older low-level
 tests. The photon-scattering example uses the same API for slab transport. The
 API is additive and replaces no existing public type.
@@ -151,9 +151,9 @@ record type and the column layout are separate choices. The storage defaults
 never change because a type happens to be a `Record`.
 
 `ParticleStorage` keeps its existing `ids`, `properties`, `weights`, and
-`visits` arrays; the particle example keeps using it. The photon example opts
-into `SoAFlow` and `SoAStorage` for its `Record` payload. An application that
-wants attribute columns migrates only its own payload:
+`visits` arrays for the deprecated low-level particle stages. The particle and
+photon examples opt into `SoAFlow` and `SoAStorage` for their `Record` payloads.
+An application that wants attribute columns migrates only its own payload:
 
 1. Declare one tag derived from `graphFlow::TagBase` and one `Field<Tag, T>` per
    attribute, then name the ordered `AttributeList` or `Record`. Attribute order
@@ -285,8 +285,10 @@ setup:
 ### From `ParticleStorage` to `Record` and `SoAStorage`
 
 `graphFlow::Particle` with its default `ParticleStorage` stays the canonical
-particle path. An application that wants attribute columns changes only its
-payload and storage:
+low-level particle path. The particle-feedback example migrates its public
+payload to a `ParticleRecord` with `idTag`, `propertyTag`, `weightTag` and
+`visitTag`. An application that wants attribute columns changes only its payload
+and storage:
 
 1. Declare one tag derived from `graphFlow::TagBase` and one `Field<Tag, T>` per
    attribute. List the fields in the `Record` and the `SoAStorage` in the same

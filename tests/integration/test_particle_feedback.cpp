@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <concepts>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -165,13 +166,34 @@ TEST_CASE("max-visits guard terminates pathological feedback", "[integration]")
 
 TEST_CASE("particle feedback example is a public Flow graph with a derived pool", "[integration][flow]")
 {
-    static_assert(graphFlow::SourceFor<graphFlow::particle::GenerateParticles, graphFlow::Particle>);
-    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::FilterByProperty, graphFlow::Particle>);
-    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::SelectOutcome, graphFlow::Particle>);
+    using graphFlow::particle::ParticleRecord;
+    static_assert(graphFlow::SourceFor<graphFlow::particle::GenerateParticles, ParticleRecord>);
+    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::FilterByProperty, ParticleRecord>);
+    static_assert(graphFlow::PartitionClassifierFor<graphFlow::particle::SelectOutcome, ParticleRecord>);
     static_assert(
-        graphFlow::UpdateFor<graphFlow::particle::UpdateWeight, graphFlow::particle::Outcome, graphFlow::Particle>);
+        graphFlow::UpdateFor<graphFlow::particle::UpdateWeight, graphFlow::particle::Outcome, ParticleRecord>);
+    static_assert(graphFlow::AttributeRecord<ParticleRecord>);
 
     auto const device = graphFlow::test::makeCpuDevice();
+    using Device = ALPAKA_TYPEOF(device);
+    static_assert(std::same_as<
+                  typename graphFlow::SoAFlow<ParticleRecord, Device>::Storage,
+                  graphFlow::particle::ParticleSoAStorage<Device>>);
+
+    // A subset proxy narrows access only; loading it still copies every attribute.
+    using WeightSubset = graphFlow::Set<graphFlow::particle::WeightTag>;
+    ParticleRecord original{7u, 3u, 11u, 2u};
+    auto proxy = original.proxy<WeightSubset>();
+    proxy[graphFlow::particle::weightTag] = 21u;
+    ParticleRecord const copied = proxy.load();
+    CHECK(copied[graphFlow::particle::idTag] == 7u);
+    CHECK(copied[graphFlow::particle::propertyTag] == 3u);
+    CHECK(copied[graphFlow::particle::weightTag] == 21u);
+    CHECK(copied[graphFlow::particle::visitTag] == 2u);
+
+    // The Record specialization must key the RNG by the logical id and visit count.
+    CHECK(graphFlow::rng::streamId(original) == original[graphFlow::particle::idTag]);
+    CHECK(graphFlow::rng::streamEvent(original) == original[graphFlow::particle::visitTag]);
     graphFlow::particle::Parameters parameters{};
     parameters.numParticles = 4097u;
     parameters.chunkSize = 128u;
