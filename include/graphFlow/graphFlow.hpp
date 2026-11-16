@@ -11,9 +11,11 @@
  * umbrella. Include those headers directly when assembling custom nodes.
  */
 
+#include "graphFlow/flow/Attributes.hpp"
 #include "graphFlow/flow/Concepts.hpp"
 #include "graphFlow/flow/Flow.hpp"
 #include "graphFlow/flow/NodeHandle.hpp"
+#include "graphFlow/flow/PayloadStorage.hpp"
 #include "graphFlow/flow/Ports.hpp"
 #include "graphFlow/flow/Status.hpp"
 #include "graphFlow/flow/Tuning.hpp"

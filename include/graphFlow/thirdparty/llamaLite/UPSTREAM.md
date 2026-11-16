@@ -9,8 +9,11 @@
 - Upstream commit: `aa79f32653452bdaea55d9786c57d1ab10a37b81`
 - SPDX identifier: `MPL-2.0`
 - License file: `LICENSE`, SHA-256 `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04`
-- Modification state: unmodified. Every file listed below is byte-identical to the
-  same path in the upstream commit. graphFlow adds only this provenance file.
+- Modification state: two patched files. `include/llamaLite/Algorithm.hpp` and
+  `include/llamaLite/traits.hpp` differ from the upstream commit by patches 0001
+  and 0002 in `PATCHES/`; every other listed file is byte-identical to the same
+  path in the upstream commit. graphFlow adds this provenance file and the
+  `PATCHES/` directory.
 
 The headers are exported by the `graphFlow::graphFlow` CMake target, so consumers
 include the public API as `<llamaLite/llamaLite.hpp>`. The vendored tree is not

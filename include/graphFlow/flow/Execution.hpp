@@ -23,10 +23,12 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -186,15 +188,27 @@ namespace graphFlow::detail
         return finishUpdate(invoke);
     }
 
+    /** Device-accessible type `KernelBundle` derives from a host view or buffer argument.
+     *
+     * `onHost::SharedBuffer` becomes its mutable `View`; a view stays a view. The kernels are
+     * instantiated over these types, matching the bundle's argument tuple.
+     */
+    template<typename TView>
+    using AccessibleView = std::decay_t<decltype(alpaka::onHost::makeAccessibleOnAcc(std::declval<TView&>()))>;
+
     /** Load/store trait of a payload storage.
      *
-     * The trait exposes four independent payload views. The array-of-struct default binds all four
-     * to the same contiguous payload array; the particle SoA specialization binds them to ids,
-     * properties, weights and visits. Keeping the views as separate kernel arguments is required
-     * because alpaka only rewrites top-level view arguments for the device.
+     * The trait names every value view of a storage in declaration order. The array-of-struct
+     * default binds four views to the same contiguous payload array; the particle and SoA
+     * specializations bind them to ids, properties, weights, visits or to one column per llamaLite
+     * attribute. `views()` returns those device-accessible views as a tuple so the launchers can
+     * expand them into separate top-level kernel arguments; alpaka only rewrites top-level view
+     * arguments for the device.
      *
      * `load` and `store` are templates so they accept both the host view type and the
-     * device-accessible view type that `KernelBundle` derives from it.
+     * device-accessible view type that `KernelBundle` derives from it. The four-view signatures
+     * stay available for callers written against the previous fixed-arity trait, while the
+     * `slot`-first forms take one view per attribute in declaration order.
      */
     template<typename TStorage, typename TPayload>
     struct StorageAccess
@@ -204,6 +218,12 @@ namespace graphFlow::detail
         using View1 = View0;
         using View2 = View0;
         using View3 = View0;
+        using HostViews = std::tuple<View0, View1, View2, View3>;
+        using Views
+            = std::tuple<AccessibleView<View0>, AccessibleView<View1>, AccessibleView<View2>, AccessibleView<View3>>;
+
+        static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
+        static_assert(arity == 4u, "graphFlow: AoS payload access must expose four views");
 
         [[nodiscard]] static View0 view0(TStorage const& storage)
         {
@@ -225,6 +245,15 @@ namespace graphFlow::detail
             return storage.payload();
         }
 
+        [[nodiscard]] static Views views(TStorage& storage)
+        {
+            return Views{
+                alpaka::onHost::makeAccessibleOnAcc(storage.payload()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.payload()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.payload()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.payload())};
+        }
+
         template<typename V0, typename V1, typename V2, typename V3>
         ALPAKA_FN_ACC Payload load(V0 const& view0, V1 const&, V2 const&, V3 const&, std::uint32_t slot) const
         {
@@ -234,6 +263,20 @@ namespace graphFlow::detail
         template<typename V0, typename V1, typename V2, typename V3>
         ALPAKA_FN_ACC void store(V0& view0, V1&, V2&, V3&, std::uint32_t slot, Payload const& payload) const
         {
+            view0[slot] = payload;
+        }
+
+        template<typename V0, typename... TRest>
+        ALPAKA_FN_ACC Payload load(std::uint32_t slot, V0 const& view0, TRest const&...) const
+        {
+            static_assert(1u + sizeof...(TRest) == arity, "graphFlow: unexpected number of payload views");
+            return view0[slot];
+        }
+
+        template<typename V0, typename... TRest>
+        ALPAKA_FN_ACC void store(std::uint32_t slot, Payload const& payload, V0& view0, TRest&...) const
+        {
+            static_assert(1u + sizeof...(TRest) == arity, "graphFlow: unexpected number of payload views");
             view0[slot] = payload;
         }
     };
@@ -247,6 +290,12 @@ namespace graphFlow::detail
         using View1 = typename ParticleStorage<TDevice>::U32View;
         using View2 = typename ParticleStorage<TDevice>::U32View;
         using View3 = typename ParticleStorage<TDevice>::U32View;
+        using HostViews = std::tuple<View0, View1, View2, View3>;
+        using Views
+            = std::tuple<AccessibleView<View0>, AccessibleView<View1>, AccessibleView<View2>, AccessibleView<View3>>;
+
+        static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
+        static_assert(arity == 4u, "graphFlow: particle payload access must expose four views");
 
         [[nodiscard]] static View0 view0(ParticleStorage<TDevice> const& storage)
         {
@@ -266,6 +315,15 @@ namespace graphFlow::detail
         [[nodiscard]] static View3 view3(ParticleStorage<TDevice> const& storage)
         {
             return storage.visits();
+        }
+
+        [[nodiscard]] static Views views(ParticleStorage<TDevice>& storage)
+        {
+            return Views{
+                alpaka::onHost::makeAccessibleOnAcc(storage.ids()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.properties()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.weights()),
+                alpaka::onHost::makeAccessibleOnAcc(storage.visits())};
         }
 
         template<typename VId, typename VProperty, typename VWeight, typename VVisit>
@@ -293,22 +351,227 @@ namespace graphFlow::detail
             weights[slot] = payload.weight;
             visits[slot] = payload.visit;
         }
+
+        template<typename VId, typename VProperty, typename VWeight, typename VVisit, typename... TRest>
+        ALPAKA_FN_ACC Payload load(
+            std::uint32_t slot,
+            VId const& ids,
+            VProperty const& properties,
+            VWeight const& weights,
+            VVisit const& visits,
+            TRest const&...) const
+        {
+            static_assert(sizeof...(TRest) == 0u, "graphFlow: particle payload access expects four views");
+            return Payload{ids[slot], properties[slot], weights[slot], visits[slot]};
+        }
+
+        template<typename VId, typename VProperty, typename VWeight, typename VVisit, typename... TRest>
+        ALPAKA_FN_ACC void store(
+            std::uint32_t slot,
+            Payload const& payload,
+            VId& ids,
+            VProperty& properties,
+            VWeight& weights,
+            VVisit& visits,
+            TRest&...) const
+        {
+            static_assert(sizeof...(TRest) == 0u, "graphFlow: particle payload access expects four views");
+            ids[slot] = payload.id;
+            properties[slot] = payload.property;
+            weights[slot] = payload.weight;
+            visits[slot] = payload.visit;
+        }
     };
 
+    /** SoA access over a llamaLite attribute list.
+     *
+     * Every attribute column is one view, in declaration order, and the payload is the `Record`
+     * over the same fields. The launcher expands `views()` into separate top-level kernel
+     * arguments so the device rewrite sees each column on its own.
+     */
+    template<typename TDevice, typename... TAttrs>
+    struct StorageAccess<SoAStorage<TDevice, TAttrs...>, Record<TAttrs...>>
+    {
+        using Payload = Record<TAttrs...>;
+        using Storage = SoAStorage<TDevice, TAttrs...>;
+        using AttributeTraits = AttributeList<TAttrs...>;
+        using FieldTuple = typename AttributeTraits::field_tuple;
+
+        template<typename TAttr>
+        using ColumnView = std::remove_cvref_t<decltype(alpaka::makeView(
+            std::declval<Storage&>().template column<typename TAttr::tag_type>()))>;
+
+        using HostViews = std::tuple<ColumnView<TAttrs>...>;
+        using Views = std::tuple<AccessibleView<ColumnView<TAttrs>>...>;
+
+        static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
+        static_assert(arity == sizeof...(TAttrs), "graphFlow: SoA access must expose one view per attribute");
+
+        [[nodiscard]] static Views views(Storage& storage)
+        {
+            return Views{alpaka::makeView(storage.template column<typename TAttrs::tag_type>())...};
+        }
+
+        template<typename... TViews>
+        ALPAKA_FN_ACC Payload load(std::uint32_t slot, TViews const&... views) const
+        {
+            static_assert(sizeof...(TViews) == arity, "graphFlow: unexpected number of attribute views");
+            auto const columns = SoAColumnViewPack<TViews...>{views...};
+            return loadImpl(slot, columns, std::index_sequence_for<TAttrs...>{});
+        }
+
+        template<typename... TViews>
+        ALPAKA_FN_ACC void store(std::uint32_t slot, Payload const& payload, TViews&... views) const
+        {
+            static_assert(sizeof...(TViews) == arity, "graphFlow: unexpected number of attribute views");
+            auto columns = SoAColumnViewPack<TViews...>{views...};
+            storeImpl(slot, payload, columns, std::index_sequence_for<TAttrs...>{});
+        }
+
+    private:
+        template<typename TColumns, std::size_t... Is>
+        ALPAKA_FN_ACC static Payload loadImpl(std::uint32_t slot, TColumns const& columns, std::index_sequence<Is...>)
+        {
+            return Payload{columns.template get<Is>()[slot]...};
+        }
+
+        template<typename TColumns, std::size_t... Is>
+        ALPAKA_FN_ACC static void storeImpl(
+            std::uint32_t slot,
+            Payload const& payload,
+            TColumns& columns,
+            std::index_sequence<Is...>)
+        {
+            ((columns.template get<Is>()[slot]
+              = payload.template get<typename std::tuple_element_t<Is, FieldTuple>::tag_type>()),
+             ...);
+        }
+    };
+
+    namespace enqueue_detail
+    {
+        template<
+            typename TQueue,
+            typename TLaunchCfg,
+            typename TKernel,
+            typename TViews,
+            typename TArgs,
+            std::size_t... ViewI,
+            std::size_t... ArgI>
+        void withViews(
+            TQueue const& queue,
+            TLaunchCfg const& launchCfg,
+            TKernel kernel,
+            TViews& views,
+            TArgs& args,
+            std::index_sequence<ViewI...>,
+            std::index_sequence<ArgI...>)
+        {
+            queue.enqueue(
+                launchCfg,
+                alpaka::KernelBundle{std::move(kernel), std::get<ViewI>(views)..., std::get<ArgI>(args)...});
+        }
+
+        template<
+            typename TQueue,
+            typename TLaunchCfg,
+            typename TKernel,
+            typename TInViews,
+            typename TOutViews,
+            typename TArgs,
+            std::size_t... InI,
+            std::size_t... OutI,
+            std::size_t... ArgI>
+        void withInOutViews(
+            TQueue const& queue,
+            TLaunchCfg const& launchCfg,
+            TKernel kernel,
+            TInViews& inViews,
+            TOutViews& outViews,
+            TArgs& args,
+            std::index_sequence<InI...>,
+            std::index_sequence<OutI...>,
+            std::index_sequence<ArgI...>)
+        {
+            queue.enqueue(
+                launchCfg,
+                alpaka::KernelBundle{
+                    std::move(kernel),
+                    std::get<InI>(inViews)...,
+                    std::get<OutI>(outViews)...,
+                    std::get<ArgI>(args)...});
+        }
+    } // namespace enqueue_detail
+
+    /** Enqueue a kernel with every storage view as a separate top-level argument.
+     *
+     * Alpaka rewrites only top-level view arguments for the device, so the tuple returned by
+     * `StorageAccess::views()` must be expanded at the launch site. The views are device-accessible
+     * values, so the bundle keeps them mutable when it copies them.
+     */
+    template<typename TQueue, typename TLaunchCfg, typename TKernel, typename... TViews, typename... TArgs>
+    void enqueueKernelWithViews(
+        TQueue const& queue,
+        TLaunchCfg const& launchCfg,
+        TKernel kernel,
+        std::tuple<TViews...> views,
+        TArgs&&... args)
+    {
+        auto argsTuple = std::tuple<std::decay_t<TArgs>...>{std::forward<TArgs>(args)...};
+        enqueue_detail::withViews(
+            queue,
+            launchCfg,
+            std::move(kernel),
+            views,
+            argsTuple,
+            std::index_sequence_for<TViews...>{},
+            std::index_sequence_for<TArgs...>{});
+    }
+
+    /** Enqueue a kernel with distinct input and output view tuples. */
+    template<
+        typename TQueue,
+        typename TLaunchCfg,
+        typename TKernel,
+        typename... TInViews,
+        typename... TOutViews,
+        typename... TArgs>
+    void enqueueKernelWithInOutViews(
+        TQueue const& queue,
+        TLaunchCfg const& launchCfg,
+        TKernel kernel,
+        std::tuple<TInViews...> inViews,
+        std::tuple<TOutViews...> outViews,
+        TArgs&&... args)
+    {
+        auto argsTuple = std::tuple<std::decay_t<TArgs>...>{std::forward<TArgs>(args)...};
+        enqueue_detail::withInOutViews(
+            queue,
+            launchCfg,
+            std::move(kernel),
+            inViews,
+            outViews,
+            argsTuple,
+            std::index_sequence_for<TInViews...>{},
+            std::index_sequence_for<TOutViews...>{},
+            std::index_sequence_for<TArgs...>{});
+    }
+
     /** Source kernel: one launch materialises one admitted chunk. */
-    template<typename TFunctor, typename TAccess>
-    struct SourceKernel
+    template<typename TFunctor, typename TAccess, typename TViews = typename TAccess::Views>
+    struct SourceKernel;
+
+    template<typename TFunctor, typename TAccess, typename... TViews>
+    struct SourceKernel<TFunctor, TAccess, std::tuple<TViews...>>
     {
         TFunctor functor;
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        template<alpaka::onAcc::concepts::Acc TAcc>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto view0,
-            auto view1,
-            auto view2,
-            auto view3,
+            TAcc const& acc,
+            TViews... views,
             alpaka::concepts::IMdSpan auto statusView,
             std::uint64_t firstId,
             std::uint32_t base,
@@ -323,8 +586,7 @@ namespace graphFlow::detail
                 std::uint64_t const id = firstId + static_cast<std::uint64_t>(offset);
                 rng::Engine engine = rng::makeEngine(seed, id, 0u, purpose);
                 auto payload = invokeWithContext(functor, acc, engine, status, id);
-                access
-                    .store(view0, view1, view2, view3, base + offset, static_cast<typename TAccess::Payload>(payload));
+                access.store(base + offset, static_cast<typename TAccess::Payload>(payload), views...);
             }
         }
     };
@@ -335,8 +597,15 @@ namespace graphFlow::detail
      * position is the dense concatenation of the batch, so `R = ceil(sum(fill) / C)` output chunks
      * hold the result and no histogram or scatter is involved.
      */
-    template<typename TFunctor, typename TAccess>
-    struct TransformKernel
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct TransformKernel;
+
+    template<typename TFunctor, typename TAccess, typename... TInViews, typename... TOutViews>
+    struct TransformKernel<TFunctor, TAccess, std::tuple<TInViews...>, std::tuple<TOutViews...>>
     {
         TFunctor functor;
         std::uint64_t seed = 0u;
@@ -344,21 +613,16 @@ namespace graphFlow::detail
 
         // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
         template<
+            alpaka::onAcc::concepts::Acc TAcc,
             alpaka::concepts::IMdSpan TStatusView,
             alpaka::concepts::IMdSpan TInBase,
             alpaka::concepts::IMdSpan TInCount,
             alpaka::concepts::IMdSpan TOutPosition,
             alpaka::concepts::IMdSpan TOutChunks>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto in0,
-            auto in1,
-            auto in2,
-            auto in3,
-            auto out0,
-            auto out1,
-            auto out2,
-            auto out3,
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
             TStatusView statusView,
             TInBase inBase,
             TInCount inCount,
@@ -383,19 +647,26 @@ namespace graphFlow::detail
                     std::uint32_t const outputChunk = global / chunkCapacity;
                     std::uint32_t const outputOffset = global % chunkCapacity;
                     std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
-                    typename TAccess::Payload payload = access.load(in0, in1, in2, in3, inSlot + offset);
+                    typename TAccess::Payload payload = access.load(inSlot + offset, in...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                     payload = applyTransform(functor, acc, engine, status, std::move(payload));
-                    access.store(out0, out1, out2, out3, outSlot, payload);
+                    access.store(outSlot, payload, out...);
                 }
             }
         }
     };
 
     /** Dense classify kernel of one typed partition batch. */
-    template<typename TClassifier, typename TAccess, std::uint32_t T_B = TClassifier::maxBins>
-    struct PartitionClassifyKernel
+    template<
+        typename TClassifier,
+        typename TAccess,
+        std::uint32_t T_B = TClassifier::maxBins,
+        typename TViews = typename TAccess::Views>
+    struct PartitionClassifyKernel;
+
+    template<typename TClassifier, typename TAccess, std::uint32_t T_B, typename... TViews>
+    struct PartitionClassifyKernel<TClassifier, TAccess, T_B, std::tuple<TViews...>>
     {
         static_assert(T_B > 0u, "a partition needs at least one bin");
 
@@ -403,12 +674,10 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        template<alpaka::onAcc::concepts::Acc TAcc>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto view0,
-            auto view1,
-            auto view2,
-            auto view3,
+            TAcc const& acc,
+            TViews... views,
             alpaka::concepts::IMdSpan auto statusView,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto counts,
@@ -436,7 +705,7 @@ namespace graphFlow::detail
                 for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
                 {
                     std::uint32_t const slot = base + static_cast<std::uint32_t>(i);
-                    typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, slot);
+                    typename TAccess::Payload const payload = access.load(slot, views...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                     std::uint32_t const bin
@@ -477,8 +746,29 @@ namespace graphFlow::detail
         typename TAccess,
         typename TBin = ClassifierBin<TClassifier, typename TAccess::Payload>,
         std::uint32_t T_B = TClassifier::maxBins,
-        ScatterMode TMode = ScatterMode::SharedStaging>
-    struct PartitionScatterKernel
+        ScatterMode TMode = ScatterMode::SharedStaging,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct PartitionScatterKernel;
+
+    template<
+        typename TClassifier,
+        typename TUpdate,
+        typename TAccess,
+        typename TBin,
+        std::uint32_t T_B,
+        ScatterMode TMode,
+        typename... TInViews,
+        typename... TOutViews>
+    struct PartitionScatterKernel<
+        TClassifier,
+        TUpdate,
+        TAccess,
+        TBin,
+        T_B,
+        TMode,
+        std::tuple<TInViews...>,
+        std::tuple<TOutViews...>>
     {
         static_assert(T_B > 0u, "a partition needs at least one bin");
 
@@ -488,6 +778,7 @@ namespace graphFlow::detail
 
         // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
         template<
+            alpaka::onAcc::concepts::Acc TAcc,
             alpaka::concepts::IMdSpan TStatusView,
             alpaka::concepts::IMdSpan TBinIds,
             alpaka::concepts::IMdSpan TTable,
@@ -495,15 +786,9 @@ namespace graphFlow::detail
             alpaka::concepts::IMdSpan TCounts,
             alpaka::concepts::IMdSpan TTiles>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto in0,
-            auto in1,
-            auto in2,
-            auto in3,
-            auto out0,
-            auto out1,
-            auto out2,
-            auto out3,
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
             TStatusView statusView,
             TBinIds binIds,
             TTable table,
@@ -538,7 +823,7 @@ namespace graphFlow::detail
                         std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                         std::uint32_t const outputOffset = j % chunkCapacity;
 
-                        typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
+                        typename TAccess::Payload payload = access.load(slotIn, in...);
                         rng::Engine engine
                             = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                         UpdateResult const result
@@ -550,7 +835,7 @@ namespace graphFlow::detail
                         if(result != UpdateResult::success)
                             onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
 
-                        access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
+                        access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
                     }
                 }
             }
@@ -604,7 +889,7 @@ namespace graphFlow::detail
                         std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                         std::uint32_t const outputOffset = j % chunkCapacity;
 
-                        typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
+                        typename TAccess::Payload payload = access.load(slotIn, in...);
                         rng::Engine engine
                             = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                         UpdateResult const result
@@ -616,7 +901,7 @@ namespace graphFlow::detail
                         if(result != UpdateResult::success)
                             onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
 
-                        access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
+                        access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
                     }
                 }
             }
@@ -631,8 +916,16 @@ namespace graphFlow::detail
      * result writes the status word at `counts[T_B]`, so the host aborts the batch before any
      * output chunk is planned.
      */
-    template<typename TClassifier, typename TAccess, typename TBinTable, std::uint32_t T_B = TClassifier::maxBins>
-    struct PartitionHashClassifyKernel
+    template<
+        typename TClassifier,
+        typename TAccess,
+        typename TBinTable,
+        std::uint32_t T_B = TClassifier::maxBins,
+        typename TViews = typename TAccess::Views>
+    struct PartitionHashClassifyKernel;
+
+    template<typename TClassifier, typename TAccess, typename TBinTable, std::uint32_t T_B, typename... TViews>
+    struct PartitionHashClassifyKernel<TClassifier, TAccess, TBinTable, T_B, std::tuple<TViews...>>
     {
         static_assert(T_B > 0u, "a partition needs at least one bin");
         static_assert(TBinTable::isHash, "PartitionHashClassifyKernel requires a hash bin table");
@@ -641,12 +934,10 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        template<alpaka::onAcc::concepts::Acc TAcc>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto view0,
-            auto view1,
-            auto view2,
-            auto view3,
+            TAcc const& acc,
+            TViews... views,
             alpaka::concepts::IMdSpan auto statusView,
             alpaka::concepts::IMdSpan auto binIds,
             alpaka::concepts::IMdSpan auto counts,
@@ -683,7 +974,7 @@ namespace graphFlow::detail
                 for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
                 {
                     std::uint32_t const slot = base + static_cast<std::uint32_t>(i);
-                    typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, slot);
+                    typename TAccess::Payload const payload = access.load(slot, views...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                     std::uint32_t const bin
@@ -732,8 +1023,29 @@ namespace graphFlow::detail
         typename TAccess,
         typename TBinTable,
         typename TBin = ClassifierBin<TClassifier, typename TAccess::Payload>,
-        std::uint32_t T_B = TClassifier::maxBins>
-    struct PartitionHashScatterKernel
+        std::uint32_t T_B = TClassifier::maxBins,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct PartitionHashScatterKernel;
+
+    template<
+        typename TClassifier,
+        typename TUpdate,
+        typename TAccess,
+        typename TBinTable,
+        typename TBin,
+        std::uint32_t T_B,
+        typename... TInViews,
+        typename... TOutViews>
+    struct PartitionHashScatterKernel<
+        TClassifier,
+        TUpdate,
+        TAccess,
+        TBinTable,
+        TBin,
+        T_B,
+        std::tuple<TInViews...>,
+        std::tuple<TOutViews...>>
     {
         static_assert(T_B > 0u, "a partition needs at least one bin");
         static_assert(TBinTable::isHash, "PartitionHashScatterKernel requires a hash bin table");
@@ -744,6 +1056,7 @@ namespace graphFlow::detail
 
         // Explicit parameters keep the abbreviated count below the nvcc 12.6 name-hiding ICE threshold.
         template<
+            alpaka::onAcc::concepts::Acc TAcc,
             alpaka::concepts::IMdSpan TStatusView,
             alpaka::concepts::IMdSpan TBinIds,
             alpaka::concepts::IMdSpan TTable,
@@ -751,15 +1064,9 @@ namespace graphFlow::detail
             alpaka::concepts::IMdSpan TCounts,
             alpaka::concepts::IMdSpan TTiles>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto in0,
-            auto in1,
-            auto in2,
-            auto in3,
-            auto out0,
-            auto out1,
-            auto out2,
-            auto out3,
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
             TStatusView statusView,
             TBinIds binIds,
             TTable table,
@@ -853,7 +1160,7 @@ namespace graphFlow::detail
                     std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                     std::uint32_t const outputOffset = j % chunkCapacity;
 
-                    typename TAccess::Payload payload = access.load(in0, in1, in2, in3, slotIn);
+                    typename TAccess::Payload payload = access.load(slotIn, in...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                     UpdateResult const result
@@ -865,26 +1172,27 @@ namespace graphFlow::detail
                     if(result != UpdateResult::success)
                         onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
 
-                    access.store(out0, out1, out2, out3, outputChunk * chunkCapacity + outputOffset, payload);
+                    access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
                 }
             }
         }
     };
 
     /** Sink kernel: consume one chunk without producing an output descriptor. */
-    template<typename TFunctor, typename TAccess>
-    struct SinkKernel
+    template<typename TFunctor, typename TAccess, typename TViews = typename TAccess::Views>
+    struct SinkKernel;
+
+    template<typename TFunctor, typename TAccess, typename... TViews>
+    struct SinkKernel<TFunctor, TAccess, std::tuple<TViews...>>
     {
         TFunctor functor;
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
+        template<alpaka::onAcc::concepts::Acc TAcc>
         ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto view0,
-            auto view1,
-            auto view2,
-            auto view3,
+            TAcc const& acc,
+            TViews... views,
             alpaka::concepts::IMdSpan auto statusView,
             std::uint32_t base,
             std::uint32_t fill) const
@@ -895,7 +1203,7 @@ namespace graphFlow::detail
             for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
             {
                 std::uint32_t const offset = static_cast<std::uint32_t>(i);
-                typename TAccess::Payload const payload = access.load(view0, view1, view2, view3, base + offset);
+                typename TAccess::Payload const payload = access.load(base + offset, views...);
                 rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                 invokeWithContext(functor, acc, engine, status, payload);
             }
@@ -982,18 +1290,15 @@ namespace graphFlow::detail
             {
                 ++m_launches;
                 LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
-                queue.enqueue(
+                enqueueKernelWithViews(
+                    queue,
                     policy.frameSpec(),
-                    alpaka::KernelBundle{
-                        SourceKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
-                        Access::view0(m_storage),
-                        Access::view1(m_storage),
-                        Access::view2(m_storage),
-                        Access::view3(m_storage),
-                        m_status,
-                        batch.firstId,
-                        static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
-                        chunk.fill});
+                    SourceKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
+                    Access::views(m_storage),
+                    m_status,
+                    batch.firstId,
+                    static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
+                    chunk.fill);
             }
             alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }
@@ -1166,25 +1471,20 @@ namespace graphFlow::detail
                     alpaka::Vec{static_cast<std::uint64_t>(outputChunks)});
 
                 LaunchPolicy const policy = launchPolicy(m_device, particles, m_tileSize, m_frameCap);
-                queue.enqueue(
+                auto const views = Access::views(m_storage);
+                enqueueKernelWithInOutViews(
+                    queue,
                     policy.frameSpec(),
-                    alpaka::KernelBundle{
-                        TransformKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
-                        Access::view0(m_storage),
-                        Access::view1(m_storage),
-                        Access::view2(m_storage),
-                        Access::view3(m_storage),
-                        Access::view0(m_storage),
-                        Access::view1(m_storage),
-                        Access::view2(m_storage),
-                        Access::view3(m_storage),
-                        m_status,
-                        m_inBase,
-                        m_inCount,
-                        m_outPosition,
-                        m_outChunks,
-                        m_capacity,
-                        static_cast<std::uint32_t>(chunkCount)});
+                    TransformKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
+                    views,
+                    views,
+                    m_status,
+                    m_inBase,
+                    m_inCount,
+                    m_outPosition,
+                    m_outChunks,
+                    m_capacity,
+                    static_cast<std::uint32_t>(chunkCount));
                 alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             }
             catch(...)
@@ -1431,19 +1731,16 @@ namespace graphFlow::detail
                 auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
                 auto enqueueClassify = [&](auto kernel)
                 {
-                    queue.enqueue(
+                    enqueueKernelWithViews(
+                        queue,
                         policy.frameSpec(),
-                        alpaka::KernelBundle{
-                            std::move(kernel),
-                            Access::view0(m_storage),
-                            Access::view1(m_storage),
-                            Access::view2(m_storage),
-                            Access::view3(m_storage),
-                            m_status,
-                            m_binIds,
-                            m_counts,
-                            tilesView,
-                            m_capacity});
+                        std::move(kernel),
+                        Access::views(m_storage),
+                        m_status,
+                        m_binIds,
+                        m_counts,
+                        tilesView,
+                        m_capacity);
                 };
                 if constexpr(TBinTable::isHash)
                     enqueueClassify(HashClassifyKernel{m_classifier, m_seed, m_purpose});
@@ -1607,27 +1904,22 @@ namespace graphFlow::detail
 
                 if(m_numTiles != 0u)
                 {
+                    auto const views = Access::views(m_storage);
                     auto enqueueScatter = [&](auto kernel)
                     {
-                        queue.enqueue(
+                        enqueueKernelWithInOutViews(
+                            queue,
                             policy.frameSpec(),
-                            alpaka::KernelBundle{
-                                std::move(kernel),
-                                Access::view0(m_storage),
-                                Access::view1(m_storage),
-                                Access::view2(m_storage),
-                                Access::view3(m_storage),
-                                Access::view0(m_storage),
-                                Access::view1(m_storage),
-                                Access::view2(m_storage),
-                                Access::view3(m_storage),
-                                m_status,
-                                m_binIds,
-                                m_table,
-                                m_next,
-                                m_counts,
-                                tilesView,
-                                m_capacity});
+                            std::move(kernel),
+                            views,
+                            views,
+                            m_status,
+                            m_binIds,
+                            m_table,
+                            m_next,
+                            m_counts,
+                            tilesView,
+                            m_capacity);
                     };
                     if constexpr(TBinTable::isHash)
                         enqueueScatter(
@@ -1772,17 +2064,14 @@ namespace graphFlow::detail
             {
                 ++m_launches;
                 LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
-                queue.enqueue(
+                enqueueKernelWithViews(
+                    queue,
                     policy.frameSpec(),
-                    alpaka::KernelBundle{
-                        SinkKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
-                        Access::view0(m_storage),
-                        Access::view1(m_storage),
-                        Access::view2(m_storage),
-                        Access::view3(m_storage),
-                        m_status,
-                        static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
-                        chunk.fill});
+                    SinkKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
+                    Access::views(m_storage),
+                    m_status,
+                    static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
+                    chunk.fill);
             }
             alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }

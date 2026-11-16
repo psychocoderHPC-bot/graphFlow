@@ -32,7 +32,7 @@ namespace llama_lite::traits
         using type = void;
         using _default_sentinel = void;
 
-        constexpr type operator()(auto fieldView) const
+        constexpr type operator()(auto /*fieldView*/) const
         {
         }
     };
