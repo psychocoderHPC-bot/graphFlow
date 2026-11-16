@@ -3,27 +3,33 @@
 
 # graphFlow acceptance record
 
-## Current state at `9ace795`
+## Current state at `3b90ffd`
 
 This is the canonical current-state block. Every older total in this document is
-historical. The SYCL matrix was measured at
-`9ace795798c0e8db9f4e74885cc131ef05bc5163`, on top of
-`1fbdbf3bbf7c67bb3a546de323358d67142daf63`, and adds the environment-scoped FP64
-case to the PR #69 matrix (`9fb15f1` recorded 71/71).
+historical. The totals below are the measured suites at
+`3b90ffd8962084d59ebc672f7848b093f2d99582`; the 255/255, 316/316, 307/307 and
+72/72 totals at `561b9a4c`/`9ace795` are the previous measurements. The AoS
+attribute matrix (SoAFlow over the llamaLite record storage), the
+registration-site transform attribute subsets, and the record-pipeline example
+are included in the totals above: three AoS cases per backend, the attribute
+helpers pass 6/6, the registration-site subset case 1/1, and the record
+pipeline 2/2. The CUDA suite is the first recorded RTX 2080 Ti `sm_75` run, on
+`fwk394`. The SYCL full suite registers 342 cases in the `hal` build; 75 of
+them carry the `sycl` label.
 
 | Configuration | Host / device | Toolchain | Result |
 | --- | --- | --- | --- |
-| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **255/255 passed** |
-| CUDA Release | `hal`, NVIDIA A30 `sm_80` | CUDA 13.4, g++ 13.3, same pins | **316/316 passed** |
-| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **307/307 passed** |
-| SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **72/72 passed** |
+| CPU Release | `fwk394` | g++ 13.3, CMake 3.28.3, Ninja 1.11.1, alpaka `eb677e8d7f70d79b35df25d9002f94ba669b6f44` | **270/270 passed** |
+| CUDA Release | `fwk394`, NVIDIA RTX 2080 Ti `sm_75` | same pins | **334/334 passed** |
+| HIP Release | `hal`, AMD Radeon RX 7900 XTX `gfx1100` | ROCm 7.2, hipcc 7.2.26015, same pins | **325/325 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64` | oneAPI 2026.2, icpx 2026.2.0, same pins | **342/342 passed** (75 sycl-labelled) |
 
 No test is skipped. CTest reports `100% tests passed, 0 tests failed` for each
 suite, and a compiled backend without a usable device fails its cases instead of
-skipping. The CPU, CUDA, and HIP totals are the `561b9a4c` measurements; PR #69
-adds no case to those suites. The SYCL total is the `ctest -L sycl` device
-matrix, selected explicitly because the same build also registers the host
-cases. PR #63 adds the `[config]` bin-path rejection case,
+skipping. The CPU, CUDA, and HIP totals include the AoS attribute matrix, the
+attribute helpers, the registration-site subset case, and the record-pipeline
+cases on top of the PR #63 and PR #65 additions; the SYCL full-suite total is
+the complete `hal` build, and its `sycl`-labelled subset is 75/75. PR #63 adds the `[config]` bin-path rejection case,
 the `[kernel-axes]` rejection case, and the CUDA/HIP typed routed-axis cases on
 top of the P07b 7/7; those cases are included in the totals above. PR #65 adds
 the six `[scheduler]` cases (five `[scheduler][debug]` and one
@@ -31,13 +37,12 @@ the six `[scheduler]` cases (five `[scheduler][debug]` and one
 registered in every backend suite) on top of the PR #63 public-Flow cases;
 they are included in the totals above
 and pass 6/6 on CPU, CUDA, and HIP. PR #69 registered the 71-case SYCL matrix on
-`hal` Arc A770: 33 in-process Catch2 cases (the `test_sycl_kernel` dispatch and
-scalar cases plus the typed Flow, failure, photon, async/depth, FrameSpec and
-particle pressure matrices under the `sycl` label), 24 particle CLI cases
-(`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`), 3 cross-backend
-exact-histogram cases, 10 photon CLI cases, and 1 photon output case. This branch
-adds the environment-scoped `test_photon_scattering_sycl_fp64` case, so `ctest -L
-sycl` selects 72 cases. The `ffe4074` totals 249/249, 310/310
+`hal` Arc A770 (33 in-process Catch2 cases plus 24 particle CLI cases, 3
+cross-backend exact-histogram cases, 10 photon CLI cases, and 1 photon output
+case); the environment-scoped `test_photon_scattering_sycl_fp64` case brought
+the sycl-labelled count to 72, which is historical. The AoS-over-SoA matrix,
+the registration-site subset, and the record-pipeline cases extend the SYCL
+build to the 342-case full suite above. The `ffe4074` totals 249/249, 310/310
 and 301/301, the `88de14f` totals 247/247, 307/307 and 298/298, the `56c11ac`
 totals 246/246, 306/306 and 297/297, and the earlier `a610281` totals 239/239,
 299/299 and 290/290 are historical.
@@ -104,18 +109,18 @@ cmake --build build-sycl -j 14
 ctest --test-dir build-sycl --output-on-failure --no-tests=error -L sycl
 ```
 
-Counts and no-skip: CPU **255/255**, CUDA **316/316**, HIP **307/307**, SYCL
-**72/72** (`ctest -L sycl` on the Arc A770, PR #69 matrix plus the FP64 case); each
-log ends with `100% tests passed, 0 tests failed`. No label or configuration
-excluded a registered CPU, CUDA, or HIP case from those runs; the SYCL run
-selects the `sycl` label on purpose. The retained JUnit XML reports 246
-CPU, 306 CUDA, and 297 HIP with **0 failures and 0 skips**; these JUnit counts
-were captured at `d71935c`, not the current totals (255/255, 316/316, 307/307,
-72/72) of the tree at `9ace795`, which add the P02b `ChunkLedger` overflow
+Counts and no-skip: CPU **270/270**, CUDA **334/334** (`fwk394` RTX 2080 Ti
+`sm_75`), HIP **325/325**, SYCL **342/342** full suite on the Arc A770, of
+which 75 carry the `sycl` label; each log ends with `100% tests passed, 0
+tests failed`. No label or configuration excluded a registered CPU, CUDA, or
+HIP case from those runs. The retained JUnit XML reports 246 CPU, 306 CUDA,
+and 297 HIP with **0 failures and 0 skips**; these JUnit counts were captured
+at `d71935c`, well before the current totals (270/270, 334/334, 325/325,
+342/342) of the tree at `3b90ffd`, which add the P02b `ChunkLedger` overflow
 test, the PR #63 public-Flow cases, the PR #65 scheduler cases, the PR #69
-SYCL matrix, and the environment-scoped FP64 case on top of them. The `hal` A30 driver
-is 615.71.09. Raw CTest logs are outside the repository; the 306/297 excerpt is
-archived in `/tmp/graphFlow-p08-artifacts/rework-evidence.txt`.
+SYCL matrix, the AoS attribute matrix, the registration-site subset, and the
+record-pipeline cases on top of them. Raw CTest logs are outside the
+repository.
 
 ## P07 exclusive performance result
 
@@ -160,8 +165,8 @@ The last full integrated TSAN CTest is on `rosi_v100` at
 `alpaka_DEP_OMP=OFF`, and `GRAPHFLOW_ENABLE_OPENMP=OFF`. With the default
 CpuOmpBlocks plus OpenMP the same suite fails 105/210 with reports inside the
 upstream alpaka async CPU queue, not graphFlow. That 210-case suite predates the
-current 255-case suite, so no full TSAN result exists for
-`561b9a4c9435e37b164623bb6be60a3051783eb4`.
+current 270-case suite, so no full TSAN result exists for
+`3b90ffd8962084d59ebc672f7848b093f2d99582`.
 
 The hosted `tsan` job was added at
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e` (P10 branch commit
@@ -187,6 +192,8 @@ These totals are historical and are not the current state:
 | CPU CTest at `2ad7d86` on `rosi_v100` | **202/202 passed** (OMP=ON Release) |
 | CUDA CTest at `2ad7d86` on `rosi_v100` V100 `sm_70` | **254/254 passed** (CUDA 12.6.85) |
 | CPU / CUDA Debug at `rosi_v100`, pre-hash | **195/195** / **247/247** (not re-run after the hash cases) |
+| CPU / CUDA / HIP Release at `561b9a4c` | **255/255** / **316/316** (A30 `sm_80`) / **307/307** |
+| SYCL sycl-labelled at `9ace795` | **72/72** (`ctest -L sycl`) |
 | Device failure cases at `10c1733770e16ebaecc74513034e6d327924503c` | CUDA 277/277 on `hal` A30, HIP 268/268 on `hal` RX 7900 XTX |
 | Historical integrated CPU / CUDA on fwk394 / hal | **194/194** / **246/246** |
 | FrameSpec revision `327f74f` | CPU 82/82, CUDA 86/86 |
@@ -214,10 +221,11 @@ performance claim is made.
 
 ## HIP runtime validation on hal (historical record)
 
-The current HIP total is **307/307** at
-`561b9a4c9435e37b164623bb6be60a3051783eb4` (see the current-state block); the
-previous **301/301** at `ffe4074`, **298/298** at `88de14f`, **297/297** at
-`56c11ac` and the **290/290** at `a610281` are historical. The record below is the
+The current HIP total is **325/325** at
+`3b90ffd8962084d59ebc672f7848b093f2d99582` (see the current-state block); the
+previous **307/307** at `561b9a4c`, **301/301** at `ffe4074`, **298/298** at
+`88de14f`, **297/297** at `56c11ac` and the **290/290** at `a610281` are
+historical. The record below is the
 original HIP runtime gate, measured on
 `b972eaa3bd778b81f2dca505d3662df710792bd9` (HIP runtime merge, PR #35).
 Platform: `hal`, AMD Radeon RX 7900 XTX (`gfx1100`), ROCm 7.2.0, `amdclang++`
@@ -265,7 +273,7 @@ The current builds are in the current-state block. Historical build records:
 
 ## Tests (historical)
 
-The current suites are CPU 255/255, CUDA 316/316, HIP 307/307, and SYCL 72/72.
+The current suites are CPU 270/270, CUDA 334/334, HIP 325/325, and SYCL 342/342 (75 sycl-labelled).
 The previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
 earlier 239/239, 299/299 and 290/290 at `a610281` are historical. The table below records the earlier totals, including the

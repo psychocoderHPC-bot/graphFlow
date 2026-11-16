@@ -267,13 +267,19 @@ H100 claim is made.
   exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
   acceptance table is historical.
  - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-   `gfx1100`, ROCm 7.2); the current suite is 307/307 at
-   `561b9a4c9435e37b164623bb6be60a3051783eb4` and the previous 301/301 at
+   `gfx1100`, ROCm 7.2); the current suite is 325/325 at
+   `3b90ffd8962084d59ebc672f7848b093f2d99582` and the previous 307/307 at
+   `561b9a4c`, 301/301 at
    `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
    `a610281`, and the 245/245 run at `b972eaa` are historical.
   No HIP benchmark is recorded.
   `hal` reports `sharing=unknown`, so no HIP performance number is claimed.
-- No RTX 2080 Ti run is recorded. The `sm_75` build is a documented target.
+- The current CUDA suite (334/334 at
+  `3b90ffd8962084d59ebc672f7848b093f2d99582`) is the first recorded RTX 2080 Ti
+  `sm_75` run, on `fwk394`. The exclusive performance record (P07b) remains the
+  V100 `sm_70` measurement; the measured performance band of the default path is
+  unchanged, and the opt-in AoS-over-SoA storage path runs within the same
+  measured band. No new benchmark was taken in this documentation update.
 - The P07 section records a sustained D2D copy reference (`409.733` GB/s at
   3,221,225,472 B) on the V100. It is a context number, not a scatter
   bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,
