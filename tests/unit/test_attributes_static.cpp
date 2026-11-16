@@ -30,6 +30,11 @@ namespace
     {
     };
 
+    inline constexpr IdTag idTag{};
+    inline constexpr PropertyTag propertyTag{};
+    inline constexpr WeightTag weightTag{};
+    inline constexpr VisitTag visitTag{};
+
     using Id = graphFlow::Field<IdTag, std::uint64_t>;
     using Property = graphFlow::Field<PropertyTag, std::uint32_t>;
     using Weight = graphFlow::Field<WeightTag, std::uint32_t>;
@@ -52,6 +57,8 @@ namespace
     // The declaration helper expands to the tag and field pair used by the checks below.
     GRAPHFLOW_ATTRIBUTE(HelperId, std::uint64_t);
     GRAPHFLOW_ATTRIBUTE(HelperValue, std::uint32_t);
+    GRAPHFLOW_TAG(SubscriptId, subscriptId);
+    GRAPHFLOW_TAG(SubscriptValue);
 
     using HelperAttributes = graphFlow::Attributes<HelperIdField, HelperValueField>;
     using HelperRecord = graphFlow::Record<HelperIdField, HelperValueField>;
@@ -124,6 +131,69 @@ TEST_CASE("attribute records expose named fields and copy all attributes", "[att
         std::same_as<typename graphFlow::DefaultStorage<Pair, Device>, graphFlow::PayloadSlotStorage<Pair, Device>>);
     static_assert(graphFlow::ParticleStorage<Device>::slotBytes == graphFlow::payloadBytesPerSlot);
     static_assert(graphFlow::PayloadSlotStorage<Pair, Device>::slotBytes == sizeof(Pair));
+}
+
+TEST_CASE("record and proxy subscripts use constexpr tags for reads and writes", "[attributes][static]")
+{
+    static_assert(std::is_empty_v<decltype(idTag)>);
+    static_assert(std::same_as<std::remove_cvref_t<decltype(idTag)>, IdTag>);
+    static_assert(std::is_empty_v<SubscriptIdTag>);
+    static_assert(std::same_as<std::remove_cvref_t<decltype(subscriptId)>, SubscriptIdTag>);
+    static_assert(std::is_empty_v<SubscriptValueTag>);
+    static_assert(std::same_as<std::remove_cvref_t<decltype(SubscriptValueTag_v)>, SubscriptValueTag>);
+
+    ParticleRecord record{5u, 2u, 3u, 1u};
+
+    static_assert(std::same_as<decltype(record[idTag]), std::uint64_t&>);
+    static_assert(std::same_as<decltype(record[weightTag]), std::uint32_t&>);
+    CHECK(&record[idTag] == &record.get<IdTag>());
+    CHECK(record[idTag] == 5u);
+    CHECK(record[propertyTag] == 2u);
+
+    record[idTag] = 17u;
+    record[weightTag] += 4u;
+    CHECK(record.get<IdTag>() == 17u);
+    CHECK(record.get<WeightTag>() == 7u);
+
+    ParticleRecord const& constRecord = record;
+    static_assert(std::same_as<decltype(constRecord[idTag]), std::uint64_t const&>);
+    static_assert(std::same_as<decltype(constRecord[visitTag]), std::uint32_t const&>);
+    CHECK(constRecord[idTag] == 17u);
+    CHECK(constRecord[visitTag] == 1u);
+
+    auto narrow = record.proxy<graphFlow::Set<IdTag, WeightTag>>();
+    static_assert(std::same_as<decltype(narrow[idTag]), std::uint64_t&>);
+    CHECK(narrow[idTag] == 17u);
+    narrow[idTag] = 23u;
+    narrow[weightTag] -= 2u;
+    CHECK(record[propertyTag] == 2u);
+    CHECK(record[visitTag] == 1u);
+
+    auto constProxy = constRecord.proxy<graphFlow::Set<IdTag, WeightTag>>();
+    static_assert(std::same_as<decltype(constProxy[idTag]), std::uint64_t const&>);
+    CHECK(constProxy[idTag] == 23u);
+    CHECK(constProxy[weightTag] == 5u);
+
+    ParticleRecord copy = narrow;
+    CHECK(copy[idTag] == 23u);
+    CHECK(copy[propertyTag] == 2u);
+    CHECK(copy[weightTag] == 5u);
+    CHECK(copy[visitTag] == 1u);
+
+    using SubscriptRecord = graphFlow::
+        Record<graphFlow::Field<SubscriptIdTag, std::uint32_t>, graphFlow::Field<SubscriptValueTag, std::uint32_t>>;
+    SubscriptRecord declared{4u, 6u};
+    static_assert(std::same_as<decltype(declared[subscriptId]), std::uint32_t&>);
+    CHECK(declared[subscriptId] == 4u);
+    CHECK(declared[SubscriptValueTag_v] == 6u);
+    declared[subscriptId] = 8u;
+    declared[SubscriptValueTag_v] += 1u;
+    CHECK(declared[subscriptId] == 8u);
+    CHECK(declared[SubscriptValueTag_v] == 7u);
+
+    constexpr ParticleRecord compileTimeRecord{1u, 2u, 3u, 4u};
+    static_assert(compileTimeRecord[idTag] == 1u);
+    static_assert(compileTimeRecord[visitTag] == 4u);
 }
 
 TEST_CASE("SoA attribute storage keeps one column per attribute and row slots", "[attributes][storage]")

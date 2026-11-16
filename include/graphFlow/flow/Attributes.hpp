@@ -28,6 +28,37 @@
     };                                                                                                                \
     using Name##Field = ::graphFlow::Field<Name##Tag, T>
 
+/** Declare one attribute tag and a `constexpr` value that names it.
+ *
+ * `GRAPHFLOW_TAG(Id, idTag)` expands to `struct IdTag : graphFlow::TagBase {};` and
+ * `inline constexpr IdTag idTag{};`, so `record[idTag]` reads or writes the attribute. The one-argument
+ * form `GRAPHFLOW_TAG(Id)` names the value `IdTag_v`. Both forms keep the tag empty, so passing a tag
+ * value to `operator[]` carries no runtime state and adds no record layout or performance cost.
+ *
+ * This macro is additive: `GRAPHFLOW_ATTRIBUTE` and hand-written `struct Name##Tag : TagBase {};`
+ * declarations keep working unchanged. Use this macro when a named value makes the call site clearer
+ * than `record.get<IdTag>()`; declare the matching `Field` aliases next to it.
+ */
+#define GRAPHFLOW_TAG_ONE(Name)                                                                                       \
+    struct Name##Tag : ::graphFlow::TagBase                                                                           \
+    {                                                                                                                 \
+    };                                                                                                                \
+    inline constexpr Name##Tag Name##Tag##_v                                                                          \
+    {                                                                                                                 \
+    }
+
+#define GRAPHFLOW_TAG_NAMED(Name, Variable)                                                                           \
+    struct Name##Tag : ::graphFlow::TagBase                                                                           \
+    {                                                                                                                 \
+    };                                                                                                                \
+    inline constexpr Name##Tag Variable                                                                               \
+    {                                                                                                                 \
+    }
+
+#define GRAPHFLOW_TAG_SELECT(_1, _2, Macro, ...) Macro
+
+#define GRAPHFLOW_TAG(...) GRAPHFLOW_TAG_SELECT(__VA_ARGS__, GRAPHFLOW_TAG_NAMED, GRAPHFLOW_TAG_ONE)(__VA_ARGS__)
+
 namespace graphFlow
 {
     /** Base class of an attribute tag, re-exported from llamaLite.
@@ -236,6 +267,20 @@ namespace graphFlow
             m_access.template set<Tag>(std::forward<U>(value));
         }
 
+        /** Subscript spelling of get<Tag>(), constrained to the proxy set. */
+        template<typename Tag>
+        [[nodiscard]] ALPAKA_FN_ACC constexpr decltype(auto) operator[](Tag)
+        {
+            return get<Tag>();
+        }
+
+        /** Subscript spelling of get<Tag>() for a const proxy or a const record. */
+        template<typename Tag>
+        [[nodiscard]] ALPAKA_FN_ACC constexpr decltype(auto) operator[](Tag) const
+        {
+            return get<Tag>();
+        }
+
         [[nodiscard]] ALPAKA_FN_ACC constexpr record_type load() const
         {
             return m_access.load();
@@ -325,6 +370,20 @@ namespace graphFlow
                 attribute_list::template contains<Tag>,
                 "graphFlow::Record: set<Tag>() names an unknown attribute");
             m_values.getLeaf(Tag{})[0u] = std::forward<U>(value);
+        }
+
+        /** Subscript spelling of get<Tag>() and set<Tag>(). */
+        template<typename Tag>
+        [[nodiscard]] ALPAKA_FN_ACC constexpr decltype(auto) operator[](Tag)
+        {
+            return get<Tag>();
+        }
+
+        /** Subscript spelling of get<Tag>() on a const record. */
+        template<typename Tag>
+        [[nodiscard]] ALPAKA_FN_ACC constexpr decltype(auto) operator[](Tag) const
+        {
+            return get<Tag>();
         }
 
         template<typename TSet = attribute_set>

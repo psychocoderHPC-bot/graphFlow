@@ -12,13 +12,8 @@
 
 namespace
 {
-    struct IdTag : graphFlow::TagBase
-    {
-    };
-
-    struct ValueTag : graphFlow::TagBase
-    {
-    };
+    GRAPHFLOW_TAG(Id, idTag);
+    GRAPHFLOW_TAG(Value, valueTag);
 
     using Id = graphFlow::Field<IdTag, std::uint64_t>;
     using Value = graphFlow::Field<ValueTag, std::uint32_t>;
@@ -36,7 +31,7 @@ namespace
     {
         ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, Particle& particle) const
         {
-            particle.set<ValueTag>(particle.get<ValueTag>() + 10u);
+            particle[valueTag] += 10u;
         }
     };
 
@@ -47,7 +42,7 @@ namespace
         ALPAKA_FN_ACC std::uint32_t operator()([[maybe_unused]] auto const& accelerator, Particle const& particle)
             const
         {
-            return static_cast<std::uint32_t>(particle.get<IdTag>() % 2u);
+            return static_cast<std::uint32_t>(particle[idTag] % 2u);
         }
     };
 
@@ -58,7 +53,7 @@ namespace
             std::uint32_t bin,
             Particle& particle) const
         {
-            particle.set<ValueTag>(particle.get<ValueTag>() + bin);
+            particle[valueTag] += bin;
             return graphFlow::UpdateResult::success;
         }
     };
@@ -70,7 +65,7 @@ namespace
 
         ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, Particle const& particle) const
         {
-            values[particle.get<IdTag>()] = particle.get<ValueTag>();
+            values[particle[idTag]] = particle[valueTag];
         }
     };
 } // namespace

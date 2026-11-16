@@ -24,13 +24,8 @@
  */
 namespace graphFlow::test::aos
 {
-    struct IdTag : graphFlow::TagBase
-    {
-    };
-
-    struct ValueTag : graphFlow::TagBase
-    {
-    };
+    GRAPHFLOW_TAG(Id, idTag);
+    GRAPHFLOW_TAG(Value, valueTag);
 
     using IdField = graphFlow::Field<IdTag, std::uint64_t>;
     using ValueField = graphFlow::Field<ValueTag, std::uint32_t>;
@@ -44,8 +39,8 @@ namespace graphFlow::test::aos
         ALPAKA_FN_ACC Payload operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
         {
             Payload payload{};
-            payload.set<IdTag>(id);
-            payload.set<ValueTag>(static_cast<std::uint32_t>(id % 3u));
+            payload[idTag] = id;
+            payload[valueTag] = static_cast<std::uint32_t>(id % 3u);
             return payload;
         }
     };
@@ -54,7 +49,7 @@ namespace graphFlow::test::aos
     {
         ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, Payload& payload) const
         {
-            payload.set<ValueTag>(payload.get<ValueTag>() + 5u);
+            payload[valueTag] += 5u;
         }
     };
 
@@ -66,7 +61,7 @@ namespace graphFlow::test::aos
     {
         ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, ValueSubsetProxy& proxy) const
         {
-            proxy.template set<ValueTag>(proxy.template get<ValueTag>() + 5u);
+            proxy[valueTag] += 5u;
         }
     };
 
@@ -76,7 +71,7 @@ namespace graphFlow::test::aos
 
         ALPAKA_FN_ACC std::uint32_t operator()([[maybe_unused]] auto const& accelerator, Payload const& payload) const
         {
-            return static_cast<std::uint32_t>(payload.get<IdTag>() % 3u);
+            return static_cast<std::uint32_t>(payload[idTag] % 3u);
         }
     };
 
@@ -87,7 +82,7 @@ namespace graphFlow::test::aos
             std::uint32_t bin,
             Payload& payload) const
         {
-            payload.set<ValueTag>(payload.get<ValueTag>() + bin);
+            payload[valueTag] += bin;
             return graphFlow::UpdateResult::success;
         }
     };
@@ -99,7 +94,7 @@ namespace graphFlow::test::aos
 
         ALPAKA_FN_ACC void operator()([[maybe_unused]] auto const& accelerator, Payload const& payload) const
         {
-            values[payload.get<IdTag>()] = payload.get<ValueTag>();
+            values[payload[idTag]] = payload[valueTag];
         }
     };
 
@@ -144,8 +139,8 @@ namespace graphFlow::test::aos
         std::vector<std::uint32_t> values(records.size());
         for(std::size_t i = 0u; i < records.size(); ++i)
         {
-            ids[i] = records[i].get<IdTag>();
-            values[i] = records[i].get<ValueTag>();
+            ids[i] = records[i][idTag];
+            values[i] = records[i][valueTag];
         }
         auto queue = device.makeQueue(alpaka::queueKind::blocking);
         auto const extent = alpaka::Vec{static_cast<std::uint64_t>(records.size())};
@@ -167,8 +162,8 @@ namespace graphFlow::test::aos
         std::vector<Payload> records(count);
         for(std::uint32_t i = 0u; i < count; ++i)
         {
-            records[i].set<IdTag>(ids[i]);
-            records[i].set<ValueTag>(values[i]);
+            records[i][idTag] = ids[i];
+            records[i][valueTag] = values[i];
         }
         return records;
     }
@@ -317,8 +312,8 @@ namespace graphFlow::test::aos
         REQUIRE(roundTrip.size() == records.size());
         for(std::size_t i = 0u; i < records.size(); ++i)
         {
-            CHECK(roundTrip[i].get<IdTag>() == records[i].get<IdTag>());
-            CHECK(roundTrip[i].get<ValueTag>() == records[i].get<ValueTag>());
+            CHECK(roundTrip[i][idTag] == records[i][idTag]);
+            CHECK(roundTrip[i][valueTag] == records[i][valueTag]);
         }
     }
 
@@ -359,8 +354,8 @@ namespace graphFlow::test::aos
                 = readRecords(device, storage, static_cast<std::uint32_t>(storage.base(input.handle)), capacity);
             for(std::uint32_t i = 0u; i < capacity; ++i)
             {
-                CHECK(records[i].get<IdTag>() == i);
-                CHECK(records[i].get<ValueTag>() == i % 3u);
+                CHECK(records[i][idTag] == i);
+                CHECK(records[i][valueTag] == i % 3u);
             }
             storage.release(input.handle);
         }
@@ -395,8 +390,8 @@ namespace graphFlow::test::aos
             for(std::uint32_t i = 0u; i < capacity; ++i)
             {
                 // BumpValue writes only Value; copy-all keeps the untouched Id.
-                CHECK(records[i].get<IdTag>() == 1000u + i);
-                CHECK(records[i].get<ValueTag>() == i + 5u);
+                CHECK(records[i][idTag] == 1000u + i);
+                CHECK(records[i][valueTag] == i + 5u);
             }
             for(graphFlow::ChunkDescriptor const& output : outputs)
                 storage.release(output.handle);
@@ -433,8 +428,8 @@ namespace graphFlow::test::aos
             for(std::uint32_t i = 0u; i < capacity; ++i)
             {
                 // The subset functor can only name Value; copy-all keeps Id and the other attributes.
-                CHECK(records[i].get<IdTag>() == 2000u + i);
-                CHECK(records[i].get<ValueTag>() == i + 5u);
+                CHECK(records[i][idTag] == 2000u + i);
+                CHECK(records[i][valueTag] == i + 5u);
             }
             for(graphFlow::ChunkDescriptor const& output : outputs)
                 storage.release(output.handle);
@@ -473,8 +468,8 @@ namespace graphFlow::test::aos
                     output.fill);
                 for(Payload const& record : records)
                 {
-                    CHECK(record.get<IdTag>() % 3u == output.bin);
-                    CHECK(record.get<ValueTag>() == output.bin);
+                    CHECK(record[idTag] % 3u == output.bin);
+                    CHECK(record[valueTag] == output.bin);
                 }
             }
             CHECK(total == capacity);
