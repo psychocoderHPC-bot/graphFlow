@@ -16,6 +16,18 @@
 
 namespace graphFlow::photon
 {
+    /** Attribute tags of the AoS-over-SoA photon payload.
+     *
+     * The payload is a `graphFlow::Record` over these fields, so a stage reads and writes one
+     * logical photon through `photon[idTag]`, `photon[positionTag]`, and so on while the storage
+     * keeps one column per attribute. The tags carry no runtime state.
+     */
+    GRAPHFLOW_TAG(Id, idTag);
+    GRAPHFLOW_TAG(Position, positionTag);
+    GRAPHFLOW_TAG(Direction, directionTag);
+    GRAPHFLOW_TAG(ScatterCount, scatterCountTag);
+    GRAPHFLOW_TAG(Proposal, proposalTag);
+
     /** Terminal outcomes of one photon history.
      *
      * `scatter` is a graph edge, not a terminal record. The remaining four values feed the shared
@@ -82,27 +94,82 @@ namespace graphFlow::photon
 
     using Proposal = ProposalT<double>;
 
+    /** Attribute descriptors of the photon record.
+     *
+     * The field pack is the single source of truth for the `Record` payload and its `SoAStorage`
+     * columns. Keeping the vector and proposal values as whole attributes preserves the scalar
+     * template for both the double and single-precision paths.
+     */
+    using PhotonIdField = graphFlow::Field<IdTag, std::uint64_t>;
+
+    template<typename T>
+    using PhotonPositionField = graphFlow::Field<PositionTag, Vec3T<T>>;
+
+    template<typename T>
+    using PhotonDirectionField = graphFlow::Field<DirectionTag, Vec3T<T>>;
+
+    using PhotonScatterCountField = graphFlow::Field<ScatterCountTag, std::uint32_t>;
+
+    template<typename T>
+    using PhotonProposalField = graphFlow::Field<ProposalTag, ProposalT<T>>;
+
     /** Photon payload of the public `Flow` API.
      *
-     * `scatterCount` counts completed scatter interactions and is also the stream event index, so
-     * every flight decision, collision-kind decision and angular draw depends only on the packed
-     * `(seed, id, scatterCount, purpose)` engine position.
+     * The record stores one logical photon while the selected storage keeps a separate column for
+     * each attribute. `scatterCount` counts completed scatter interactions and is also the stream
+     * event index, so every flight decision, collision-kind decision and angular draw depends only
+     * on the packed `(seed, id, scatterCount, purpose)` engine position.
      */
     template<typename T>
-    struct PhotonT
-    {
-        std::uint64_t id = 0u;
-        Vec3T<T> position{};
-        Vec3T<T> direction{T{0}, T{0}, T{1}};
-        std::uint32_t scatterCount = 0u;
-        ProposalT<T> proposal{};
-    };
+    using PhotonT = graphFlow::Record<
+        PhotonIdField,
+        PhotonPositionField<T>,
+        PhotonDirectionField<T>,
+        PhotonScatterCountField,
+        PhotonProposalField<T>>;
 
     using Photon = PhotonT<double>;
 
+    /** AoS-over-SoA storage matching the photon record attribute pack. */
+    template<typename TDevice, typename T = double>
+    using PhotonStorage = graphFlow::SoAStorage<
+        TDevice,
+        PhotonIdField,
+        PhotonPositionField<T>,
+        PhotonDirectionField<T>,
+        PhotonScatterCountField,
+        PhotonProposalField<T>>;
+
     static_assert(std::is_trivially_copyable_v<Photon>);
     static_assert(std::is_default_constructible_v<Photon>);
+} // namespace graphFlow::photon
 
+namespace graphFlow::rng
+{
+    /** RNG stream fields of the photon record.
+     *
+     * The generic `StreamTraits` reads data members, which a `Record` does not expose. Without this
+     * specialization every photon would share the `(0, 0)` stream position and therefore the same
+     * history. The photon key uses the logical id and the completed scatter count, matching the
+     * pre-record payload and the scalar oracle.
+     */
+    template<typename T>
+    struct StreamTraits<photon::PhotonT<T>>
+    {
+        static ALPAKA_FN_ACC std::uint64_t id(photon::PhotonT<T> const& payload) noexcept
+        {
+            return static_cast<std::uint64_t>(payload[photon::idTag]);
+        }
+
+        static ALPAKA_FN_ACC std::uint64_t event(photon::PhotonT<T> const& payload) noexcept
+        {
+            return static_cast<std::uint64_t>(payload[photon::scatterCountTag]);
+        }
+    };
+} // namespace graphFlow::rng
+
+namespace graphFlow::photon
+{
     /** Application-owned terminal record written by the shared sink. */
     template<typename T>
     struct TerminalRecordT

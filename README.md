@@ -198,8 +198,8 @@ examples/photon_scattering/
   main.cpp             backend selection and output dispatch
   PhotonFunctors.hpp   flight, scatter, and terminal functors
   PhotonOutput.hpp     CSV and trace writers
-  PhotonScattering.hpp Flow graph construction and run function
-  PhotonTypes.hpp      slab geometry, events, and result types
+  PhotonScattering.hpp SoAFlow graph construction and run function
+  PhotonTypes.hpp      Record payload, slab geometry, events, and result types
 tests/unit/            reservation, backend/probe, CLI, pool budget, pool/leases,
                         bin table, Philox mapping, device policy, payload storage,
                         CUDA kernel
@@ -333,6 +333,13 @@ propose flight, with transmitted, reflected, absorbed and capped outcomes
 feeding one terminal sink. Lengths use one unit and coefficients use inverse
 length. The forward mode preserves the direction after a collision; the
 isotropic mode samples `mu = 2U-1` and `phi = 2*pi*V`.
+
+The flow payload is a `graphFlow::Record` with id, position, direction,
+scatter-count and flight-proposal attributes. The run uses
+`graphFlow::SoAFlow`, so the storage keeps one device column per attribute and
+stages access a photon through `photon[idTag]`, `photon[positionTag]` and the
+other `constexpr` tags. The scalar template still selects double for CPU, CUDA
+and HIP and float for the default oneAPI path.
 
 Forward run with machine-readable output and a bounded trace:
 

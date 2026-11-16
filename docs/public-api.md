@@ -151,8 +151,9 @@ record type and the column layout are separate choices. The storage defaults
 never change because a type happens to be a `Record`.
 
 `ParticleStorage` keeps its existing `ids`, `properties`, `weights`, and
-`visits` arrays; the particle and photon examples keep using it. An application
-that wants attribute columns migrates only its own payload:
+`visits` arrays; the particle example keeps using it. The photon example opts
+into `SoAFlow` and `SoAStorage` for its `Record` payload. An application that
+wants attribute columns migrates only its own payload:
 
 1. Declare one tag derived from `graphFlow::TagBase` and one `Field<Tag, T>` per
    attribute, then name the ordered `AttributeList` or `Record`. Attribute order
@@ -528,8 +529,11 @@ Run it with:
 `examples/photon_scattering` transports independent photon histories through a
 homogeneous plane-parallel slab. The graph is source -> propose flight ->
 advance and route -> scatter -> propose flight, with transmitted, reflected,
-absorbed, and capped outcomes feeding one terminal sink. Functors receive the
-same initialized `graphFlow::rng::Engine`; floating-point draws use
+absorbed, and capped outcomes feeding one terminal sink. The payload is a
+`graphFlow::Record` over constexpr id, position, direction, scatter-count and
+flight-proposal tags, and the run uses `graphFlow::SoAFlow` so
+`SoAStorage` keeps one column per attribute. Functors receive the same
+initialized `graphFlow::rng::Engine`; floating-point draws use
 `UniformReal<double>` (and `NormalReal<double>` where needed). Functors that
 reject an item set the typed `Status`; the host rejects the batch before it
 publishes output.

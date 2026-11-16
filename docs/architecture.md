@@ -76,8 +76,9 @@ record attribute by attribute.
 
 `SoAStorage` is never a default. `DefaultStorage` still selects
 `ParticleStorage` for the canonical `Particle` payload and
-`PayloadSlotStorage` for every other payload; existing particle and photon code
-keeps its SoA arrays and `ParticleStorage` remains the migration source.
+`PayloadSlotStorage` for every other payload; the particle example keeps its
+SoA arrays and `ParticleStorage` remains the migration source. The photon
+example opts into `SoAFlow` with a `Record` payload and matching `SoAStorage`.
 
 ## Host scheduler
 
