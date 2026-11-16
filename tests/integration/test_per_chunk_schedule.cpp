@@ -329,13 +329,22 @@ namespace
         }
     };
 
+    /** One end-to-end flow result: the per-id values and the scheduler counters of the run. */
+    struct FlowRun
+    {
+        std::vector<std::uint32_t> values;
+        graphFlow::SchedulerStats stats;
+    };
+
     /** Run source -> transform -> partition -> sink and return one value per particle id. */
-    std::vector<std::uint32_t> runFlow(
+    FlowRun runFlow(
         std::uint64_t particles,
         std::uint32_t capacity,
         std::uint32_t tileSize,
         std::uint32_t batchChunks,
-        graphFlow::ChunkKernelSchedule schedule)
+        graphFlow::ChunkKernelSchedule schedule,
+        std::uint32_t chunkQueueDepth = 1u,
+        std::uint32_t liveParticles = 0u)
     {
         auto device = graphFlow::test::makeCpuDevice();
         auto results
@@ -358,14 +367,16 @@ namespace
         tuning.batchChunks = batchChunks;
         tuning.frameCap = 2u;
         tuning.chunkKernelSchedule = schedule;
-        tuning.chunkQueueDepth = 1u;
+        tuning.chunkQueueDepth = chunkQueueDepth;
+        if(liveParticles != 0u)
+            tuning.liveParticles = liveParticles;
         flow.configure(tuning);
-        flow.run(source, particles);
+        graphFlow::SchedulerStats const stats = flow.run(source, particles);
 
         std::vector<std::uint32_t> host(static_cast<std::size_t>(particles));
         auto queue = device.makeQueue(alpaka::queueKind::blocking);
         alpaka::onHost::memcpy(queue, host, results);
-        return host;
+        return FlowRun{std::move(host), stats};
     }
 } // namespace
 
@@ -382,19 +393,54 @@ TEST_CASE("per-chunk and batch-wide schedules produce identical flow results", "
                 for(std::uint32_t const batchChunks : {1u, 8u})
                 {
                     CAPTURE(particles, capacity, tileSize, batchChunks);
-                    std::vector<std::uint32_t> const off
-                        = runFlow(particles, capacity, tileSize, batchChunks, ChunkKernelSchedule::off);
-                    std::vector<std::uint32_t> const on
+                    FlowRun const off = runFlow(particles, capacity, tileSize, batchChunks, ChunkKernelSchedule::off);
+                    FlowRun const on
                         = runFlow(particles, capacity, tileSize, batchChunks, ChunkKernelSchedule::perChunk);
-                    REQUIRE(off.size() == on.size());
-                    CHECK(std::memcmp(off.data(), on.data(), off.size() * sizeof(std::uint32_t)) == 0);
-                    for(std::size_t id = 0u; id < on.size(); ++id)
+                    REQUIRE(off.values.size() == on.values.size());
+                    CHECK(
+                        std::memcmp(off.values.data(), on.values.data(), off.values.size() * sizeof(std::uint32_t))
+                        == 0);
+                    for(std::size_t id = 0u; id < on.values.size(); ++id)
                     {
                         CAPTURE(id);
-                        REQUIRE(on[id] == expectedValue(id) + static_cast<std::uint32_t>(id % 2u));
+                        REQUIRE(on.values[id] == expectedValue(id) + static_cast<std::uint32_t>(id % 2u));
                     }
+                    // The off path counts batches; the per-chunk path counts kernels and reports the
+                    // clamp of its launch-size policy.
+                    CHECK(off.stats.chunkLaunches == 0u);
+                    CHECK(off.stats.chunkLimitName == "none");
+                    CHECK(on.stats.chunkLaunches > 0u);
+                    CHECK(on.stats.chunkLimitName != "none");
                 }
             }
         }
     }
+}
+
+TEST_CASE("per-chunk schedule runs with a multi-queue pool and credit pressure", "[integration][chunk-schedule]")
+{
+    using graphFlow::ChunkKernelSchedule;
+
+    // Four chunk queues: eight ready chunks are spread over four concurrent lanes.
+    std::uint64_t const particles = 4097u;
+    std::uint32_t const capacity = 127u;
+    std::uint32_t const chunks = static_cast<std::uint32_t>((particles + capacity - 1u) / capacity);
+
+    FlowRun const off = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::off);
+    FlowRun const on = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u);
+    REQUIRE(off.values.size() == on.values.size());
+    CHECK(std::memcmp(off.values.data(), on.values.data(), on.values.size() * sizeof(std::uint32_t)) == 0);
+    // One kernel per dispatched input chunk, whatever the queue width. Admission may split the
+    // source into chunks smaller than C, so the kernel count is at least ceil(N/C).
+    CHECK(on.stats.chunkLaunches >= chunks);
+
+    // A two-chunk live budget keeps the credit free-list short: dispatch must shrink to the
+    // chunks that fit instead of stalling, and the per-chunk path must retire each chunk's lease
+    // on its own (the run-end `freeCount == numChunks` check would throw otherwise).
+    FlowRun const pressured = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u, 2u * capacity);
+    REQUIRE(pressured.values.size() == on.values.size());
+    CHECK(std::memcmp(pressured.values.data(), on.values.data(), on.values.size() * sizeof(std::uint32_t)) == 0);
+    // The smaller live budget changes the source chunking, not the per-chunk contract: every
+    // dispatched chunk is still exactly one kernel.
+    CHECK(pressured.stats.chunkLaunches >= chunks);
 }

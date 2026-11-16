@@ -89,7 +89,10 @@ namespace
                   << " max-scatters=" << parameters.maxScatters << " seed=" << parameters.seed
                   << " chunk-size=" << parameters.chunkSize << " live-particles=" << result.liveParticles
                   << " tile-size=" << parameters.tileSize << " batch-chunks=" << parameters.batchChunks
-                  << " frame-cap=" << parameters.frameCap << '\n';
+                  << " frame-cap=" << parameters.frameCap << " chunk-kernel-schedule="
+                  << (parameters.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk ? "perChunk" : "off")
+                  << " chunk-queue-depth=" << parameters.chunkQueueDepth
+                  << " chunk-latency-cap-us=" << parameters.chunkLatencyCapUs << '\n';
         std::cout << "# units length=1 coefficient=1/length\n";
         std::cout << "# pool-chunks=" << result.stats.poolChunks << " peak-live-chunks=" << result.stats.peakLiveChunks
                   << " peak-reserved-chunks=" << result.stats.peakReservedChunks << '\n';

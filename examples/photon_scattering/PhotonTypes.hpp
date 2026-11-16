@@ -260,6 +260,12 @@ namespace graphFlow::photon
         std::uint32_t deviceIndex = 0u;
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per batch
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
+        /** Transform launch schedule; `off` keeps the batch-wide transform launch. */
+        graphFlow::ChunkKernelSchedule chunkKernelSchedule = graphFlow::ChunkKernelSchedule::off;
+        /** Per-chunk transform queues; one keeps a single serial queue. */
+        std::uint32_t chunkQueueDepth = 1u;
+        /** Per-chunk latency cap in microseconds fed to the launch-size policy; zero means no cap. */
+        std::uint32_t chunkLatencyCapUs = 0u;
         std::uint64_t poolPayloadBudgetBytes = 0u; // zero means the Flow default
         TraceConfig trace; // bounded deterministic diagnostic trace
     };
@@ -314,6 +320,9 @@ namespace graphFlow::photon
             throw std::invalid_argument{"graphFlow::photon: batchChunks must be non-zero"};
         if(parameters.frameCap == 0u)
             throw std::invalid_argument{"graphFlow::photon: frameCap must be non-zero"};
+        if(parameters.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk
+           && parameters.chunkQueueDepth == 0u)
+            throw std::invalid_argument{"graphFlow::photon: chunkQueueDepth must be non-zero for perChunk"};
         if(parameters.mode != ScatterMode::forward && parameters.mode != ScatterMode::isotropic)
             throw std::invalid_argument{"graphFlow::photon: unknown scattering mode"};
         if(parameters.trace.enabled)
@@ -336,6 +345,9 @@ namespace graphFlow::photon
         tuning.tileSize = parameters.tileSize;
         tuning.batchChunks = parameters.batchChunks;
         tuning.frameCap = parameters.frameCap;
+        tuning.chunkKernelSchedule = parameters.chunkKernelSchedule;
+        tuning.chunkQueueDepth = parameters.chunkQueueDepth;
+        tuning.chunkLatencyCapUs = parameters.chunkLatencyCapUs;
         if(parameters.poolPayloadBudgetBytes != 0u)
             tuning.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
         return tuning;

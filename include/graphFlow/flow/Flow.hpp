@@ -226,6 +226,7 @@ namespace graphFlow
             };
             auto const key
                 = appendNode(std::move(name), NodeRole::transform, 1u, functorPtr, nullptr, std::move(makeStage));
+            m_nodes[key].chunkTransform = true;
             return TransformHandle{m_identity, key, 1u, m_nodes[key].name};
         }
 
@@ -254,6 +255,7 @@ namespace graphFlow
             };
             auto const key
                 = appendNode(std::move(name), NodeRole::transform, 1u, functorPtr, nullptr, std::move(makeStage));
+            m_nodes[key].chunkTransform = true;
             return TransformHandle{m_identity, key, 1u, m_nodes[key].name};
         }
 
@@ -335,13 +337,22 @@ namespace graphFlow
             // Each submitted-depth lane gets its own typed stage. The stage owns the per-batch
             // device staging, status and histogram buffers, so independent lanes must never share
             // one instance once `inflightBatches` is above one.
+            //
+            // On the per-chunk schedule a transform node dispatches one chunk per lane, so it needs
+            // `chunkQueueDepth` lanes per submitted depth (one per concurrent queue) and one stage
+            // per lane. Every other node keeps its submitted depth.
             std::uint32_t const depth = m_tuning.inflightBatches.value_or(1u);
+            bool const perChunk = config.chunkKernelSchedule == ChunkKernelSchedule::perChunk;
+            std::uint32_t const chunkQueues = perChunk ? config.chunkQueueDepth : 0u;
+            auto laneCount = [&](NodeRecord const& node) -> std::uint32_t
+            { return perChunk && node.chunkTransform ? depth * chunkQueues : depth; };
             std::vector<std::vector<std::unique_ptr<Stage>>> stages(m_nodes.size());
             for(std::size_t key = 0u; key < m_nodes.size(); ++key)
             {
                 NodeRecord const& node = m_nodes[key];
-                stages[key].reserve(depth);
-                for(std::uint32_t lane = 0u; lane < depth; ++lane)
+                std::uint32_t const lanes = laneCount(node);
+                stages[key].reserve(lanes);
+                for(std::uint32_t lane = 0u; lane < lanes; ++lane)
                 {
                     std::unique_ptr<Stage> stage = node.makeStage(
                         m_device,
@@ -356,6 +367,7 @@ namespace graphFlow
 
             using Runner = GraphRunner<TDevice, TStorage>;
             auto runner = std::make_unique<Runner>(m_device, *storage);
+            std::string chunkLimitName;
             for(std::size_t key = 0u; key < m_nodes.size(); ++key)
             {
                 NodeRecord const& node = m_nodes[key];
@@ -367,6 +379,11 @@ namespace graphFlow
                         throw std::overflow_error{"graphFlow: route destination exceeds the runner's int range"};
                     routes.push_back(static_cast<int>(destination));
                 }
+                // The per-chunk launch-size policy lives in the transform stage; the runner only
+                // reports the clamp it selected. All transform stages of a run share one policy.
+                if(perChunk && chunkLimitName.empty())
+                    chunkLimitName = stages[key].front()->chunkScheduleLimitName();
+                std::uint32_t const queues = perChunk && node.chunkTransform ? chunkQueues : 0u;
                 runner->addNode(
                     node.name,
                     node.role,
@@ -374,10 +391,12 @@ namespace graphFlow
                     std::move(routes),
                     [&stages, key](std::uint32_t lane) -> typename Runner::Hooks
                     { return detail::makeHooks(stages[key][lane].get()); },
-                    depth);
+                    laneCount(node),
+                    queues);
             }
             runner->setSource(static_cast<std::uint32_t>(*m_sourceKey), itemCount, config.liveParticles);
             runner->setBatchChunks(config.batchChunks);
+            runner->setChunkSchedule(config.chunkKernelSchedule, config.chunkQueueDepth, std::move(chunkLimitName));
             if(m_tuning.stallTimeout.has_value())
                 runner->setStallTimeout(*m_tuning.stallTimeout);
             runner->setDiagnostics(m_tuning.diagnostics);
@@ -417,6 +436,8 @@ namespace graphFlow
             std::shared_ptr<void const> functor;
             std::shared_ptr<void const> update;
             bool partition = false;
+            /** True for a `Flow::transform` node: the only node the per-chunk schedule applies to. */
+            bool chunkTransform = false;
             StageFactory makeStage;
         };
 
@@ -453,6 +474,7 @@ namespace graphFlow
                     std::move(routes),
                     std::move(functor),
                     std::move(update),
+                    false,
                     false,
                     std::move(makeStage)});
             return key;

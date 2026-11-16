@@ -6,6 +6,7 @@
 
 #include "graphFlow/core/Chunk.hpp"
 #include "graphFlow/core/Config.hpp"
+#include "graphFlow/core/DevicePolicy.hpp"
 #include "graphFlow/core/LaunchPolicy.hpp"
 #include "graphFlow/core/PayloadSlotStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
@@ -1328,6 +1329,16 @@ namespace graphFlow::detail
         virtual bool advance(Queue const& queue, Batch const& batch, std::uint32_t& allocated) = 0;
         virtual void finish(Batch const& batch, std::vector<ChunkDescriptor>& outputs) = 0;
         virtual void abort() = 0;
+
+        /** Clamp that set the per-chunk launch-size policy; empty when the stage has none.
+         *
+         * Only the transform stage implements it. The runner reports the name in
+         * `SchedulerStats::chunkLimitName`.
+         */
+        [[nodiscard]] virtual std::string chunkScheduleLimitName() const
+        {
+            return {};
+        }
     };
 
     /** Build the scheduler hooks of one typed stage. The stage outlives the runner. */
@@ -1534,7 +1545,28 @@ namespace graphFlow::detail
                     alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
                 m_chunkStatusHost.emplace(
                     alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
+                // The per-chunk launch-size policy is consumed here, once per stage: the kernel
+                // launch below uses its threads-per-block and the runner reports its clamp name.
+                // The storage chunk capacity is never derived from it.
+                auto const properties = device.getDeviceProperties();
+                std::uint32_t threadsPerBlock = properties.maxThreadsPerBlock >= 512u ? 512u : 256u;
+                if(threadsPerBlock > properties.maxThreadsPerBlock)
+                    threadsPerBlock = properties.maxThreadsPerBlock;
+                ChunkScheduleConfig scheduleConfig;
+                scheduleConfig.wavesPerChunk = std::clamp(config.policyWaves, 2u, 4u);
+                scheduleConfig.itemsPerThread = config.policyLiveParticlesPerChunk;
+                scheduleConfig.threadsPerBlock = threadsPerBlock;
+                scheduleConfig.targetBlocksPerSm = config.policyTargetBlocksPerSm;
+                scheduleConfig.maxChunkCapacity = config.policyMaxChunkCapacity;
+                scheduleConfig.latencyCapUs = config.chunkLatencyCapUs;
+                scheduleConfig.slotBytes = config.slotBytes;
+                m_chunkPolicy = makeChunkSchedulePolicy(properties, config.poolPayloadBudgetBytes, scheduleConfig);
             }
+        }
+
+        [[nodiscard]] std::string chunkScheduleLimitName() const override
+        {
+            return m_chunkPolicy ? m_chunkPolicy->limitName : std::string{};
         }
 
         void launch(Queue const& queue, Batch const& batch) override
@@ -1736,9 +1768,11 @@ namespace graphFlow::detail
                     if(chunk.fill == 0u)
                         continue;
                     // `m_launches` counts enqueued kernels: one per non-empty chunk here and one
-                    // per batch on the off path.
+                    // per batch on the off path. The launch tile is the per-chunk policy's
+                    // threads-per-block; the frames are still sized from this chunk's fill.
                     ++m_launches;
-                    LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+                    LaunchPolicy const policy
+                        = launchPolicy(m_device, chunk.fill, m_chunkPolicy->threadsPerBlock, m_frameCap);
                     enqueueKernelWithInOutViews(
                         queue,
                         policy.frameSpec(),
@@ -1830,6 +1864,8 @@ namespace graphFlow::detail
         // Per-chunk completion slots; allocated only when the schedule is on.
         std::optional<U32View> m_chunkStatus;
         std::optional<MappedU32View> m_chunkStatusHost;
+        // Per-chunk launch-size policy; present only when the schedule is perChunk.
+        std::optional<ChunkSchedulePolicy> m_chunkPolicy;
         std::vector<ChunkDescriptor> m_pending;
         std::uint32_t m_allocated = 0u;
         std::uint32_t m_launches = 0u;
