@@ -41,7 +41,13 @@ the type names, interfaces, comments, and tests, was written for graphFlow.
 
 No source file, header, code fragment, comment, identifier, or test vector
 from spearhed spmacc or PIConGPU was copied, transcribed, or paraphrased into
-graphFlow.
+graphFlow-owned files.
+
+The clean-room statement covers graphFlow-owned code: the classifier and
+kernels under `include/graphFlow/graph/`, the adapters under
+`include/graphFlow/flow/`, examples, tests, and tools. The vendored llamaLite
+subtree is a separate component with its own `MPL-2.0` file boundary and is not
+part of that claim. See [llamaLite](#llamalite).
 
 ## Copyleft references that are not copied
 
@@ -54,6 +60,10 @@ The upstream projects are not build dependencies. No file under
 `include/`, `examples/`, `tests/`, or `tools/` includes their headers or
 reproduces their source text. Their license texts are not reproduced here
 because no covered material is distributed.
+
+spearhed is also the upstream repository for llamaLite, but only the
+independent llamaLite library is vendored. No PMacc, spmacc, or PIConGPU source
+enters the tree through that copy.
 
 GPL and LGPL code is excluded from copied material on purpose. Mixing it into
 MPL-2.0 source files would impose additional terms on the combined work and
@@ -68,25 +78,45 @@ vectors, and recorded limitations informed the design.
 
 ## llamaLite
 
-llamaLite is not vendored today. It is accepted only under these conditions.
+graphFlow vendors llamaLite, an independent header-only C++20 data-structure
+library, from the spearhed repository. The copy is on the allowlist and keeps
+its own `MPL-2.0` file boundary.
 
-1. The upstream license is `MPL-2.0`. A different license requires a new
-   decision before any copy is made.
-2. The vendored tree is unmodified. Do not reformat, rename, or apply local
-   edits inside the copied files.
-3. The upstream repository URL and the exact 40-character commit SHA are
-   recorded in the inventory below and in the component README.
-4. The upstream license file is copied byte-for-byte, and the SHA-256 of the
-   upstream license file is recorded. Upstream notice files are copied too.
-5. The component README states the origin, the pinned SHA, the license, and
-   whether anything in the directory differs from upstream. It must say
-   "unmodified" when it does.
-6. `THIRD_PARTY_NOTICES.md` gains the notice in the same change.
-7. `reuse lint` and the source-text audit pass.
+| Field | Value |
+| --- | --- |
+| Upstream | spearhed, <https://github.com/ComputationalRadiationPhysics/spearhed> |
+| Upstream path | `packages/pmacc/libs/llamaLite` |
+| Pinned commit | `aa79f32653452bdaea55d9786c57d1ab10a37b81` |
+| SPDX identifier | `MPL-2.0` |
+| Vendored path | `include/graphFlow/thirdparty/llamaLite/` |
+| Upstream files | 34: `CMakeLists.txt`, `LICENSE`, `README.md`, `cmake/`, `include/llamaLite/`, and `tests/` |
+| Upstream license | `LICENSE`, SHA-256 `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04` |
+
+The vendored subtree contains the 34 upstream files plus two graphFlow
+additions: `UPSTREAM.md` with this provenance record and `PATCHES/` with the
+downstream patch notes. All upstream files are byte-identical to the pinned
+commit except two:
+
+| File | Patch | Reason |
+| --- | --- | --- |
+| `include/llamaLite/Algorithm.hpp` | `PATCHES/0001-nvcc-12.5-explicit-lambda-template.md` | nvcc 12.5 misparses explicit-template-parameter lambdas; the patch replaces them with a `std::integral_constant` visitor |
+| `include/llamaLite/traits.hpp` | `PATCHES/0002-clang-unused-astype-parameter.md` | clang with `-Wextra -Werror` rejects the unused `AsType` parameter name |
+
+Each patch note records the upstream commit, a reproduction, the verification
+matrix, and the condition for dropping the patch. The patches are written so
+they can be offered upstream unchanged. File an issue or pull request against
+`packages/pmacc/libs/llamaLite` at
+<https://github.com/ComputationalRadiationPhysics/spearhed>; drop the local
+patch once upstream has an equivalent change.
+
+The vendored tree is not part of graphFlow's build. graphFlow owns the adapters
+and integration outside the subtree: `include/graphFlow/flow/Attributes.hpp`
+re-exports llamaLite attribute tags, `include/graphFlow/flow/Execution.hpp`
+provides the SoA access, `tests/thirdparty/llamalite_smoke.cpp` checks the
+exported headers, and the CMake target exports the header root. Those files are
+graphFlow code under `MPL-2.0`; they are not part of the upstream component.
 
 ## Inventory
-
-At base commit `e6856b8b0941b422a2069dbc4207fc344f6aa4da`:
 
 | Component | Origin | Pinned SHA | License | Vendored | Modified |
 | --- | --- | --- | --- | --- | --- |
@@ -95,11 +125,12 @@ At base commit `e6856b8b0941b422a2069dbc4207fc344f6aa4da`:
 | Catch2 | external dependency | 3.4.0 release | `BSL-1.0` | no | no |
 | spearhed spmacc | concept reference | none | LGPL/GPL | no | no |
 | PIConGPU | concept reference | none | LGPL/GPL | no | no |
-| llamaLite | not present | none | `MPL-2.0` if later vendored | no | no |
+| llamaLite | spearhed, `packages/pmacc/libs/llamaLite` | `aa79f32653452bdaea55d9786c57d1ab10a37b81` | `MPL-2.0` | yes, 34 upstream files | yes, 2 files patched |
 
 A vendored component is redistributed source. An external dependency is built
 from its own installation and is not part of this repository's source
-distribution.
+distribution. Local changes to a vendored component are recorded as numbered
+notes under its `PATCHES/` directory and listed in the inventory.
 
 ## Auditing third-party material
 
@@ -150,12 +181,20 @@ relicensed as graphFlow code.
 
 Vendor under `include/graphFlow/thirdparty/<name>/`. Keep the upstream
 directory shape and file contents. Keep the upstream license and notice files
-in the same directory. Add a `README.md` that states:
+in the same directory. Record the provenance in a component `README.md` or,
+when the upstream `README.md` must stay untouched, an `UPSTREAM.md` beside it.
+The record states:
 
-- upstream URL and pinned SHA;
+- upstream URL, upstream path, and pinned SHA;
 - SPDX identifier;
+- the upstream file count and the license-file SHA-256;
 - "unmodified" or an exact list of local changes;
 - the graphFlow change that introduced the copy.
+
+If an upstream file must change, keep the change in a numbered note under
+`PATCHES/` next to the component, name the affected file, and write the note so
+it can be offered upstream. Do not reformat, rename, or translate upstream
+files for local taste.
 
 Do not add graphFlow SPDX headers to upstream files. Their own headers stay
 untouched. Add the upstream license to `LICENSES/` when REUSE needs it.
@@ -174,23 +213,26 @@ Before review, check that no upstream text slipped into project-owned files.
 find include/graphFlow/thirdparty -mindepth 1 -maxdepth 1 ! -name README.md
 
 # Source, examples, tests, and build files must not name the copyleft
-# references. Provenance pages are excluded here on purpose.
+# references. Provenance pages and patch notes are excluded here on purpose.
 git grep -n -i -E 'spearhed|spmacc|picongpu' -- \
-  include examples tests tools CMakeLists.txt cmake
+  include examples tests tools CMakeLists.txt cmake \
+  ':(exclude)include/graphFlow/thirdparty/**'
 
 # License metadata must be complete.
 reuse lint
 ```
 
 A match in the first command must have a matching inventory row. The second
-command excludes the provenance pages because they name the references by
-design. A name match in source code, a build file, or a test is a defect until
-proven otherwise. A comment that credits a concept reference is reviewed for
-copied expression as well.
+command excludes the provenance pages, including a vendored component's
+`UPSTREAM.md` and `PATCHES/` notes, because they name the references by design.
+A name match in source code, a build file, or a test is a defect until proven
+otherwise. A comment that credits a concept reference is reviewed for copied
+expression as well.
 
-For a new vendored component, also compare the copied tree with the pinned
+For each vendored component, also compare the copied tree with the pinned
 upstream commit, for example with `git diff --no-index` against a clean
-checkout, and confirm that only the documented metadata files differ.
+checkout, and confirm that only the documented files differ. For llamaLite that
+means `Algorithm.hpp` and `traits.hpp`; every other upstream file must match.
 
 ### 7. Decide
 
@@ -201,9 +243,13 @@ audit is a merge gate, not a formality.
 ## Review checklist
 
 - [ ] License is on the allowlist.
-- [ ] Upstream URL and full commit SHA are recorded.
+- [ ] Upstream URL, upstream path, and full commit SHA are recorded.
 - [ ] License file is present and its SHA-256 is recorded.
 - [ ] Upstream files are unmodified, or every change is documented.
+- [ ] Every local change is a numbered note under `PATCHES/` and names the
+      affected file.
+- [ ] graphFlow adapters and integration code stay outside the vendored
+      subtree.
 - [ ] `THIRD_PARTY_NOTICES.md` and the inventory are updated.
 - [ ] `reuse lint` passes.
 - [ ] The copied-text scan is clean or explained.

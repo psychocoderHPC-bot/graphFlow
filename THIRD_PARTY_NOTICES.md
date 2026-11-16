@@ -13,9 +13,41 @@ external dependencies that the build consumes from their own installations.
 
 ## Vendored source
 
-At commit `e6856b8b0941b422a2069dbc4207fc344f6aa4da` the repository vendors no
-third-party source code. `include/graphFlow/thirdparty/` is present as a
-documented intake location and is empty apart from its README.
+### llamaLite
+
+graphFlow vendors llamaLite from the spearhed project.
+
+| Field | Value |
+| --- | --- |
+| Upstream | spearhed, <https://github.com/ComputationalRadiationPhysics/spearhed> |
+| Upstream path | `packages/pmacc/libs/llamaLite` |
+| Pinned commit | `aa79f32653452bdaea55d9786c57d1ab10a37b81` |
+| SPDX identifier | `MPL-2.0` |
+| Vendored path | `include/graphFlow/thirdparty/llamaLite/` |
+| Upstream files | 34, including upstream `LICENSE` and `README.md` |
+| Upstream license | `LICENSE`, SHA-256 `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04` |
+
+The upstream license file is kept byte-for-byte. Every upstream file is
+byte-identical to the pinned commit except `include/llamaLite/Algorithm.hpp`
+and `include/llamaLite/traits.hpp`. The changes are recorded as
+`include/graphFlow/thirdparty/llamaLite/PATCHES/0001-nvcc-12.5-explicit-lambda-template.md`
+and
+`include/graphFlow/thirdparty/llamaLite/PATCHES/0002-clang-unused-astype-parameter.md`,
+with reproductions and removal conditions. `UPSTREAM.md` and `PATCHES/` are
+graphFlow additions; the upstream `README.md` stays unmodified.
+
+The patches are written for upstream submission. Report them against
+`packages/pmacc/libs/llamaLite` at
+<https://github.com/ComputationalRadiationPhysics/spearhed/issues> and send the
+fix as a pull request to the same repository. Remove the local patch once
+upstream carries an equivalent change.
+
+The vendored subtree is not built as part of graphFlow. graphFlow-owned
+adapters and integration code live outside it: `include/graphFlow/flow/Attributes.hpp`
+and `include/graphFlow/flow/Execution.hpp` consume the public llamaLite
+headers, `tests/thirdparty/llamalite_smoke.cpp` exercises them, and the CMake
+target exports the vendored header root. Those files are graphFlow code under
+`MPL-2.0`, not upstream llamaLite.
 
 ## External build dependencies
 
@@ -48,24 +80,15 @@ material. Combining it with MPL-2.0 files would change the distribution terms
 for the combined work, which this project does not do. See
 [`docs/licensing.md`](docs/licensing.md) for the full policy.
 
+llamaLite is an independent header-only library. Only the llamaLite library is
+vendored from that repository. No PMacc, spmacc, or PIConGPU source is copied
+into the llamaLite subtree. The clean-room boundary covers graphFlow's
+classifier, kernels, and adapters. The llamaLite subtree is a separate
+`MPL-2.0` component with its own file boundary.
+
 The earlier internal repository `psychocoderHPC-bot/graph` is reference
 material only. Its runtime, scheduler, ABI, RNG, atomics, and warp-pool code
 were not ported. This is recorded in [`docs/plan.md`](docs/plan.md).
-
-## llamaLite
-
-llamaLite is not present in this repository. It may only be vendored later
-under the following conditions.
-
-- Its license is `MPL-2.0`, which is compatible with this project.
-- The vendored copy is unmodified. Reformatting, renaming, and local patches
-  are not applied in place.
-- The exact upstream commit SHA and repository URL are recorded in
-  [`docs/licensing.md`](docs/licensing.md) and in the component README.
-- The upstream license file is kept byte-for-byte under
-  `include/graphFlow/thirdparty/llamaLite/`, together with the upstream
-  notice file.
-- A notice is added to this file before the vendoring change is merged.
 
 ## Audit rule
 
@@ -78,8 +101,10 @@ The short form is:
    identifier, and the SHA-256 of the upstream license file.
 2. Copy source only from the allowlist in `docs/licensing.md`. Do not copy GPL,
    LGPL, AGPL, SSPL, or unlicensed code.
-3. Vendor the material unmodified under `include/graphFlow/thirdparty/<name>/`
-   with its license and a README that states the provenance.
+3. Vendor the upstream files unmodified under
+   `include/graphFlow/thirdparty/<name>/` with the license. A downstream patch
+   is a separate note under `PATCHES/`, names the affected upstream file, and
+   is written for upstream submission.
 4. Update this file and the inventory in `docs/licensing.md` in the same
    change.
 5. Run `reuse lint` and the source-text audit described in
