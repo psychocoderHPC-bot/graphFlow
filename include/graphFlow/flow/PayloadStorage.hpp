@@ -569,6 +569,60 @@ namespace graphFlow
         ScratchType m_binIds;
     };
 
+    namespace detail
+    {
+        template<typename>
+        struct AlwaysFalse : std::false_type
+        {
+        };
+
+        /** True if `TStorage` is one `SoAStorage` specialization. */
+        template<typename TStorage>
+        struct IsSoAStorage : std::false_type
+        {
+        };
+
+        template<typename TDevice, typename... TAttrs>
+        struct IsSoAStorage<SoAStorage<TDevice, TAttrs...>> : std::true_type
+        {
+        };
+
+        /** Maps a `Record<Fields...>` to its matching `SoAStorage<Device, Fields...>`. */
+        template<typename TRecord, typename TDevice>
+        struct SoAStorageForRecord
+        {
+            static_assert(
+                AlwaysFalse<TRecord>::value,
+                "graphFlow::SoAFlow: the payload type must be a graphFlow::Record<Fields...>");
+
+            /** Placeholder so naming `::type` instantiates this body and reports the message. */
+            using type = void;
+        };
+
+        template<typename... Fields, typename TDevice>
+        struct SoAStorageForRecord<Record<Fields...>, TDevice>
+        {
+            using type = SoAStorage<TDevice, Fields...>;
+        };
+
+        /** Checks whether an explicit storage can hold `TRecord` without reinterpreting fields.
+         *
+         * Non-SoA storages keep their own layout and are always accepted. A `SoAStorage` must have
+         * exactly the record's field pack, including order, so `Flow` cannot silently pair a record
+         * with columns of a different type.
+         */
+        template<typename TRecord, typename TStorage>
+        struct SoAStorageMatchesRecord : std::bool_constant<!IsSoAStorage<TStorage>::value>
+        {
+        };
+
+        template<typename... Fields, typename TDevice, typename... TAttrs>
+        struct SoAStorageMatchesRecord<Record<Fields...>, SoAStorage<TDevice, TAttrs...>>
+            : std::bool_constant<std::same_as<std::tuple<Fields...>, std::tuple<TAttrs...>>>
+        {
+        };
+    } // namespace detail
+
     /** Default storage of a `Flow` payload.
      *
      * The canonical particle payload keeps the SoA `ParticleStorage` the kernels expect. Every
