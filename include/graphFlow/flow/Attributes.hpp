@@ -15,6 +15,19 @@
 #include <type_traits>
 #include <utility>
 
+/** Declare one attribute tag and its field descriptor from a single name and value type.
+ *
+ * `GRAPHFLOW_ATTRIBUTE(Id, std::uint64_t)` expands to a tag `IdTag` derived from
+ * `graphFlow::TagBase` and a field alias `IdField` equal to `graphFlow::Field<IdTag, std::uint64_t>`.
+ * The tag is empty and the alias is a pure type descriptor, so the pair can be used everywhere a
+ * hand-written tag and field are accepted. `T` must be trivially copyable.
+ */
+#define GRAPHFLOW_ATTRIBUTE(Name, T)                                                                                  \
+    struct Name##Tag : ::graphFlow::TagBase                                                                           \
+    {                                                                                                                 \
+    };                                                                                                                \
+    using Name##Field = ::graphFlow::Field<Name##Tag, T>
+
 namespace graphFlow
 {
     /** Base class of an attribute tag, re-exported from llamaLite.
@@ -107,6 +120,15 @@ namespace graphFlow
         template<typename Tag>
         using value_type = typename field_type<Tag>::value_type;
     };
+
+    /** Short spelling of `AttributeList` for field packs gathered from several attributes.
+     *
+     * `Attributes<IdField, WeightField>` is the same type as
+     * `AttributeList<IdField, WeightField>`; the alias keeps a `Record` and its storage declaration
+     * readable when the fields come from `GRAPHFLOW_ATTRIBUTE`.
+     */
+    template<typename... Fields>
+    using Attributes = AttributeList<Fields...>;
 
     namespace detail
     {

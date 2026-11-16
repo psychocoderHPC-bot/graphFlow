@@ -48,6 +48,13 @@ namespace
         std::uint64_t id = 0u;
         std::uint32_t weight = 0u;
     };
+
+    // The declaration helper expands to the tag and field pair used by the checks below.
+    GRAPHFLOW_ATTRIBUTE(HelperId, std::uint64_t);
+    GRAPHFLOW_ATTRIBUTE(HelperValue, std::uint32_t);
+
+    using HelperAttributes = graphFlow::Attributes<HelperIdField, HelperValueField>;
+    using HelperRecord = graphFlow::Record<HelperIdField, HelperValueField>;
 } // namespace
 
 TEST_CASE("attribute records expose named fields and copy all attributes", "[attributes][static]")
@@ -243,4 +250,29 @@ TEST_CASE("attribute slot accounting matches the default payload storage", "[att
     CHECK(storage.binIds()[5u] == 2u);
     CHECK(storage.column<IdTag>()[5u] == 11u);
     CHECK(storage.column<WeightTag>()[5u] == 12u);
+}
+
+TEST_CASE("attribute declaration helpers generate a tag and field pair", "[attributes][static]")
+{
+    static_assert(std::is_empty_v<HelperIdTag>);
+    static_assert(std::derived_from<HelperIdTag, graphFlow::TagBase>);
+    static_assert(std::same_as<HelperIdField, graphFlow::Field<HelperIdTag, std::uint64_t>>);
+    static_assert(std::same_as<HelperValueField, graphFlow::Field<HelperValueTag, std::uint32_t>>);
+
+    static_assert(std::same_as<HelperAttributes, graphFlow::AttributeList<HelperIdField, HelperValueField>>);
+    static_assert(std::same_as<HelperAttributes, graphFlow::Attributes<HelperIdField, HelperValueField>>);
+    static_assert(HelperAttributes::size == 2u);
+    static_assert(HelperAttributes::template contains<HelperIdTag>);
+    static_assert(!HelperAttributes::template contains<UnknownTag>);
+    static_assert(HelperAttributes::template index<HelperValueTag> == 1u);
+    static_assert(std::same_as<HelperAttributes::value_type<HelperIdTag>, std::uint64_t>);
+
+    static_assert(HelperRecord::size == 2u);
+    static_assert(std::same_as<typename HelperRecord::attribute_list, HelperAttributes>);
+
+    HelperRecord record{9u, 4u};
+    CHECK(record.get<HelperIdTag>() == 9u);
+    CHECK(record.get<HelperValueTag>() == 4u);
+    record.set<HelperValueTag>(7u);
+    CHECK(record.get<HelperValueTag>() == 7u);
 }
