@@ -66,6 +66,9 @@ namespace graphFlow
                 { TStorage::slotBytes } -> std::convertible_to<std::uint64_t>;
             },
             "graphFlow::Flow: the storage type must expose static constexpr slotBytes");
+        static_assert(
+            detail::SoAStorageMatchesRecord<TPayload, TStorage>::value,
+            "graphFlow::Flow: the SoAStorage attribute pack must match the payload Record field pack");
 
         explicit Flow(TDevice device)
             : m_device{std::move(device)}
@@ -627,4 +630,12 @@ namespace graphFlow
         Tuning m_tuning;
         std::function<void(std::string const&)> m_stallDetailCallback;
     };
+
+    /** Application-facing `Flow` whose storage is deduced from a `Record` payload.
+     *
+     * Shorthand for `Flow<Record<Fields...>, TDevice, SoAStorage<TDevice, Fields...>>`. The
+     * attribute pack comes from the record, so the payload and its columns cannot drift apart.
+     */
+    template<typename TRecord, typename TDevice>
+    using SoAFlow = Flow<TRecord, TDevice, typename detail::SoAStorageForRecord<TRecord, TDevice>::type>;
 } // namespace graphFlow
