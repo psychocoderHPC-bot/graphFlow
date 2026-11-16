@@ -248,6 +248,24 @@ memory is 5702 MiB. This is the recorded P0 acceptance run; the hal A30
 numbers above stay labelled shared-host baselines. H100 was not used, so no
 H100 claim is made.
 
+## Measured AoS vs default (main `3ee436d`)
+
+Provenance: main `3ee436dfcdbf28999538d165517b3565902f0d07`, N=1e7, C=8192,
+P=16384, Q=8, seed 42. Three processes times five repetitions per configuration;
+each run prints the full histogram and its sum equals N exactly. Both
+configurations share the halo payload (hal shared), so the wall-time difference
+is attributable to layout, not payload. The default (SoA) path is unchanged. No
+H100 was used. No claim beyond this setup is made.
+
+| Backend | AoS wall s | default wall s | AoS vs default |
+| --- | ---: | ---: | ---: |
+| CPU | 1.3211 | 1.3075 | -1.0% |
+| CUDA (A30) | 0.3036 | 0.2797 | -7.9% |
+| HIP (gfx1100) | 0.4773 | 0.4601 | -3.6% |
+| SYCL (A770) | 3.6457 | 3.5111 | -3.7% |
+
+No storage-attributable overhead above 2% is observed in any configuration.
+
 ## Current state and caveats
 
 - The integrated main adds device-aware `C`/`P`/`T`, multi-chunk batching with
