@@ -46,8 +46,8 @@ a second record implementation.
 | `Field<Tag, T>` | Compile-time attribute descriptor; `T` must be trivially copyable. |
 | `Set<Tags...>` | Per-node read/write subset with a compile-time `contains<Tag>`. |
 | `AttributeList<Fields...>` | Validated, ordered list; source of truth for names, order, value types, and slot accounting. |
-| `Record<Fields...>` | Value record with `get<Tag>()`, `set<Tag>()`, and value semantics. |
-| `RecordProxy<TAccess, TSet>` | Narrow view that rejects `get`/`set` outside its set at compile time. |
+| `Record<Fields...>` | Value record with `get<Tag>()`, `set<Tag>()`, `operator[](Tag)`, and value semantics. |
+| `RecordProxy<TAccess, TSet>` | Narrow view whose `get`, `set`, and `operator[]` reject tags outside its set at compile time. |
 | `SoAStorage<TDevice, Fields...>` | Payload storage with one device column per attribute plus a bin-id scratch column. |
 
 A tag is an empty type derived from `graphFlow::TagBase`; two attributes with
@@ -56,13 +56,15 @@ descriptor only: values live in a `Record` or in an `SoAStorage` column. An
 `AttributeList` requires at least one field and rejects a field whose value
 type is not trivially copyable.
 
+`GRAPHFLOW_TAG(Id, idTag)` declares `IdTag` and a `constexpr` value `idTag`
+that names it; the one-argument form `GRAPHFLOW_TAG(Id)` names the value
+`IdTag_v`. Passing a tag value to `operator[]` adds no runtime state: the tag
+is empty and only selects the attribute at compile time. `GRAPHFLOW_ATTRIBUTE`
+and hand-written tag structs keep working unchanged.
+
 ```cpp
-struct IdTag : graphFlow::TagBase
-{
-};
-struct WeightTag : graphFlow::TagBase
-{
-};
+GRAPHFLOW_TAG(Id, idTag);
+GRAPHFLOW_TAG(Weight, weightTag);
 
 using Id = graphFlow::Field<IdTag, std::uint64_t>;
 using Weight = graphFlow::Field<WeightTag, std::uint32_t>;
@@ -75,10 +77,13 @@ graphFlow::Flow<ItemRecord, TDevice, ItemStorage> flow{device};
 
 `Record<Fields...>` is trivially copyable and default constructible, so it
 satisfies `Payload`. Its value storage is a one-element `llama_lite::SoA`, so
-copying a record copies every attribute. `record.proxy<Set<Tags...>>()` returns
-a `RecordProxy`; `get<Tag>()` and `set<Tag>()` outside that set fail at compile
-time. `load()`, the conversion to `record_type`, and `store()` operate on the
-whole record: copying a proxy into a `Record` copies every attribute, including
+copying a record copies every attribute. `record[idTag]` is the subscript
+spelling of `record.get<IdTag>()` and, on a mutable record, returns the value
+reference needed for `record[idTag] = value` or `record[idTag] += value`.
+`record.proxy<Set<Tags...>>()` returns a `RecordProxy` whose `get<Tag>()`,
+`set<Tag>()`, and `operator[]` reject tags outside that set at compile time.
+`load()`, the conversion to `record_type`, and `store()` operate on the whole
+record: copying a proxy into a `Record` copies every attribute, including
 attributes outside the set. The proxy narrows access, not the record layout or
 the copy. `transform(name, functor)` passes the full `Record` payload.
 `flow.transform<Set<Tags...>>(name, functor)` is an additive overload that hands
@@ -154,8 +159,9 @@ that wants attribute columns migrates only its own payload:
    fixes the column and kernel-argument order.
 2. Pass `SoAStorage<TDevice, Fields...>` as the third `Flow` template argument.
    The record type is the first argument and the two field lists must match.
-3. Replace field access (`payload.id`) with `payload.get<IdTag>()` and
-   `payload.set<IdTag>(value)`; source functors construct the record from the
+3. Replace field access (`payload.id`) with `payload[idTag]` (or
+   `payload.get<IdTag>()`) and assignments with `payload[idTag] = value` (or
+   `payload.set<IdTag>(value)`); source functors construct the record from the
    declared fields. A node may call `record.proxy<Set<Tags...>>()` or
    `storage.proxy<Set<Tags...>>(slot)`, but a record copy still carries every
    attribute.
@@ -217,12 +223,8 @@ canonical particle type keeps the `ParticleStorage` default.
 pack is written once.
 
 ```cpp
-struct IdTag : graphFlow::TagBase
-{
-};
-struct ValueTag : graphFlow::TagBase
-{
-};
+GRAPHFLOW_TAG(Id, idTag);
+GRAPHFLOW_TAG(Value, valueTag);
 
 using Id = graphFlow::Field<IdTag, std::uint64_t>;
 using Value = graphFlow::Field<ValueTag, std::uint32_t>;
@@ -243,11 +245,11 @@ flow.configure(graphFlow::Tuning{});
 flow.run(source, count);
 ```
 
-`Generate` returns a `Particle` from an item index, `Bump` mutates
-`ValueTag`, `Mod2` declares `maxBins = 2` and returns a bin, `AddBin` adds the
-selected bin to `ValueTag`, and `RecordValue` writes the result into an
-application-owned view. Every functor is a named, device-copyable struct that
-uses `ALPAKA_FN_ACC`. The complete source is
+`Generate` returns a `Particle` from an item index, `Bump` mutates the value
+through `particle[valueTag]`, `Mod2` declares `maxBins = 2` and reads
+`particle[idTag]`, `AddBin` adds the selected bin to `particle[valueTag]`, and
+`RecordValue` writes the result into an application-owned view. Every functor
+is a named, device-copyable struct that uses `ALPAKA_FN_ACC`. The complete source is
 `examples/record_pipeline/main.cpp`; it uses the public
 `graphFlow::SoAFlow<Particle, Device>` alias.
 
@@ -295,8 +297,8 @@ payload and storage:
    template arguments still selects `DefaultStorage`, which is
    `PayloadSlotStorage` for any payload other than `graphFlow::Particle`; it
    does not give per-attribute columns.
-3. Replace `payload.id` with `payload.get<IdTag>()` and assignments with
-   `payload.set<IdTag>(value)`.
+3. Replace `payload.id` with `payload[idTag]` (or `payload.get<IdTag>()`) and
+   assignments with `payload[idTag] = value` (or `payload.set<IdTag>(value)`).
 4. Use `binIds()` only in custom classify/scatter stages. The built-in stages
    manage their own scratch column.
 
