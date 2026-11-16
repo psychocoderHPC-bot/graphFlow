@@ -183,6 +183,8 @@ examples/particle_feedback/
   ParticleTypes.hpp    parameters and histogram formatting
   ParticleFeedback.hpp Flow graph construction and run function
   ParticleStages.hpp   deprecated low-level stages kept for older tests
+examples/record_pipeline/
+  main.cpp             Record and SoAFlow attribute-column pipeline
 examples/photon_scattering/
   Cli.hpp              option parsing
   main.cpp             backend selection and output dispatch

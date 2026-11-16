@@ -206,6 +206,126 @@ hash path, or when a hash run requests a tile wider than
 `chunkCapacity`). A stall throws `SchedulerStallError`; `snapshot()` on the
 runner and on the error exposes the same aggregate state without topology.
 
+## Quickstart: `SoAFlow<Particle>`
+
+The snippet below declares an application record named `Particle` and runs it
+with column storage. It is a custom record, not `graphFlow::Particle`; the
+canonical particle type keeps the `ParticleStorage` default.
+`graphFlow::SoAFlow<Record, Device>` is the public shorthand for
+`Flow<Record, Device, SoAStorage<Device, Fields...>>`; the record attribute
+pack is written once.
+
+```cpp
+struct IdTag : graphFlow::TagBase
+{
+};
+struct ValueTag : graphFlow::TagBase
+{
+};
+
+using Id = graphFlow::Field<IdTag, std::uint64_t>;
+using Value = graphFlow::Field<ValueTag, std::uint32_t>;
+using Particle = graphFlow::Record<Id, Value>;
+
+using Device = decltype(device);
+graphFlow::SoAFlow<Particle, Device> flow{device};
+
+auto source = flow.source("source", Generate{});
+auto bump = flow.transform("bump", Bump{});
+auto split = flow.partition("split", Mod2{}, AddBin{});
+auto sink = flow.sink("record", RecordValue<decltype(values.getView())>{values.getView()});
+flow.connect(source, bump);
+flow.connect(bump, split);
+flow.connect(split.template out<0u>(), sink);
+flow.connect(split.template out<1u>(), sink);
+flow.configure(graphFlow::Tuning{});
+flow.run(source, count);
+```
+
+`Generate` returns a `Particle` from an item index, `Bump` mutates
+`ValueTag`, `Mod2` declares `maxBins = 2` and returns a bin, `AddBin` adds the
+selected bin to `ValueTag`, and `RecordValue` writes the result into an
+application-owned view. Every functor is a named, device-copyable struct that
+uses `ALPAKA_FN_ACC`. The complete source is
+`examples/record_pipeline/main.cpp`; it uses the public
+`graphFlow::SoAFlow<Particle, Device>` alias.
+
+Build and run it:
+
+```sh
+cmake --build build-cpu --target graphFlow_record_pipeline
+./build-cpu/graphFlow_record_pipeline
+# record_pipeline: 10 12 12 14 14 16 16 18 sum=112
+```
+
+The output is a correctness check, not a performance result.
+
+## Migrating from the low-level API
+
+The legacy path assembled numeric nodes with `GraphBuilder`, registered hooks,
+and sized a `ChunkPool`/`GraphRunner` by hand. The public path replaces that
+setup:
+
+1. Keep the domain functors. Give each a stable name and mark accelerator code
+   with `ALPAKA_FN_ACC`.
+2. Replace `addNode`/`setSource` calls with `source`, `transform`, `partition`,
+   and `sink`. Store the returned handles.
+3. Replace route vectors and numeric `NodeId` values with `connect`. A
+   multi-output node connects through `out<Bin>()`, or through
+   `connect(node, bin, node)` when the bin is only known at runtime.
+4. Replace manual `ChunkPool`/`GraphRunner` construction with
+   `configure(Tuning)` and `run(source, count)`. `Flow` constructs and retires
+   the storage, stages, queues, and events.
+5. Keep result views in application-owned buffers; they must outlive `run()`.
+
+### From `ParticleStorage` to `Record` and `SoAStorage`
+
+`graphFlow::Particle` with its default `ParticleStorage` stays the canonical
+particle path. An application that wants attribute columns changes only its
+payload and storage:
+
+1. Declare one tag derived from `graphFlow::TagBase` and one `Field<Tag, T>` per
+   attribute. List the fields in the `Record` and the `SoAStorage` in the same
+   order.
+2. Pass `Record<Fields...>` as the `Flow` payload and
+   `SoAStorage<TDevice, Fields...>` as the third template argument, or use
+   `SoAFlow<Record<Fields...>, TDevice>`, which deduces the storage from the
+   record. The two field lists must match. A custom record with only two
+   template arguments still selects `DefaultStorage`, which is
+   `PayloadSlotStorage` for any payload other than `graphFlow::Particle`; it
+   does not give per-attribute columns.
+3. Replace `payload.id` with `payload.get<IdTag>()` and assignments with
+   `payload.set<IdTag>(value)`.
+4. Use `binIds()` only in custom classify/scatter stages. The built-in stages
+   manage their own scratch column.
+
+`slotBytes` is the accounting size (padded attributes plus one `uint32_t`
+scratch word), not one contiguous array. The payload budget and pool sizing
+keep their meaning.
+
+## Compile errors and fixes
+
+The type-level contracts fail at compile time. Read the first `static_assert`
+or concept diagnostic.
+
+| Diagnostic | Cause and fix |
+| --- | --- |
+| `graphFlow::Flow: the payload type does not satisfy Payload` | The payload is not trivially copyable or not default-constructible. Use a `Record` or a trivial POD. |
+| `no matching function for call to` on `source`, `transform`, `partition`, or `sink` | The functor signature does not match its role. A source returns the payload, a transform takes `Payload&` or returns the payload, a classifier declares `static constexpr std::uint32_t maxBins` and returns a bin, and a sink takes `Payload const&`. |
+| `graphFlow: a multi-output node must be connected via out<Bin>(), not connect(node, node)` | The partition handle was connected directly. Connect each output with `out<Bin>()` or with the runtime-bin overload. |
+| `graphFlow::Record: get<Tag>() names an unknown attribute` | The tag is not one of the record fields. Add the `Field<Tag, T>` to the record or use the correct tag. |
+| `graphFlow::RecordProxy: get<Tag>() is outside the node's attribute subset` | The proxy was created with a `Set<Tags...>` that does not contain the requested tag. Widen the set or use a tag in it. |
+| `graphFlow::SoAStorage: proxy Set contains a tag that is not an attribute` | The `Set` passed to `proxy` names a tag outside the storage field list. |
+| `graphFlow::Flow: the storage type must be constructible from (device, numChunks, chunkCapacity)` | A custom storage does not provide the constructor `Flow` uses. Add it or use `SoAStorage`/`DefaultStorage`. |
+| `graphFlow: an attribute list must contain at least one field`, `every attribute must be a graphFlow::Field<Tag, T>`, or `attribute value types must be trivially copyable` | The `Record`/`SoAStorage` field list is empty, contains a non-field type, or stores a non-trivially-copyable value. |
+| `graphFlow: a partition needs at least one bin` | The classifier declares `maxBins = 0`. Use a positive bin count. |
+
+A functor that omits `ALPAKA_FN_ACC` can compile for the host backend and then
+fail when the same file is compiled for CUDA, HIP, or SYCL. Mark every functor,
+classifier, and updater with `ALPAKA_FN_ACC` or `ALPAKA_FN_HOST_ACC` as
+required. `Tuning` is a runtime object; it is not a template argument and does
+not change functor signatures.
+
 ## Failure status
 
 A functor may take an optional `Status&` argument after the optional
@@ -340,7 +460,23 @@ run is a correctness record and makes no performance claim.
 
 ## Examples
 
-The two example binaries are the executable contract of this API.
+The three example binaries are the executable contract of this API.
+
+### Record pipeline
+
+`examples/record_pipeline` is the minimal AoS-over-SoA pipeline from the
+quickstart. It uses `Record<Id, Value>`, `SoAStorage<Device, Id, Value>`, one
+source, one transform, a two-bin partition, and one sink. It prints the eight
+result values and their sum:
+
+```sh
+./build-cpu/graphFlow_record_pipeline
+# record_pipeline: 10 12 12 14 14 16 16 18 sum=112
+```
+
+CTest registers `example.record_pipeline.api` for the source-level contract and
+`example.record_pipeline.run` for the binary output when the example target is
+built. The run is a correctness check, not a performance result.
 
 ### Particle feedback
 

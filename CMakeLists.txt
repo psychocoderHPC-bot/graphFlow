@@ -62,7 +62,7 @@ option(
 )
 option(GRAPHFLOW_ENABLE_OPENMP "Enable the OpenMP executor" OFF)
 option(GRAPHFLOW_BUILD_TESTS "Build the Catch2 test suite" ON)
-option(GRAPHFLOW_BUILD_EXAMPLES "Build the particle-feedback example" ON)
+option(GRAPHFLOW_BUILD_EXAMPLES "Build the example binaries" ON)
 
 set(
     GRAPHFLOW_ALPAKA_SOURCE_DIR
@@ -240,6 +240,10 @@ if(GRAPHFLOW_BUILD_EXAMPLES)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/particle_feedback
     )
     alpaka_finalize(graphFlow_particle_feedback)
+
+    add_executable(graphFlow_record_pipeline examples/record_pipeline/main.cpp)
+    target_link_libraries(graphFlow_record_pipeline PRIVATE graphFlow::graphFlow)
+    alpaka_finalize(graphFlow_record_pipeline)
 
     add_executable(graphFlow_photon_scattering examples/photon_scattering/main.cpp)
     if(GRAPHFLOW_ENABLE_SYCL)
@@ -433,6 +437,34 @@ if(GRAPHFLOW_BUILD_TESTS)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_public_api.cmake"
     )
     set_tests_properties(example.public_api PROPERTIES LABELS "example;api")
+
+    # Source-level contract for the minimal AoS-over-SoA example: it must declare
+    # the record explicitly, use the public SoAFlow alias, and drive the graph
+    # with Flow handles, not the low-level GraphBuilder, GraphRunner, or
+    # ChunkPool setup.
+    add_test(
+        NAME example.record_pipeline.api
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DEXAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/examples/record_pipeline"
+            "-DEXAMPLE_KIND=record"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/example_public_api.cmake"
+    )
+    set_tests_properties(example.record_pipeline.api PROPERTIES LABELS "example;api;record")
+
+    if(TARGET graphFlow_record_pipeline)
+        add_test(
+            NAME example.record_pipeline.run
+            COMMAND $<TARGET_FILE:graphFlow_record_pipeline>
+        )
+        set_tests_properties(
+            example.record_pipeline.run
+            PROPERTIES
+                TIMEOUT 120
+                LABELS "example;cli;record;cpu"
+                PASS_REGULAR_EXPRESSION "record_pipeline: 10 12 12 14 14 16 16 18 sum=112"
+        )
+    endif()
 
     # Binary-level contract for the example CLI. This complements, rather than
     # replaces, the in-process Catch2 matrix: every case runs the real
