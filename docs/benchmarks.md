@@ -345,11 +345,26 @@ The off path against the unmodified binary in the same window is +0.37% on the
 A30, -0.62% on the RTX 2080 Ti and -0.31% on the GV100, so the off path shows
 no regression within noise.
 
-Mechanism, from profiling on the same runs: the gain tracks the 512-thread
-block the per-chunk policy selects (active warps rise from 6.1% to 21.2% of
-peak) while the active CTAs per SM stay identical, so the improvement is not
-from eliminating idle blocks. The per-chunk path multiplies the sink and
-partition launches and gives back roughly 36 ms of the transform-stage gain.
+Mechanism, from a controlled constant-threads-per-block experiment on hal A30
+(code `c7ff8e21e509733c17c90968f8d6656dce03466c`, experiment-only override of
+the threads-per-block setting, otherwise identical harness and flags): the
+gain is the per-chunk dispatch itself. The batch-wide transform derives its
+grid from the particle count while assigning one block per chunk, so with two
+particles per chunk at most about 2 of up to 66 blocks do any work; a
+per-chunk launch spreads each chunk across up to 33 blocks. At constant 128
+threads per block, transform GPU time falls from 281.8 ms to 73.6 ms, and the
+paired decomposition of the same workload (12 interleaved accepted reps,
+storage C=4224 P=8448 T=128 in every run, physics md5
+`9cbb15ab113a85ff23f1fa406dc0eda8` in all 84 accepted runs) attributes
+-91.0 ms (-5.19%, bootstrap 95% CI [-5.85, -4.93]) to the dispatch alone and
+the shipped 512-thread default to only +12.0 ms (+0.73%, CI [0.00, +1.30],
+512 faster in 3 of 12 paired reps). Active-CTA-per-SM counters appear
+identical across variants, which is why that metric must not be used to judge
+this change. The per-chunk path multiplies the sink and partition launches,
+costing +19.3 ms and +14.4 ms on this card and workload, which returns 16-22%
+of the transform saving. The 512-thread per-chunk default was not tuned and
+128 threads per block measured about 0.7% faster, with the confidence
+interval touching zero, so the default was left unchanged.
 The whole-process wall time includes a 0.31-0.34 s start-up floor on fwk394,
 so the steady-phase improvement is larger than the wall percentage. The
 magnitudes are card-specific and must not be extrapolated, and the queue depth
