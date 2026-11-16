@@ -382,6 +382,33 @@ python3 tools/plot_photon_scattering.py --input /tmp/photon-isotropic \
   --out /tmp/photon-isotropic/plots
 ```
 
+The transform launch schedule is opt-in:
+
+```sh
+./build-cuda/graphFlow_photon_scattering --backend cuda --photons 4000000 \
+  --thickness 4 --sigma-s 0.5 --sigma-a 0.05 --mode isotropic \
+  --max-scatters 32 --seed 7 --batch-chunks 8 --chunk-kernel-schedule perChunk
+```
+
+`--chunk-kernel-schedule off|perChunk` (default `off`) selects the transform
+launch schedule. `off` keeps the historical batch-wide transform launch;
+`perChunk` issues one kernel launch per input chunk, so a partial tail launches
+with its own fill and never shares a launch with a neighbour. The switch
+changes launch geometry only: the storage chunk capacity, the pool size and the
+host-side output-position planning stay what the device policy derived. Only
+`Flow::transform` nodes are affected; partition nodes keep the batch path.
+`--chunk-queue-depth D` (default 1) is the number of non-blocking device queues
+each per-chunk transform node owns, so its chunks run and retire independently;
+one keeps a single serial queue. `--chunk-latency-cap-us U` (default 0, no
+cap) is the per-chunk launch latency cap in microseconds; it clamps only the
+capacity and wave count that the per-chunk launch-size policy reports, at a
+fixed 10 us per wave, and never changes the storage chunk capacity.
+
+The `# scheduler` line of the run ends in `chunkLaunches=<count>
+chunkLimit=<name>`; `chunkLimit` names the clamp that set the per-chunk
+launch-size policy (`wave`, `maximum`, `grid`, `memory` or `latency`). The off
+path reports `chunkLaunches=0 chunkLimit=none`.
+
 Each run writes `figure1_paths`, `figure2_scatter_spectrum`,
 `figure3_outcomes` and `figure4_detector` as PNG, SVG and PDF. Figure 1 shows
 the x-z projection with the scripted three-scatter reflected path from the

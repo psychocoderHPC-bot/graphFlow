@@ -199,6 +199,25 @@ axes (`scatterMode` and `binPath`), and an optional `stallTimeout`
 (`std::chrono::milliseconds`). It never changes payload semantics or routes;
 tuning is not an argument of the minimal calls above.
 
+`Tuning::chunkKernelSchedule` selects the transform launch schedule; absence
+keeps `ChunkKernelSchedule::off`, the historical batch-wide launch, and
+`ChunkKernelSchedule::perChunk` is the opt-in that issues one kernel launch per
+input chunk. The schedule changes launch geometry only: the storage chunk
+capacity, the pool size, the payload layout and the host-side output-position
+planning stay what the device policy derived. It affects
+`Flow::transform` nodes only; source, sink and partition nodes keep the batch
+path, because the per-chunk queue pools are allocated only for transform nodes.
+`Tuning::chunkQueueDepth` (default 1) is the number of non-blocking device
+queues a per-chunk transform node owns; lane `i` enqueues on queue
+`i % chunkQueueDepth`, so the chunks of one node run and retire independently.
+Zero is rejected when the schedule is `perChunk`. `Tuning::chunkLatencyCapUs`
+(default 0, meaning no cap) is the per-chunk launch latency cap in
+microseconds; it clamps only the capacity and wave count that the per-chunk
+launch-size policy reports, at a fixed 10 us per wave, and never changes the
+storage chunk capacity. The `photon_scattering` CLI exposes the three knobs as
+`--chunk-kernel-schedule off|perChunk` (default `off`), `--chunk-queue-depth D`
+(default 1) and `--chunk-latency-cap-us U` (default 0).
+
 `scatterMode` selects `ScatterMode::SharedStaging` (the default) or
 `ScatterMode::Direct` on the dense path. `binPath` is `BinPath::automatic` by
 default: it selects dense up to `Config::denseBinLimit` bins and the
@@ -211,7 +230,10 @@ hash path, or when a hash run requests a tile wider than
 `peakReadyNodes`, `maxReadyDepth`, `peakInflightBatches`, `peakInflightChunks`,
 `peakReservedChunks`, `peakEventSlotsInUse`) and source counters
 (`sourceParticles`, `sourceGenerated`, `sourceSunk`, `sourceLiveParticles`,
-`chunkCapacity`). A stall throws `SchedulerStallError`; `snapshot()` on the
+`chunkCapacity`). The schedule adds `chunkLaunches`, the number of enqueued
+per-chunk transform kernels, and `chunkLimit`, the clamp name
+(`wave`, `maximum`, `grid`, `memory` or `latency`) that set the per-chunk
+launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A stall throws `SchedulerStallError`; `snapshot()` on the
 runner and on the error exposes the same aggregate state without topology.
 
 ## Quickstart: `SoAFlow<Particle>`
@@ -549,6 +571,17 @@ mkdir -p /tmp/photon-forward
 python3 tools/plot_photon_scattering.py --input /tmp/photon-forward \
   --out /tmp/photon-forward/plots
 ```
+
+`--chunk-kernel-schedule off|perChunk` (default `off`) selects the transform
+launch schedule described above; a user opts in when the device has enough
+resident warps for a 512-thread block and the per-chunk launch overlap pays
+for itself, for example the measured runs in [benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-scattering).
+`--chunk-queue-depth D` (default 1) sets the queue pool of each per-chunk
+transform node, and `--chunk-latency-cap-us U` (default 0, no cap) clamps the
+capacity and waves that launch-size policy reports without touching the storage
+chunk capacity. With `perChunk` the scheduler line ends in
+`chunkLaunches=<count> chunkLimit=<name>`; the off path ends in
+`chunkLaunches=0 chunkLimit=none`.
 
 `--output-dir` writes `metadata.csv`, `outcomes.csv`,
 `scatter_histogram.csv`, `exits.csv`, `traces.csv` and `trace_summary.csv`.
