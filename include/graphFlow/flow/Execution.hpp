@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -691,6 +692,70 @@ namespace graphFlow::detail
                         payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
                     access.store(outSlot, payload, out...);
                 }
+            }
+        }
+    };
+
+    /** Out-of-place transform kernel of one input chunk.
+     *
+     * One launch covers exactly one chunk descriptor: the grid spreads over the chunk's `fill`,
+     * every payload is read at `inBase + i` and written at the batch-global output position
+     * `position + i`, and a partial tail simply has a smaller `fill`. There is no zero-fill, no
+     * neighbour access and no merge with another chunk. The output position math is the batch
+     * accounting of the off path: `global / chunkCapacity` selects the output chunk and
+     * `global % chunkCapacity` its offset, so the multi-chunk output table stays authoritative.
+     */
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TSet = void,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct TransformPerChunkKernel;
+
+    template<typename TFunctor, typename TAccess, typename TSet, typename... TInViews, typename... TOutViews>
+    struct TransformPerChunkKernel<TFunctor, TAccess, TSet, std::tuple<TInViews...>, std::tuple<TOutViews...>>
+    {
+        TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
+
+        template<
+            alpaka::onAcc::concepts::Acc TAcc,
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TOutChunks>
+        ALPAKA_FN_ACC void operator()(
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
+            TStatusView statusView,
+            TOutChunks outChunks,
+            std::uint32_t statusSlot,
+            std::uint32_t inBase,
+            std::uint32_t position,
+            std::uint32_t fill,
+            std::uint32_t chunkCapacity) const
+        {
+            using namespace alpaka;
+            TAccess access;
+            Status status{&statusView[statusSlot]};
+            for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{fill}))
+            {
+                std::uint64_t const index = static_cast<std::uint64_t>(i);
+                if(index >= fill)
+                    break;
+                std::uint32_t const offset = static_cast<std::uint32_t>(index);
+                std::uint32_t const global = position + offset;
+                std::uint32_t const outputChunk = global / chunkCapacity;
+                std::uint32_t const outputOffset = global % chunkCapacity;
+                std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
+                typename TAccess::Payload payload = access.load(inBase + offset, in...);
+                rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+                if constexpr(std::is_void_v<TSet>)
+                    payload = applyTransform(functor, acc, engine, status, std::move(payload));
+                else
+                    payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
+                access.store(outSlot, payload, out...);
             }
         }
     };
@@ -1428,6 +1493,7 @@ namespace graphFlow::detail
             , m_batchChunks{config.batchChunks}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
+            , m_chunkSchedule{config.chunkKernelSchedule}
             , m_reserveBound{checkedReserveBound(m_capacity, config.batchChunks)}
             , m_inBase{alpaka::onHost::alloc<std::uint32_t>(
                   device,
@@ -1459,11 +1525,27 @@ namespace graphFlow::detail
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
             m_pending.reserve(m_reserveBound);
+            if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
+            {
+                // Per-chunk completion slots: one status word per input chunk of a batch, so a
+                // fan-out never has two kernels writing the same word. The buffers are allocated
+                // only for the opt-in schedule; the off path allocates exactly what it did before.
+                m_chunkStatus.emplace(
+                    alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
+                m_chunkStatusHost.emplace(
+                    alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
+            }
         }
 
         void launch(Queue const& queue, Batch const& batch) override
         {
             throwIfFailed();
+            if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
+            {
+                // The per-chunk path is a separate member; the batch-wide body below is unchanged.
+                launchPerChunk(queue, batch);
+                return;
+            }
             if(batch.chunks.empty())
                 throw BatchError{"transform: empty batch"};
             if(batch.chunks.size() > m_batchChunks)
@@ -1592,6 +1674,97 @@ namespace graphFlow::detail
             return static_cast<std::uint32_t>(chunks);
         }
 
+        /** One kernel launch per input chunk, frames sized from that chunk's fill.
+         *
+         * The host planning, the output-chunk acquisition and the output-position values are the
+         * same as in the batch-wide path; only the launch loop differs. Each launch reads its own
+         * status slot, so the fan-out has no multi-writer status word.
+         */
+        void launchPerChunk(Queue const& queue, Batch const& batch)
+        {
+            if(batch.chunks.empty())
+                throw BatchError{"transform: empty batch"};
+            if(batch.chunks.size() > m_batchChunks)
+                throw BatchError{
+                    "transform: batch of " + std::to_string(batch.chunks.size()) + " chunks exceeds batchChunks "
+                    + std::to_string(m_batchChunks)};
+
+            std::uint64_t const particles = batch.particles();
+            if(particles == 0u)
+                throw BatchError{"transform: empty batch"};
+            std::uint32_t const outputChunks = checkedOutputChunks(particles, m_capacity);
+            if(outputChunks > m_reserveBound)
+                throw BatchError{"transform: exact chunk count exceeds the reservation bound"};
+
+            m_pending.clear();
+            std::uint64_t position = 0u;
+            for(std::size_t i = 0u; i < batch.chunks.size(); ++i)
+            {
+                ChunkDescriptor const& chunk = batch.chunks[i];
+                m_inBaseHost.data()[i] = static_cast<std::uint32_t>(m_storage.base(chunk.handle));
+                m_inCountHost.data()[i] = chunk.fill;
+                m_outPositionHost.data()[i] = static_cast<std::uint32_t>(position);
+                position += chunk.fill;
+            }
+
+            try
+            {
+                std::size_t const chunkCount = batch.chunks.size();
+                // One status word per input chunk: the memset and the readback bracket the whole
+                // fan-out on the same queue, and every launch writes a distinct slot.
+                alpaka::onHost::memset(queue, *m_chunkStatus, std::uint8_t{0});
+                for(std::uint32_t k = 0u; k < outputChunks; ++k)
+                {
+                    ChunkHandle const handle = m_storage.acquire();
+                    m_outChunksHost.data()[k] = handle.index;
+                    std::uint64_t const remaining = particles - static_cast<std::uint64_t>(k) * m_capacity;
+                    std::uint32_t const fill
+                        = static_cast<std::uint32_t>(std::min<std::uint64_t>(remaining, m_capacity));
+                    m_pending.push_back(ChunkDescriptor{handle, fill, 0u});
+                }
+
+                alpaka::onHost::memcpy(
+                    queue,
+                    m_outChunks,
+                    m_outChunksHost,
+                    alpaka::Vec{static_cast<std::uint64_t>(outputChunks)});
+
+                auto const views = Access::views(m_storage);
+                for(std::size_t i = 0u; i < chunkCount; ++i)
+                {
+                    ChunkDescriptor const& chunk = batch.chunks[i];
+                    if(chunk.fill == 0u)
+                        continue;
+                    // `m_launches` counts enqueued kernels: one per non-empty chunk here and one
+                    // per batch on the off path.
+                    ++m_launches;
+                    LaunchPolicy const policy = launchPolicy(m_device, chunk.fill, m_tileSize, m_frameCap);
+                    enqueueKernelWithInOutViews(
+                        queue,
+                        policy.frameSpec(),
+                        TransformPerChunkKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
+                        views,
+                        views,
+                        *m_chunkStatus,
+                        m_outChunks,
+                        static_cast<std::uint32_t>(i),
+                        m_inBaseHost.data()[i],
+                        m_outPositionHost.data()[i],
+                        chunk.fill,
+                        m_capacity);
+                }
+                alpaka::onHost::memcpy(queue, *m_chunkStatusHost, *m_chunkStatus);
+            }
+            catch(...)
+            {
+                releasePending();
+                m_failed = true;
+                throw;
+            }
+
+            m_allocated = outputChunks;
+        }
+
         void throwIfFailed() const
         {
             if(m_failed)
@@ -1600,12 +1773,30 @@ namespace graphFlow::detail
 
         void checkStatus(char const* stage)
         {
-            StatusCode const code = decodeStatus(m_statusHost.data()[0u]);
+            StatusCode const code = m_chunkSchedule == ChunkKernelSchedule::perChunk
+                                        ? chunkSlotStatus()
+                                        : decodeStatus(m_statusHost.data()[0u]);
             if(code != StatusCode::ok)
             {
                 m_failed = true;
                 throw BatchError{std::string{stage} + ": device status reports " + statusCodeName(code)};
             }
+        }
+
+        /** First failing per-chunk status word, or `ok` when every slot is clean.
+         *
+         * Slots beyond the committed chunk count stay zero from the memset of every launch, so
+         * reading the whole batch-sized buffer is safe and needs no bookkeeping of the last batch.
+         */
+        StatusCode chunkSlotStatus() const
+        {
+            for(std::uint32_t i = 0u; i < m_batchChunks; ++i)
+            {
+                StatusCode const code = decodeStatus(m_chunkStatusHost->data()[i]);
+                if(code != StatusCode::ok)
+                    return code;
+            }
+            return StatusCode::ok;
         }
 
         void releasePending()
@@ -1624,6 +1815,7 @@ namespace graphFlow::detail
         std::uint32_t m_batchChunks;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
+        ChunkKernelSchedule m_chunkSchedule = ChunkKernelSchedule::off;
         std::uint32_t m_reserveBound;
         U32View m_inBase;
         MappedU32View m_inBaseHost;
@@ -1635,6 +1827,9 @@ namespace graphFlow::detail
         MappedU32View m_outChunksHost;
         U32View m_status;
         MappedU32View m_statusHost;
+        // Per-chunk completion slots; allocated only when the schedule is on.
+        std::optional<U32View> m_chunkStatus;
+        std::optional<MappedU32View> m_chunkStatusHost;
         std::vector<ChunkDescriptor> m_pending;
         std::uint32_t m_allocated = 0u;
         std::uint32_t m_launches = 0u;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/BinPath.hpp"
+#include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
 
 #include <chrono>
@@ -36,6 +37,14 @@ namespace graphFlow
          * set of each node. The default never changes.
          */
         std::optional<std::uint32_t> inflightBatches;
+
+        // Per-chunk transform schedule. Absence keeps `ChunkKernelSchedule::off`, the batch-wide
+        // transform launch; `perChunk` is opt-in and changes launch geometry only.
+        std::optional<ChunkKernelSchedule> chunkKernelSchedule;
+        /** Chunk queues the per-chunk transform path owns; absence keeps one serial queue. */
+        std::optional<std::uint32_t> chunkQueueDepth;
+        /** Per-chunk latency cap in microseconds; zero means "no cap" and is a valid value. */
+        std::optional<std::uint32_t> chunkLatencyCapUs;
 
         // Storage and pool limits.
         std::optional<std::uint32_t> chunkCapacity;
@@ -80,6 +89,8 @@ namespace graphFlow
         {
             validateNonZero(batchChunks, "batchChunks");
             validateNonZero(inflightBatches, "inflightBatches");
+            // `chunkLatencyCapUs` is deliberately excluded: zero means "no cap" and is valid.
+            validateNonZero(chunkQueueDepth, "chunkQueueDepth");
             validateNonZero(chunkCapacity, "chunkCapacity");
             validateNonZero(liveParticles, "liveParticles");
             validateNonZero(tileSize, "tileSize");

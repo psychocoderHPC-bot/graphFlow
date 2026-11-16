@@ -607,6 +607,9 @@ namespace graphFlow
             config.seed = m_tuning.seed;
             config.batchChunks = m_tuning.batchChunks.value_or(1u);
             config.frameCap = m_tuning.frameCap.value_or(defaultFrameCap);
+            config.chunkKernelSchedule = m_tuning.chunkKernelSchedule.value_or(config.chunkKernelSchedule);
+            config.chunkQueueDepth = m_tuning.chunkQueueDepth.value_or(config.chunkQueueDepth);
+            config.chunkLatencyCapUs = m_tuning.chunkLatencyCapUs.value_or(config.chunkLatencyCapUs);
             config.chunkCapacity = m_tuning.chunkCapacity.value_or(config.chunkCapacity);
             config.liveParticles = m_tuning.liveParticles.value_or(config.liveParticles);
             config.tileSize = m_tuning.tileSize.value_or(config.tileSize);

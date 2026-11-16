@@ -98,9 +98,62 @@ namespace graphFlow
         std::uint32_t tileSize = 0u; // T
         std::uint32_t waves = 0u; // wave target used for the estimate
         std::uint32_t targetBlocksPerSm = 0u; // blocks per multiprocessor used for the estimate
+        std::uint32_t multiprocessorCount = 0u; // guarded SM count used for the estimate
         std::uint64_t memoryBudgetBytes = 0u; // resolved payload budget
         std::string description; // short human-readable summary
         std::uint64_t slotBytes = payloadBytesPerSlot; // payload bytes per storage slot
+    };
+
+    /** Coarse per-wave cost model of the per-chunk latency clamp.
+     *
+     * The latency knob is a host-facing microsecond budget, not a measured device profile. A wave
+     * of a chunk launch is charged this many microseconds so `latencyCapUs` can be translated into
+     * a wave budget. It is deliberately a fixed documented constant instead of a device query: any
+     * occupancy or bandwidth derivation would pretend a precision the policy does not have.
+     */
+    inline constexpr std::uint32_t defaultChunkWaveLatencyUs = 10u;
+
+    /** Knobs of the per-chunk launch-size policy.
+     *
+     * These are internal policy inputs, not user-facing configuration: `Flow` fills them from the
+     * device-policy knobs and the `chunkLatencyCapUs` knob. None of them rewrites the storage
+     * chunk capacity, the pool size or the off-path sizing.
+     */
+    struct ChunkScheduleConfig
+    {
+        /** Device waves one per-chunk launch should cover; constrained to 2..4. */
+        std::uint32_t wavesPerChunk = 2u;
+        /** Payloads one thread handles per launch. */
+        std::uint32_t itemsPerThread = 1u;
+        /** Requested threads per block of the per-chunk launch (256 or 512). */
+        std::uint32_t threadsPerBlock = 256u;
+        /** Blocks per multiprocessor of the wave estimate; shares the storage-policy default. */
+        std::uint32_t targetBlocksPerSm = 4u;
+        /** Upper bound of the derived chunk capacity. */
+        std::uint32_t maxChunkCapacity = 8192u;
+        /** Per-wave cost used only to translate `latencyCapUs` into a wave budget. */
+        std::uint32_t waveLatencyUs = defaultChunkWaveLatencyUs;
+        /** Latency cap of one chunk launch in microseconds; zero disables the clamp. */
+        std::uint32_t latencyCapUs = 0u;
+        /** Payload bytes of one storage slot. */
+        std::uint64_t slotBytes = payloadBytesPerSlot;
+    };
+
+    /** Result of the per-chunk launch-size policy.
+     *
+     * `chunkCapacity` is the derived capacity target of one per-chunk launch and `limitName`
+     * names the clamp that produced it (`wave`, `maximum`, `grid`, `memory`, or `latency`).
+     * `wavesPerChunk` is the effective wave count after the latency clamp.
+     */
+    struct ChunkSchedulePolicy
+    {
+        std::uint32_t chunkCapacity = 0u;
+        std::uint32_t threadsPerBlock = 0u;
+        std::uint32_t wavesPerChunk = 0u;
+        std::uint32_t itemsPerThread = 0u;
+        std::uint32_t multiprocessorCount = 0u;
+        std::string limitName;
+        std::string description;
     };
 
     namespace detail
@@ -446,6 +499,7 @@ namespace graphFlow
         policy.tileSize = tile;
         policy.waves = config.waves;
         policy.targetBlocksPerSm = config.targetBlocksPerSm;
+        policy.multiprocessorCount = static_cast<std::uint32_t>(sms);
         policy.memoryBudgetBytes = budgetBytes;
         policy.slotBytes = config.slotBytes;
         policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P=" + std::to_string(liveParticles)
@@ -488,5 +542,121 @@ namespace graphFlow
             policy.chunkCapacity,
             config.poolOutputReserveChunks,
             policy.slotBytes);
+    }
+
+    /** Derive the launch-size policy of the per-chunk transform path.
+     *
+     * `C ~ SMs * blocksPerSM * threadsPerBlock * itemsPerThread * wavesPerChunk`, clamped by
+     * `maxChunkCapacity`, the block-grid limit `maxBlocksPerGrid * threadsPerBlock`, the pool
+     * payload budget `payloadBudgetBytes / slotBytes` and the latency cap. The latency cap is a
+     * wave budget of `latencyCapUs / waveLatencyUs` waves, at least one.
+     *
+     * On the documented target GPUs the wave term is 10-40 times `maxChunkCapacity`, so the
+     * `maximum` clamp usually sets the capacity; `limitName` reports which clamp produced the
+     * result and `wavesPerChunk` the effective wave count after the latency clamp.
+     *
+     * This function never changes the storage chunk capacity, the pool size or the off-path
+     * sizing, and it is not called by `makeDevicePolicy`. `threadsPerBlock` is validated against
+     * `maxThreadsPerBlock` like an explicit `DevicePolicyOverrides::tileSize`, so a 512-wide
+     * launch on a device that reports 256 is rejected instead of silently narrowed.
+     */
+    inline ChunkSchedulePolicy makeChunkSchedulePolicy(
+        alpaka::onHost::DeviceProperties const& properties,
+        std::uint64_t payloadBudgetBytes,
+        ChunkScheduleConfig const& config = {})
+    {
+        if(config.wavesPerChunk < 2u || config.wavesPerChunk > 4u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: wavesPerChunk must be within [2, 4]"};
+        if(config.itemsPerThread == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: itemsPerThread must be non-zero"};
+        if(config.targetBlocksPerSm == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: targetBlocksPerSm must be non-zero"};
+        if(config.maxChunkCapacity == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: maxChunkCapacity must be non-zero"};
+        if(config.waveLatencyUs == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: waveLatencyUs must be non-zero"};
+        if(config.slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: slotBytes must be non-zero"};
+        if(payloadBudgetBytes == 0u)
+            throw std::invalid_argument{"graphFlow::ChunkSchedulePolicy: payloadBudgetBytes must be non-zero"};
+        if(properties.maxThreadsPerBlock == 0u)
+            throw std::runtime_error{"graphFlow::ChunkSchedulePolicy: device reports maxThreadsPerBlock == 0"};
+        if(properties.maxBlocksPerGrid == 0u)
+            throw std::runtime_error{"graphFlow::ChunkSchedulePolicy: device reports maxBlocksPerGrid == 0"};
+
+        std::uint64_t const warpSize = properties.warpSize == 0u ? 1u : properties.warpSize;
+        if(config.threadsPerBlock == 0u || std::uint64_t{config.threadsPerBlock} % warpSize != 0u)
+            throw std::invalid_argument{
+                "graphFlow::ChunkSchedulePolicy: threadsPerBlock must be a non-zero multiple of the warp size"};
+        if(std::uint64_t{config.threadsPerBlock} > properties.maxThreadsPerBlock)
+            throw std::invalid_argument{
+                "graphFlow::ChunkSchedulePolicy: threadsPerBlock " + std::to_string(config.threadsPerBlock)
+                + " exceeds maxThreadsPerBlock " + std::to_string(properties.maxThreadsPerBlock)};
+
+        std::uint64_t const sms = properties.multiProcessorCount == 0u ? 1u : properties.multiProcessorCount;
+        std::uint64_t const threadsPerBlock = config.threadsPerBlock;
+
+        auto const waveCapacityFor = [&](std::uint64_t waves)
+        {
+            return detail::saturatedProduct(
+                detail::saturatedProduct(
+                    detail::saturatedProduct(detail::saturatedProduct(sms, config.targetBlocksPerSm), threadsPerBlock),
+                    config.itemsPerThread),
+                waves);
+        };
+
+        std::uint64_t waves = config.wavesPerChunk;
+        std::uint64_t const waveCapacity = waveCapacityFor(waves);
+        std::uint64_t candidate = std::min<std::uint64_t>(waveCapacity, config.maxChunkCapacity);
+        char const* limitName = waveCapacity <= config.maxChunkCapacity ? "wave" : "maximum";
+
+        std::uint64_t const gridCapacity = detail::saturatedProduct(properties.maxBlocksPerGrid, threadsPerBlock);
+        if(gridCapacity < candidate)
+        {
+            candidate = gridCapacity;
+            limitName = "grid";
+        }
+
+        std::uint64_t const budgetCapacity = payloadBudgetBytes / config.slotBytes;
+        if(budgetCapacity < candidate)
+        {
+            candidate = budgetCapacity;
+            limitName = "memory";
+        }
+
+        if(config.latencyCapUs != 0u)
+        {
+            std::uint64_t allowedWaves = config.latencyCapUs / config.waveLatencyUs;
+            if(allowedWaves == 0u)
+                allowedWaves = 1u;
+            if(allowedWaves < waves)
+            {
+                std::uint64_t const reduced = waveCapacityFor(allowedWaves);
+                waves = allowedWaves;
+                if(reduced < candidate)
+                {
+                    candidate = reduced;
+                    limitName = "latency";
+                }
+            }
+        }
+
+        std::uint64_t const rounded = detail::roundDownToMultiple(candidate, threadsPerBlock);
+        if(rounded == 0u)
+            throw std::invalid_argument{
+                "graphFlow::ChunkSchedulePolicy: the payload memory budget cannot hold one block of a chunk"};
+
+        ChunkSchedulePolicy policy;
+        policy.chunkCapacity = static_cast<std::uint32_t>(rounded);
+        policy.threadsPerBlock = config.threadsPerBlock;
+        policy.wavesPerChunk = static_cast<std::uint32_t>(waves);
+        policy.itemsPerThread = config.itemsPerThread;
+        policy.multiprocessorCount = static_cast<std::uint32_t>(sms);
+        policy.limitName = limitName;
+        policy.description = std::string{"chunkC="} + std::to_string(policy.chunkCapacity)
+                             + " tpb=" + std::to_string(policy.threadsPerBlock) + " waves="
+                             + std::to_string(policy.wavesPerChunk) + " items=" + std::to_string(policy.itemsPerThread)
+                             + " sms=" + std::to_string(policy.multiprocessorCount) + " cap=" + policy.limitName;
+        return policy;
     }
 } // namespace graphFlow

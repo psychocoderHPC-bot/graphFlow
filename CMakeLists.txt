@@ -289,6 +289,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_flow_execution.cpp
         tests/unit/test_flow_failure.cpp
         tests/unit/test_pool_budget.cpp
+        tests/unit/test_chunk_schedule_policy.cpp
         tests/unit/test_dense_bin_table.cpp
         tests/unit/test_route_table.cpp
         tests/unit/test_graph_builder.cpp
@@ -307,6 +308,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
+        tests/integration/test_per_chunk_schedule.cpp
         tests/integration/test_aos_over_soa.cpp
         tests/integration/test_photon_scattering.cpp
     )
