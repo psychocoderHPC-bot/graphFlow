@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -24,14 +25,19 @@ namespace
 {
     using graphFlow::photon::AdvanceToEvent;
     using graphFlow::photon::ClassifyEvent;
+    using graphFlow::photon::directionTag;
     using graphFlow::photon::Event;
     using graphFlow::photon::GeneratePhoton;
+    using graphFlow::photon::idTag;
     using graphFlow::photon::NoTrace;
     using graphFlow::photon::Parameters;
     using graphFlow::photon::Photon;
+    using graphFlow::photon::positionTag;
+    using graphFlow::photon::proposalTag;
     using graphFlow::photon::ProposeFlight;
     using graphFlow::photon::RecordTerminal;
     using graphFlow::photon::Scatter;
+    using graphFlow::photon::scatterCountTag;
     using graphFlow::photon::ScatterMode;
     using graphFlow::photon::ScatterT;
     using graphFlow::photon::Slab;
@@ -41,10 +47,11 @@ namespace
     Photon makePhoton(double z, Vec3 direction, std::uint32_t scatterCount = 0u)
     {
         Photon photon;
-        photon.id = 0u;
-        photon.position = Vec3{0.0, 0.0, z};
-        photon.direction = direction;
-        photon.scatterCount = scatterCount;
+        photon[idTag] = 0u;
+        photon[positionTag] = Vec3{0.0, 0.0, z};
+        photon[directionTag] = direction;
+        photon[scatterCountTag] = scatterCount;
+        photon[proposalTag] = graphFlow::photon::Proposal{};
         return photon;
     }
 
@@ -110,7 +117,7 @@ namespace
         ALPAKA_FN_ACC void operator()(auto const& acc, graphFlow::Status& status, Photon& photon) const
         {
             double sampledDistance = 0.0;
-            switch(photon.scatterCount)
+            switch(photon[scatterCountTag])
             {
             case 0u:
                 sampledDistance = 0.2;
@@ -128,14 +135,14 @@ namespace
                 status.set(graphFlow::StatusCode::invalid);
                 return;
             }
-            photon.proposal = graphFlow::photon::resolveFlight(
+            photon[proposalTag] = graphFlow::photon::resolveFlight(
                 slab,
                 graphFlow::photon::sigmaTotal(slab),
                 photon,
                 sampledDistance,
                 0.0,
                 maxScatters);
-            if(!photon.proposal.valid)
+            if(!photon[proposalTag].valid)
                 status.set(graphFlow::StatusCode::invalid);
             alpaka::onAcc::atomicAdd(acc, &flightCounts[0u], std::uint32_t{1u}, alpaka::onAcc::scope::device);
         }
@@ -149,33 +156,33 @@ namespace
 
         ALPAKA_FN_ACC void operator()(auto const&, graphFlow::Status& status, Photon& photon) const
         {
-            if(photon.proposal.event != Event::scatter)
+            if(photon[proposalTag].event != Event::scatter)
             {
                 status.set(graphFlow::StatusCode::invalid);
                 return;
             }
-            switch(photon.scatterCount)
+            switch(photon[scatterCountTag])
             {
             case 0u:
-                photon.direction = Vec3{0.0, 0.0, 0.5};
+                photon[directionTag] = Vec3{0.0, 0.0, 0.5};
                 break;
             case 1u:
-                photon.direction = Vec3{0.0, 0.0, -0.5};
+                photon[directionTag] = Vec3{0.0, 0.0, -0.5};
                 break;
             case 2u:
-                photon.direction = Vec3{0.0, 0.0, -1.0};
+                photon[directionTag] = Vec3{0.0, 0.0, -1.0};
                 break;
             default:
                 status.set(graphFlow::StatusCode::invalid);
                 return;
             }
             trace.record(
-                photon.id,
+                photon[idTag],
                 graphFlow::photon::TraceKind::scatter,
-                photon.scatterCount + 1u,
-                photon.position,
-                photon.direction);
-            ++photon.scatterCount;
+                photon[scatterCountTag] + 1u,
+                photon[positionTag],
+                photon[directionTag]);
+            ++photon[scatterCountTag];
         }
     };
 
@@ -216,7 +223,7 @@ namespace
         using Trace = graphFlow::photon::TraceWriter<TraceVertexView, TraceCountView, TraceFlagView>;
         Trace const trace{traceBuffer.getView(), traceCounts.getView(), traceFlags.getView(), traceVertices, 1u};
 
-        graphFlow::Flow<Photon, ALPAKA_TYPEOF(device)> flow{device};
+        graphFlow::SoAFlow<Photon, ALPAKA_TYPEOF(device)> flow{device};
         auto source = flow.source("generate", graphFlow::photon::GeneratePhotonT<Trace>{trace});
         using CountView = decltype(flights.getView());
         auto flight = flow.transform("scripted flight", ScriptedFlight<CountView>{slab, 3u, flights.getView()});
@@ -279,9 +286,11 @@ namespace
         ALPAKA_FN_ACC Photon operator()([[maybe_unused]] auto const& acc, std::uint64_t id) const
         {
             Photon photon;
-            photon.id = id;
-            photon.position = Vec3{std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0};
-            photon.direction = Vec3{0.0, 0.0, 1.0};
+            photon[idTag] = id;
+            photon[positionTag] = Vec3{std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0};
+            photon[directionTag] = Vec3{0.0, 0.0, 1.0};
+            photon[scatterCountTag] = 0u;
+            photon[proposalTag] = graphFlow::photon::Proposal{};
             return photon;
         }
     };
@@ -296,7 +305,27 @@ TEST_CASE("photon payload and functors satisfy the public Flow contracts", "[pho
     static_assert(graphFlow::PartitionClassifierFor<ClassifyEvent, Photon>);
     static_assert(graphFlow::UpdateFor<AdvanceToEvent, Event, Photon>);
     static_assert(graphFlow::TransformFor<Scatter, Photon>);
+    static_assert(graphFlow::AttributeRecord<Photon>);
     static_assert(ClassifyEvent::maxBins == graphFlow::photon::eventBins);
+
+    // A subset proxy narrows access only; loading it still copies every attribute.
+    using ScatterCountSubset = graphFlow::Set<graphFlow::photon::ScatterCountTag>;
+    Photon original = makePhoton(0.3, Vec3{0.1, 0.2, 0.8}, 4u);
+    original[proposalTag] = graphFlow::photon::Proposal{Event::scatter, 0.25, true};
+    auto proxy = original.proxy<ScatterCountSubset>();
+    proxy[scatterCountTag] = 9u;
+    Photon const copied = proxy.load();
+    CHECK(copied[idTag] == original[idTag]);
+    CHECK(copied[positionTag] == original[positionTag]);
+    CHECK(copied[directionTag] == original[directionTag]);
+    CHECK(copied[scatterCountTag] == 9u);
+    CHECK(copied[proposalTag].event == original[proposalTag].event);
+    CHECK(copied[proposalTag].distance == original[proposalTag].distance);
+    CHECK(copied[proposalTag].valid == original[proposalTag].valid);
+
+    // The Record specialization must key the RNG by the logical id and scatter count.
+    CHECK(graphFlow::rng::streamId(original) == original[idTag]);
+    CHECK(graphFlow::rng::streamEvent(original) == original[scatterCountTag]);
 }
 
 TEST_CASE("photon flight geometry handles faces, ties and vacuum", "[photon][geometry]")
@@ -359,24 +388,24 @@ TEST_CASE("photon flight geometry handles faces, ties and vacuum", "[photon][geo
 
     // The face advance clamps z exactly and propagates the transverse position.
     Photon photon = makePhoton(0.3, Vec3{0.6, 0.0, 0.8});
-    photon.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.875, true};
+    photon[proposalTag] = graphFlow::photon::Proposal{Event::transmitted, 0.875, true};
     CHECK(applyEvent(material, Event::transmitted, photon) == graphFlow::UpdateResult::success);
-    CHECK(photon.position.z == 1.0);
-    CHECK(photon.position.x == Catch::Approx(0.525).margin(1e-15));
+    CHECK(photon[positionTag].z == 1.0);
+    CHECK(photon[positionTag].x == Catch::Approx(0.525).margin(1e-15));
 
     Photon clamped = makePhoton(0.3, Vec3{0.0, 0.0, -1.0});
-    clamped.proposal = graphFlow::photon::Proposal{Event::reflected, 0.3, true};
+    clamped[proposalTag] = graphFlow::photon::Proposal{Event::reflected, 0.3, true};
     CHECK(applyEvent(material, Event::reflected, clamped) == graphFlow::UpdateResult::success);
-    CHECK(clamped.position.z == 0.0);
+    CHECK(clamped[positionTag].z == 0.0);
 
     // Invalid proposals and inconsistent bin/event pairs are release-path errors.
     Photon missing = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
     CHECK(applyEvent(vacuum, Event::transmitted, missing) == graphFlow::UpdateResult::invalid);
     Photon mismatched = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-    mismatched.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.8, true};
+    mismatched[proposalTag] = graphFlow::photon::Proposal{Event::transmitted, 0.8, true};
     CHECK(applyEvent(vacuum, Event::reflected, mismatched) == graphFlow::UpdateResult::invalid);
     Photon wrongFaceDirection = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-    wrongFaceDirection.proposal = graphFlow::photon::Proposal{Event::reflected, 0.2, true};
+    wrongFaceDirection[proposalTag] = graphFlow::photon::Proposal{Event::reflected, 0.2, true};
     CHECK(applyEvent(vacuum, Event::reflected, wrongFaceDirection) == graphFlow::UpdateResult::invalid);
 }
 
@@ -407,22 +436,22 @@ TEST_CASE("photon debug validation rejects corrupted state", "[photon][debug]")
         CHECK_FALSE(resolveFlight(vacuum, vacuumTotal, outside, 0.0, 0.0, 8u).valid);
 
         Photon nanProposal = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-        nanProposal.proposal
+        nanProposal[proposalTag]
             = graphFlow::photon::Proposal{Event::transmitted, std::numeric_limits<double>::quiet_NaN(), true};
         CHECK_FALSE(validateProposal(material, nanProposal));
         CHECK(applyEvent(material, Event::transmitted, nanProposal) == graphFlow::UpdateResult::invalid);
 
         Photon negativeDistance = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-        negativeDistance.proposal = graphFlow::photon::Proposal{Event::absorbed, -0.5, true};
+        negativeDistance[proposalTag] = graphFlow::photon::Proposal{Event::absorbed, -0.5, true};
         CHECK_FALSE(validateProposal(material, negativeDistance));
 
         Photon wrongPlane = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-        wrongPlane.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.4, true};
+        wrongPlane[proposalTag] = graphFlow::photon::Proposal{Event::transmitted, 0.4, true};
         CHECK_FALSE(validateProposal(material, wrongPlane));
 
         Photon nanAdvance = makePhoton(0.2, Vec3{0.0, 0.0, 1.0});
-        nanAdvance.position.x = std::numeric_limits<double>::quiet_NaN();
-        nanAdvance.proposal = graphFlow::photon::Proposal{Event::transmitted, 0.8, true};
+        nanAdvance[positionTag].x = std::numeric_limits<double>::quiet_NaN();
+        nanAdvance[proposalTag] = graphFlow::photon::Proposal{Event::transmitted, 0.8, true};
         CHECK(applyEvent(material, Event::transmitted, nanAdvance) == graphFlow::UpdateResult::invalid);
     }
     else
@@ -445,6 +474,8 @@ TEST_CASE("debug validation fails a corrupted photon batch before publication", 
 
     auto device = graphFlow::test::makeCpuDevice();
     using Device = ALPAKA_TYPEOF(device);
+    static_assert(
+        std::same_as<typename graphFlow::SoAFlow<Photon, Device>::Storage, graphFlow::photon::PhotonStorage<Device>>);
     constexpr std::uint64_t photons = 1u;
     auto records = alpaka::onHost::alloc<TerminalRecord>(device, alpaka::Vec{photons});
     auto visits = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{photons});
@@ -462,7 +493,7 @@ TEST_CASE("debug validation fails a corrupted photon batch before publication", 
     using RecordView = decltype(records.getView());
     using VisitView = decltype(visits.getView());
 
-    graphFlow::Flow<Photon, Device> flow{device};
+    graphFlow::SoAFlow<Photon, Device> flow{device};
     auto source = flow.source("corrupt", CorruptPhotonSource{});
     auto flight = flow.transform("propose flight", ProposeFlight{slab, 8u});
     auto route = flow.partition("advance and route", ClassifyEvent{}, AdvanceToEvent{slab});

@@ -33,8 +33,11 @@ namespace graphFlow::photon
         if constexpr(!graphFlow::debug::checksEnabled)
             return true;
         else
-            return finite(photon.position) && finite(photon.direction) && photon.position.z >= T{0}
-                   && photon.position.z <= slab.thickness;
+        {
+            Vec3T<T> const& position = photon[positionTag];
+            Vec3T<T> const& direction = photon[directionTag];
+            return finite(position) && finite(direction) && position.z >= T{0} && position.z <= slab.thickness;
+        }
     }
 
     /** Debug-only check that a proposal is finite and consistent with its event.
@@ -49,7 +52,9 @@ namespace graphFlow::photon
             return true;
         else
         {
-            ProposalT<T> const& proposal = photon.proposal;
+            ProposalT<T> const& proposal = photon[proposalTag];
+            Vec3T<T> const& position = photon[positionTag];
+            Vec3T<T> const& direction = photon[directionTag];
             if(!proposal.valid)
                 return false;
             if(!alpaka::math::isfinite(proposal.distance) || proposal.distance < T{0})
@@ -60,14 +65,14 @@ namespace graphFlow::photon
             T const scale = slab.thickness > T{1} ? slab.thickness : T{1};
             T const tolerance
                 = std::is_same_v<T, double> ? T{1e-12} * scale : T{64} * std::numeric_limits<T>::epsilon() * scale;
-            T const nextZ = photon.position.z + proposal.distance * photon.direction.z;
+            T const nextZ = position.z + proposal.distance * direction.z;
             switch(proposal.event)
             {
             case Event::transmitted:
-                return photon.direction.z > T{0} && nextZ >= slab.thickness - tolerance
+                return direction.z > T{0} && nextZ >= slab.thickness - tolerance
                        && nextZ <= slab.thickness + tolerance;
             case Event::reflected:
-                return photon.direction.z < T{0} && nextZ >= -tolerance && nextZ <= tolerance;
+                return direction.z < T{0} && nextZ >= -tolerance && nextZ <= tolerance;
             default:
                 return nextZ >= -tolerance && nextZ <= slab.thickness + tolerance;
             }

@@ -87,7 +87,9 @@ namespace graphFlow::photon
         if(!validatePhoton(slab, photon))
             return proposal;
 
-        FaceHitT<T> const face = faceHit(slab, photon.position, photon.direction);
+        Vec3T<T> const& position = photon[positionTag];
+        Vec3T<T> const& direction = photon[directionTag];
+        FaceHitT<T> const face = faceHit(slab, position, direction);
 
         if(sigmaTotalValue == T{0})
         {
@@ -112,7 +114,7 @@ namespace graphFlow::photon
         proposal.distance = sampledDistance;
         if(!scatters)
             proposal.event = Event::absorbed;
-        else if(photon.scatterCount >= maxScatters)
+        else if(photon[scatterCountTag] >= maxScatters)
             proposal.event = Event::capped;
         else
             proposal.event = Event::scatter;
@@ -128,34 +130,37 @@ namespace graphFlow::photon
     template<typename T>
     ALPAKA_FN_ACC inline UpdateResult applyEvent(SlabT<T> const& slab, Event event, PhotonT<T>& photon)
     {
-        if(!photon.proposal.valid || event != photon.proposal.event)
+        ProposalT<T> const& proposal = photon[proposalTag];
+        if(!proposal.valid || event != proposal.event)
             return UpdateResult::invalid;
         if(!validateProposal(slab, photon))
             return UpdateResult::invalid;
-        T const distance = photon.proposal.distance;
+        T const distance = proposal.distance;
+        Vec3T<T>& position = photon[positionTag];
+        Vec3T<T> const& direction = photon[directionTag];
 
         switch(event)
         {
         case Event::scatter:
         case Event::absorbed:
         case Event::capped:
-            photon.position.x += distance * photon.direction.x;
-            photon.position.y += distance * photon.direction.y;
-            photon.position.z += distance * photon.direction.z;
+            position.x += distance * direction.x;
+            position.y += distance * direction.y;
+            position.z += distance * direction.z;
             break;
         case Event::transmitted:
-            if(photon.direction.z <= T{0})
+            if(direction.z <= T{0})
                 return UpdateResult::invalid;
-            photon.position.x += distance * photon.direction.x;
-            photon.position.y += distance * photon.direction.y;
-            photon.position.z = slab.thickness;
+            position.x += distance * direction.x;
+            position.y += distance * direction.y;
+            position.z = slab.thickness;
             break;
         case Event::reflected:
-            if(photon.direction.z >= 0.0)
+            if(direction.z >= 0.0)
                 return UpdateResult::invalid;
-            photon.position.x += distance * photon.direction.x;
-            photon.position.y += distance * photon.direction.y;
-            photon.position.z = T{0};
+            position.x += distance * direction.x;
+            position.y += distance * direction.y;
+            position.z = T{0};
             break;
         }
 
@@ -241,8 +246,13 @@ namespace graphFlow::photon
 
         ALPAKA_FN_ACC PhotonT<T> operator()([[maybe_unused]] auto const& accelerator, std::uint64_t id) const
         {
-            PhotonT<T> photon{id, Vec3T<T>{T{0}, T{0}, T{0}}, Vec3T<T>{T{0}, T{0}, T{1}}, 0u, ProposalT<T>{}};
-            trace.record(id, TraceKind::source, 0u, photon.position, photon.direction);
+            PhotonT<T> photon{};
+            photon[idTag] = id;
+            photon[positionTag] = Vec3T<T>{T{0}, T{0}, T{0}};
+            photon[directionTag] = Vec3T<T>{T{0}, T{0}, T{1}};
+            photon[scatterCountTag] = 0u;
+            photon[proposalTag] = ProposalT<T>{};
+            trace.record(id, TraceKind::source, 0u, photon[positionTag], photon[directionTag]);
             return photon;
         }
     };
@@ -271,8 +281,8 @@ namespace graphFlow::photon
             T sampledDistance = T{0};
             if(total > T{0})
                 sampledDistance = -alpaka::math::log(flightUniform) / total;
-            photon.proposal = resolveFlight(slab, total, photon, sampledDistance, kindUniform, maxScatters);
-            if(!photon.proposal.valid || !validateProposal(slab, photon))
+            photon[proposalTag] = resolveFlight(slab, total, photon, sampledDistance, kindUniform, maxScatters);
+            if(!photon[proposalTag].valid || !validateProposal(slab, photon))
                 status.set(StatusCode::invalid);
         }
     };
@@ -287,18 +297,19 @@ namespace graphFlow::photon
 
         ALPAKA_FN_ACC Event operator()(auto const&, Status& status, PhotonT<T> const& photon) const
         {
-            if(!photon.proposal.valid)
+            Event const event = photon[proposalTag].event;
+            if(!photon[proposalTag].valid)
             {
                 status.set(StatusCode::invalid);
                 return Event::absorbed;
             }
-            std::uint32_t const bin = static_cast<std::uint32_t>(photon.proposal.event);
+            std::uint32_t const bin = static_cast<std::uint32_t>(event);
             if(bin >= maxBins)
             {
                 status.set(StatusCode::invalid);
                 return Event::absorbed;
             }
-            return photon.proposal.event;
+            return event;
         }
     };
 
@@ -333,25 +344,30 @@ namespace graphFlow::photon
 
         ALPAKA_FN_ACC void operator()(auto const&, rng::Engine& engine, Status& status, PhotonT<T>& photon) const
         {
-            if(!photon.proposal.valid || photon.proposal.event != Event::scatter)
+            if(!photon[proposalTag].valid || photon[proposalTag].event != Event::scatter)
             {
                 status.set(StatusCode::invalid);
                 return;
             }
             if(mode == ScatterMode::isotropic)
-                photon.direction = isotropicDirection<T>(engine);
+                photon[directionTag] = isotropicDirection<T>(engine);
             if(!validatePhoton(slab, photon))
             {
                 status.set(StatusCode::invalid);
                 return;
             }
-            if(photon.scatterCount == std::numeric_limits<std::uint32_t>::max())
+            if(photon[scatterCountTag] == std::numeric_limits<std::uint32_t>::max())
             {
                 status.set(StatusCode::overflow);
                 return;
             }
-            trace.record(photon.id, TraceKind::scatter, photon.scatterCount + 1u, photon.position, photon.direction);
-            ++photon.scatterCount;
+            trace.record(
+                photon[idTag],
+                TraceKind::scatter,
+                photon[scatterCountTag] + 1u,
+                photon[positionTag],
+                photon[directionTag]);
+            ++photon[scatterCountTag];
         }
     };
 
@@ -367,12 +383,12 @@ namespace graphFlow::photon
 
         ALPAKA_FN_ACC void operator()(auto const& acc, Status& status, PhotonT<T> const& photon) const
         {
-            if(!photon.proposal.valid)
+            if(!photon[proposalTag].valid)
             {
                 status.set(StatusCode::invalid);
                 return;
             }
-            Event const event = photon.proposal.event;
+            Event const event = photon[proposalTag].event;
             std::uint32_t const bin = static_cast<std::uint32_t>(event);
             if(bin == static_cast<std::uint32_t>(Event::scatter) || bin >= eventBins)
             {
@@ -380,10 +396,19 @@ namespace graphFlow::photon
                 return;
             }
 
-            records[photon.id] = TerminalRecordT<T>{event, photon.scatterCount, photon.position, photon.direction};
-            trace.record(photon.id, traceKindOf(event), photon.scatterCount, photon.position, photon.direction);
-            std::uint32_t const previous
-                = alpaka::onAcc::atomicAdd(acc, &visits[photon.id], std::uint32_t{1u}, alpaka::onAcc::scope::device);
+            records[photon[idTag]]
+                = TerminalRecordT<T>{event, photon[scatterCountTag], photon[positionTag], photon[directionTag]};
+            trace.record(
+                photon[idTag],
+                traceKindOf(event),
+                photon[scatterCountTag],
+                photon[positionTag],
+                photon[directionTag]);
+            std::uint32_t const previous = alpaka::onAcc::atomicAdd(
+                acc,
+                &visits[photon[idTag]],
+                std::uint32_t{1u},
+                alpaka::onAcc::scope::device);
             if(previous != 0u)
                 status.set(StatusCode::invalid);
         }

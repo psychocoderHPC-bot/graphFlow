@@ -190,8 +190,9 @@ namespace graphFlow::photon::cli
         overrides.liveParticles = options.liveParticles;
         overrides.tileSize = options.tileSize;
 
-        // The generic payload storage charges sizeof(Photon) per slot, not the particle SoA size.
-        policyConfig.slotBytes = sizeof(graphFlow::photon::Photon);
+        // The AoS-over-SoA storage charges the aligned attribute widths plus the bin-id scratch
+        // word, not the particle SoA size.
+        policyConfig.slotBytes = graphFlow::photon::Photon::attribute_list::slotBytes;
         resolved.policy = graphFlow::makeDevicePolicy(properties, options.numPhotons, overrides, policyConfig);
         resolved.liveParticlesExplicit = resolved.policy.liveParticlesExplicit;
 

@@ -81,7 +81,7 @@ namespace graphFlow::photon
             traceVertices,
             static_cast<std::uint32_t>(traceIds)};
 
-        graphFlow::Flow<PhotonT<TScalar>, TDevice> flow{device};
+        graphFlow::SoAFlow<PhotonT<TScalar>, TDevice> flow{device};
         auto source = flow.source("generate", GeneratePhotonT<Trace, TScalar>{trace});
         auto flight = flow.transform("propose flight", ProposeFlightT<TScalar>{slab, parameters.maxScatters});
         auto route = flow.partition("advance and route", ClassifyEventT<TScalar>{}, AdvanceToEventT<TScalar>{slab});
