@@ -50,17 +50,17 @@ oneAPI jobs do the same inside their container; they install `git` before
 
 | Target | CTest cases | Where the result comes from |
 | --- | ---: | --- |
-| CPU, Release and Debug | **255** at `561b9a4c`; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `cpu` jobs |
-| CPU, ASAN+UBSAN Debug | **255** current suite; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `sanitizers` job |
+| CPU, Release and Debug | **270** at `3b90ffd`; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `cpu` jobs |
+| CPU, ASAN+UBSAN Debug | **270** current suite; 249 at `ffe4074`, 247 at `88de14f`, 246 at `56c11ac`, 239 at `a610281`, 210 at `f3ef355` and 202 at `2ad7d86` are historical | the hosted `sanitizers` job |
 | CPU, ASAN+UBSAN Debug, fwk394 | 236/236 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `sanitizers` runtime was not observed |
 | CPU, leak (error-path, `-L leak`) | 1/1 at `cf3bc8a` on `gf/p10-sanitizers` (historical) | local run; the hosted `leak` step runtime was not observed |
 | CPU, TSAN Debug non-PIE, no OMP executor | 235/235, 0 reports at `cf3bc8a` (historical); 210/210, 0 reports, 202.83 s at `f3ef355` on `rosi_v100` (historical; no full TSAN at `ffe4074`) | local `fwk394` run; the hosted `tsan` runtime was not observed |
 | CPU, icpx Release | 247/247 at `88de14f` on `hal` with icpx 2026.2.0 and 2025.3.3, `OMP_NUM_THREADS=4`; the `ffe4074` re-validation used g++ 13.3 on `fwk394`; the `561b9a4c` re-validation used g++ 13.3 on `fwk394` | local runs; the hosted `icpx-cpu` job runs the same suite |
-| CUDA device runtime | **316** at `561b9a4c` on `hal` A30 `sm_80`, CUDA 13.4; 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `hal` device run; the hosted job compiles only |
-| HIP `gfx1100` | **307** at `561b9a4c` on `hal` RX 7900 XTX, ROCm 7.2; 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
-| SYCL Intel GPU | **72/72** at `9ace795` on `hal` Arc A770, oneAPI 2026.2 (PR #69 matrix plus the environment-scoped FP64 case, `ctest -L sycl`); 71/71 at `9fb15f1` is the previous total | `hal` device run; the hosted `sycl-compile` job builds without a device and produces no CTest result |
+| CUDA device runtime | **334** at `3b90ffd` on `fwk394` RTX 2080 Ti `sm_75`; 316 at `561b9a4c` on `hal` A30 `sm_80`, 310 at `ffe4074`, 307 at `88de14f`, 306 at `56c11ac`, 299 at `a610281`, 264 at `f3ef355` and 254 at `2ad7d86` are historical | `fwk394` device run; the hosted job compiles only |
+| HIP `gfx1100` | **325** at `3b90ffd` on `hal` RX 7900 XTX, ROCm 7.2; 307 at `561b9a4c`, 301 at `ffe4074`, 298 at `88de14f`, 297 at `56c11ac`, 290 at `a610281`, 255 at `f3ef355` and 245 at `b972eaa` are historical | `hal` device run; the hosted job compiles only |
+| SYCL Intel GPU | **342/342** at `3b90ffd` on `hal` Arc A770, oneAPI 2026.2, full suite (75 sycl-labelled); the 72/72 sycl-labelled at `9ace795` and 71/71 at `9fb15f1` are historical | `hal` device run; the hosted `sycl-compile` job builds without a device and produces no CTest result |
 
-The CPU suite registers 255 cases at `561b9a4c`; the 249 count at `ffe4074`, the
+The CPU suite registers 270 cases at `3b90ffd`; the 249 count at `ffe4074`, the
 247 count at `88de14f` and the 246 count at `56c11ac` are historical. Release compiles the per-event
 checks out, Debug compiles them in, and the `[photon][debug]` cases register in
 both modes. The opt-in `[diagnostics]` photon cases are excluded from the
@@ -112,8 +112,9 @@ source-admission cases and N=1e6 smoke; 207/207 with the stall diagnostics;
 245/245 on `hal` (249 and 255 on the intermediate branches). The full CUDA and
 HIP device suites were executed at `f3ef355`: CUDA 264/264 on `hal` A30
 `sm_80` (CUDA 13.4, 400.98 s) and HIP 255/255 on `hal` RX 7900 XTX `gfx1100`
-(ROCm 7.2, 99.44 s), correctness only. The current suites are 255/255,
-316/316 and 307/307 at `561b9a4c`, and 71/71 SYCL at `9fb15f1`; the previous
+(ROCm 7.2, 99.44 s), correctness only. The current suites are 270/270,
+334/334 and 325/325 at `3b90ffd`, and 342/342 SYCL at `3b90ffd` (75 sycl-labelled); the previous
+255/316/307 at `561b9a4c` (72/72 sycl-labelled at `9ace795`),
 249/310/301 at
 `ffe4074`, 247/307/298 at
 `88de14f`, 246/306/297 at `56c11ac`, and the 239/299/290 at `a610281` are
@@ -188,10 +189,10 @@ fail the job. The recorded blocker on hal (runtime mapping failure) was
 resolved on the exclusive `rosi_v100` host, where the full integrated TSAN
 CTest passed 210/210 with 0 reports in 202.83 s at
 `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` in this configuration; that run is
-historical and the current 255-case suite has no full TSAN run. The P10 run on
+historical and the current 270-case suite has no full TSAN run. The P10 run on
 `fwk394` at `cf3bc8a` is 235/235 with 0 reports, and the hosted `tsan` job
 runtime was not observed. No H100 was used. No full TSAN run exists for the
-current 255-case suite at `561b9a4c9435e37b164623bb6be60a3051783eb4`.
+current 270-case suite.
 
 ### Status tests
 
@@ -256,8 +257,8 @@ to the HIP build. The hosted runner has no AMD GPU, so the job stops after the
 build: no CTest run and no example execution.
 
 HIP runtime validation is separate. On `hal` with an AMD Radeon RX 7900 XTX
-(`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **307/307** at
-`561b9a4c9435e37b164623bb6be60a3051783eb4`; the previous 301/301 at `ffe4074`,
+(`gfx1100`) and ROCm 7.2, the current HIP CTest run passes **325/325** at
+`3b90ffd8962084d59ebc672f7848b093f2d99582`; the previous 307/307 at `561b9a4c`, 301/301 at `ffe4074`,
 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at `a610281` are
 historical. The original
 245/245 run with 43 HIP cases (8 typed Flow, 24 particle CLI, 10 photon CLI,
@@ -337,12 +338,14 @@ cmake --build build -j "$(nproc)"
 The job only compiles the SYCL test translation unit and the examples. It does
 not use `sycl-ls` as a device gate, does not run CTest, and does not execute an
 example. The GitHub-hosted runner has no Intel GPU, so this job makes no SYCL
-runtime claim. The validated device run is 72/72 at
-`9ace795798c0e8db9f4e74885cc131ef05bc5163` on `hal` with an Intel Arc A770
-(`spir64`, oneAPI 2026.2), where the PR #69 matrix (33 in-process, 24 particle
+runtime claim. The validated device run is 342/342 (75 sycl-labelled) at
+`3b90ffd8962084d59ebc672f7848b093f2d99582` on `hal` with an Intel Arc A770
+(`spir64`, oneAPI 2026.2); the PR #69 matrix (33 in-process, 24 particle
 CLI, 3 cross-backend, 10 photon CLI, 1 photon output) plus the
-environment-scoped `test_photon_scattering_sycl_fp64` case passes with
-`ctest -L sycl`; by default the Arc A770 lacks the SYCL `fp64` aspect, so the
+environment-scoped `test_photon_scattering_sycl_fp64` case is historical at
+72/72 (`ctest -L sycl` at `9ace795`), and the AoS attribute matrix, the
+registration-site subset, and the record-pipeline cases extend the build to the
+current full suite. By default the Arc A770 lacks the SYCL `fp64` aspect, so the
 oneAPI photon path runs fp32, and the opt-in case runs the double physics. The
 hosted job never runs the opt-in case. AOT via `ocloc` is
 not used: `ocloc` is present and a plain invocation does not crash, but it
@@ -392,7 +395,7 @@ image and the extra `git` install before checkout.
 
 The hosted workflow defines `cpu (Release)`, `cpu (Debug)`,
 `sanitizers (ASAN+UBSAN)`, `tsan`, `cuda-compile`, `hip-compile`,
-`sycl-compile`, `format`, and `reuse`. Each current CPU job runs 255 CTest cases (Release and Debug); the
+`sycl-compile`, `format`, and `reuse`. Each current CPU job runs 270 CTest cases (Release and Debug); the
 `sanitizers` job runs ASAN+UBSAN over the same CPU suite plus its `leak` step.
 The N=1e6 smoke, source-admission, stall-diagnostics, cross-backend equality,
 visit-cap, pool-pressure, CLI-contract, kernel-axis, and in-flight cases run in
@@ -402,7 +405,7 @@ workaround clears the nvcc internal compiler error, so `cuda-compile` builds the
 GPU. `hip-compile` builds the HIP sources and the HIP example without an AMD
 GPU. `sycl-compile` builds the Intel-GPU-only SYCL backend without a device;
 it is compile-only and makes no SYCL runtime claim. `icpx-cpu` runs on every push and pull request; the local validation passes
-the 255-case CPU suite (g++ 13.3 on `fwk394` at `561b9a4c`; the icpx evidence at
+the 270-case CPU suite (g++ 13.3 on `fwk394`; the icpx evidence at
 `88de14f` passes the then-current 247-case suite). At `cf3bc8a`
 on `gf/p10-sanitizers`, the historical fwk394 evidence is ASAN+UBSAN 236/236,
 leak 1/1, and TSAN 235/235 with 0 reports (non-PIE, OMP off, CpuOmpBlocks off);
@@ -410,8 +413,9 @@ the hosted `tsan` and `leak` runtimes were not observed, and no H100 was used.
 On the exclusive `rosi_v100` host at `f3ef355` the historical CPU CTest is
 210/210 and the full integrated TSAN CTest is 210/210 with 0 reports (202.83 s,
 non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). The
-current device totals are 316/316 CUDA on `hal` A30 `sm_80`, 307/307 HIP on
-`hal` RX 7900 XTX, and 72/72 SYCL on `hal` Arc A770; see `docs/acceptance.md`.
+current device totals are 334/334 CUDA on `fwk394` RTX 2080 Ti `sm_75`,
+325/325 HIP on `hal` RX 7900 XTX, and 342/342 SYCL on `hal` Arc A770 (75
+sycl-labelled); see `docs/acceptance.md`.
 
 Container jobs set `shell: bash` because container jobs default to `sh`, which
 rejects `set -o pipefail`.
@@ -424,7 +428,7 @@ run locally and no GitHub-hosted runtime was observed. Locally on
 2025.3.3 (the same 2025.3 line as the container) against the pinned alpaka
 checkout, and both `ctest` runs passed 247/247 with `OMP_NUM_THREADS=4` (that
 run is at `88de14f`). The `ffe4074` re-validation ran the 249-case suite with
-g++ 13.3 on `fwk394`; the `561b9a4c` re-validation ran the 255-case suite with
+g++ 13.3 on `fwk394`; the `3b90ffd` re-validation ran the 270-case suite with
 g++ 13.3 on `fwk394`. The hosted container revision 2025.3.0 was not run for
 either, and 2025.3.3 is the closest available build of that compiler line. No
 GitHub-hosted job runtime was observed for this branch.
