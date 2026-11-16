@@ -21,14 +21,63 @@ register functors through `source`, `partition`, `transform`, and `sink`;
 registration returns opaque handles. Users declare edges with `connect` and
 launch with `configure(Tuning)` and `run(source, itemCount)`. The `Payload`
 concept rejects a payload that is not trivially copyable and default-constructible.
-`TStorage` defaults to `DefaultStorage<TPayload, TDevice>`, a generic
-payload-slot storage with statically known `slotBytes`.
+`TStorage` defaults to `DefaultStorage<TPayload, TDevice>`: the canonical
+`Particle` payload selects the SoA `ParticleStorage<TDevice>`, every other
+payload selects the generic `PayloadSlotStorage<TPayload, TDevice>`. Both have a
+statically known `slotBytes`. `SoAStorage<TDevice, Fields...>` is an explicit
+opt-in for record payloads and is never selected by the default alias.
 
 `run()` validates the topology, derives the configuration, constructs the typed
 stages and the scheduler, and returns `SchedulerStats` only after every queue
 and pool chunk has been retired, or it propagates an execution error without
 publishing a partial output. The typed execution adapters live in
 `flow/Execution.hpp`; the status channel lives in `flow/Status.hpp`.
+
+## Attribute records and column storage
+
+`flow/Attributes.hpp` wraps the vendored llamaLite descriptors (`TagBase`,
+`Field`, `Set`) and defines the `Record` adapter with graphFlow validation and
+accounting.
+`Record<Fields...>` is a value payload backed by a one-element
+`llama_lite::SoA`; it is trivially copyable and copying it copies every
+attribute. `RecordProxy<Access, Set<Tags...>>` narrows `get`/`set` per node at
+compile time, but `load`, conversion to the record type, and `store` still move
+the whole record. The proxy narrows access, not the layout.
+
+`SoAStorage<TDevice, Fields...>` is the array-of-structs-over-SoA storage. It
+allocates one device column per attribute and one `uint32_t` bin-id column,
+each of `numChunks * chunkCapacity` elements. There is no contiguous record
+array: `base(handle)` is `handle.index * C` and `slotIndex(handle, row)` is
+`base + row`. `loadRecord`/`storeRecord` gather or scatter one record, and
+`proxy<Set>(slot)` returns a per-slot proxy. Chunk lifecycle, generations,
+reader leases, and the free list stay in the shared `detail::ChunkLedger`, so
+the scheduler sees the same `PayloadStorage`/`ChunkStorage` contract as for
+`ParticleStorage` and `PayloadSlotStorage`.
+
+Slot accounting matches the other storages:
+
+```text
+padded(T)      = ceil(sizeof(T) / alignof(T)) * alignof(T)
+attributeBytes = sum of padded(value_type) over all attributes
+slotBytes      = attributeBytes + sizeof(std::uint32_t)   // bin-id scratch
+```
+
+The canonical particle attribute set accounts 20 + 4 = 24 bytes, the existing
+`payloadBytesPerSlot`, so pool sizing, `maxPayloadChunks`, and the budget checks
+keep their values. `slotBytes` is a budget and view size; the columns allocate
+their own value types and the scratch column is separate.
+
+The typed stages reach the columns through
+`detail::StorageAccess<SoAStorage<...>, Record<...>>`, which binds one view per
+attribute in declaration order. The launch helpers expand the view tuple into
+separate top-level kernel arguments, because alpaka rewrites only top-level
+view arguments for the device. `load`/`store` then gather or scatter one
+record attribute by attribute.
+
+`SoAStorage` is never a default. `DefaultStorage` still selects
+`ParticleStorage` for the canonical `Particle` payload and
+`PayloadSlotStorage` for every other payload; existing particle and photon code
+keeps its SoA arrays and `ParticleStorage` remains the migration source.
 
 ## Host scheduler
 
@@ -111,10 +160,13 @@ Q-chunk batch, but the runtime reserve follows the actual prefix.
 
 The pool payload budget is explicit. `poolPayloadBudgetBytes` bounds
 `S*C*payloadBytesPerSlot`, with `payloadBytesPerSlot = 24` bytes for the id,
-property, weight, visit, and bin-id arrays. The policy memory budget covers the
-`P*C` live working set; `Flow` adds the exact registered-node output-credit
-reserve. `Config::validate` rejects a pool over budget before any allocation.
-The former `C=8192`, `P=65536` pair exceeds the default budget and is rejected.
+property, weight, visit, and bin-id arrays. That value equals the
+`AttributeList::slotBytes` of the id, property, weight, and visit fields, so an
+`SoAStorage` over that field set is budgeted identically. The policy memory
+budget covers the `P*C` live working set; `Flow` adds the exact registered-node
+output-credit reserve. `Config::validate` rejects a pool over budget before any
+allocation. The former `C=8192`, `P=65536` pair exceeds the default budget and
+is rejected.
 
 Source admission is gated by particles, not by the raw free-list length. A
 source chunk is admitted only when it can carry
