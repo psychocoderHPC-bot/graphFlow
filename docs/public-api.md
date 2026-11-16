@@ -22,10 +22,147 @@ views are device-copyable named C++20 structs; accelerator functors use
 `ALPAKA_FN_ACC` and may take the accelerator as their first argument.
 
 `TStorage` is the chunk storage and defaults to
-`DefaultStorage<TPayload, TDevice>`, a generic payload-slot storage with
-statically known `slotBytes`. `TDevice` is the alpaka device type the graph
+`DefaultStorage<TPayload, TDevice>`. For the canonical `Particle` payload that
+alias selects the SoA `ParticleStorage<TDevice>`; every other payload selects
+`PayloadSlotStorage<TPayload, TDevice>`, a generic array-of-struct storage with
+`slotBytes == sizeof(TPayload)`. `TDevice` is the alpaka device type the graph
 runs on. The `Payload<TPayload>` concept rejects a payload that is not
-trivially copyable and default-constructible.
+trivially copyable and default-constructible. An application may pass
+`SoAStorage<TDevice, Fields...>` explicitly for a record payload; it is never
+selected by default.
+
+## Attribute records and AoS-over-SoA storage
+
+`graphFlow/flow/Attributes.hpp`, included by `graphFlow/graphFlow.hpp`,
+re-exports the llamaLite tag, field, and set descriptors and adds the record
+and storage adapters. The record and column types build on the vendored
+llamaLite descriptors under `include/graphFlow/thirdparty/llamaLite`;
+graphFlow adds validation, slot accounting, and the chunk-storage contract, not
+a second record implementation.
+
+| Type | Role |
+| --- | --- |
+| `TagBase` | Empty base of every tag; one tag selects one attribute. |
+| `Field<Tag, T>` | Compile-time attribute descriptor; `T` must be trivially copyable. |
+| `Set<Tags...>` | Per-node read/write subset with a compile-time `contains<Tag>`. |
+| `AttributeList<Fields...>` | Validated, ordered list; source of truth for names, order, value types, and slot accounting. |
+| `Record<Fields...>` | Value record with `get<Tag>()`, `set<Tag>()`, and value semantics. |
+| `RecordProxy<TAccess, TSet>` | Narrow view that rejects `get`/`set` outside its set at compile time. |
+| `SoAStorage<TDevice, Fields...>` | Payload storage with one device column per attribute plus a bin-id scratch column. |
+
+A tag is an empty type derived from `graphFlow::TagBase`; two attributes with
+the same tag cannot coexist in one `AttributeList`. A `Field` is a type
+descriptor only: values live in a `Record` or in an `SoAStorage` column. An
+`AttributeList` requires at least one field and rejects a field whose value
+type is not trivially copyable.
+
+```cpp
+struct IdTag : graphFlow::TagBase
+{
+};
+struct WeightTag : graphFlow::TagBase
+{
+};
+
+using Id = graphFlow::Field<IdTag, std::uint64_t>;
+using Weight = graphFlow::Field<WeightTag, std::uint32_t>;
+
+using ItemRecord = graphFlow::Record<Id, Weight>;
+using ItemStorage = graphFlow::SoAStorage<TDevice, Id, Weight>;
+
+graphFlow::Flow<ItemRecord, TDevice, ItemStorage> flow{device};
+```
+
+`Record<Fields...>` is trivially copyable and default constructible, so it
+satisfies `Payload`. Its value storage is a one-element `llama_lite::SoA`, so
+copying a record copies every attribute. `record.proxy<Set<Tags...>>()` returns
+a `RecordProxy`; `get<Tag>()` and `set<Tag>()` outside that set fail at compile
+time. `load()`, the conversion to `record_type`, and `store()` operate on the
+whole record: copying a proxy into a `Record` copies every attribute, including
+attributes outside the set. The proxy narrows access, not the record layout or
+the copy. The typed `Flow` stages pass the full `Record` payload to their
+functors; a `Set` narrows proxy access where the application asks for a proxy,
+it does not change the payload type the scheduler loads and stores.
+
+`SoAStorage<TDevice, Fields...>` implements `PayloadStorage` and
+`ChunkStorage`. It allocates one `onHost::alloc<value_type>` column per
+attribute plus one `std::uint32_t` column; there is no contiguous record array.
+Chunk `k` owns row `k` of every column:
+
+```text
+base(handle)          = handle.index * chunkCapacity
+slotIndex(handle,row) = base(handle) + row
+```
+
+`loadRecord(slot)` and `storeRecord(slot, record)` gather or scatter one
+logical record, `proxy<Set<Tags...>>(slot)` returns a per-slot `RecordProxy`,
+`column<Tag>()` exposes one attribute column, and `binIds()` exposes the
+scratch column for custom classify/scatter stages. The constructor rejects a
+zero chunk count or chunk capacity and clamps a larger chunk count to the
+payload budget, exactly like the other storages; `numChunks()` reports the
+physical count.
+
+`slotBytes` is the accounting size of one logical record, not the size of one
+contiguous object:
+
+```text
+padded(T)      = ceil(sizeof(T) / alignof(T)) * alignof(T)
+attributeBytes = sum of padded(value_type) over all attributes
+scratchBytes   = sizeof(std::uint32_t)
+slotBytes      = attributeBytes + scratchBytes
+```
+
+For the canonical particle fields (`uint64_t` id and three `uint32_t` fields)
+`attributeBytes` is 20 and `slotBytes` is 24, equal to `payloadBytesPerSlot`.
+The payload budget keeps its existing meaning:
+`numChunks * chunkCapacity * slotBytes` is what `maxPayloadChunks`,
+`requiredPayloadBytes`, and `validatePayloadBudget` account for. Each column
+allocates its own value type, so `slotBytes` sizes the budget and views, not
+one array.
+
+### Device access
+
+`detail::StorageAccess<SoAStorage<TDevice, Fields...>, Record<Fields...>>`
+binds one view per attribute in declaration order. `views()` returns them as a
+tuple, and the launch helpers `enqueueKernelWithViews` and
+`enqueueKernelWithInOutViews` expand the tuple into separate top-level kernel
+arguments. The expansion is required because alpaka rewrites only top-level
+view arguments for the device; packing the columns into one struct would leave
+the device with host views. `load(slot, views...)` gathers a record and
+`store(slot, record, views...)` scatters it, attribute by attribute.
+
+### Defaults and migration from `ParticleStorage`
+
+The defaults do not change:
+
+| `TPayload` | `DefaultStorage<TPayload, TDevice>` | `slotBytes` |
+| --- | --- | --- |
+| `graphFlow::Particle` | `ParticleStorage<TDevice>` | `payloadBytesPerSlot` (24) |
+| any other payload | `PayloadSlotStorage<TPayload, TDevice>` | `sizeof(TPayload)` |
+
+A `Record` is also a valid payload with the default `PayloadSlotStorage`; the
+record type and the column layout are separate choices. The storage defaults
+never change because a type happens to be a `Record`.
+
+`ParticleStorage` keeps its existing `ids`, `properties`, `weights`, and
+`visits` arrays; the particle and photon examples keep using it. An application
+that wants attribute columns migrates only its own payload:
+
+1. Declare one tag derived from `graphFlow::TagBase` and one `Field<Tag, T>` per
+   attribute, then name the ordered `AttributeList` or `Record`. Attribute order
+   fixes the column and kernel-argument order.
+2. Pass `SoAStorage<TDevice, Fields...>` as the third `Flow` template argument.
+   The record type is the first argument and the two field lists must match.
+3. Replace field access (`payload.id`) with `payload.get<IdTag>()` and
+   `payload.set<IdTag>(value)`; source functors construct the record from the
+   declared fields. A node may call `record.proxy<Set<Tags...>>()` or
+   `storage.proxy<Set<Tags...>>(slot)`, but a record copy still carries every
+   attribute.
+4. Use `binIds()` only when implementing a custom classify/scatter stage; the
+   built-in stages allocate their own bin-id scratch view.
+
+The column layout carries no timing or throughput claim. This document
+describes the contract, not a measured comparison with `ParticleStorage`.
 
 ## Flow operations
 

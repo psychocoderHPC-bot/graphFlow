@@ -47,7 +47,9 @@ cases (2/2 CPU, 3/3 CUDA, 3/3 HIP); PR #69 registers the 71-case SYCL matrix
 historical. The public API
 is implemented: the typed `Flow<TPayload, TDevice, TStorage>` topology,
 execution, storage, and status path described in
-[public API contract](docs/public-api.md). CPU, CUDA, HIP, and SYCL execution
+[public API contract](docs/public-api.md). The AoS-over-SoA attribute storage
+(`SoAStorage` over llamaLite records) is an explicit opt-in; the default
+storage selection is unchanged. CPU, CUDA, HIP, and SYCL execution
 are validated on real devices. GitHub-hosted HIP and SYCL builds remain
 compile-only because those runners have no AMD or Intel GPU; the
 `sycl-compile` job builds the Intel-GPU-only SYCL backend and makes no
@@ -167,8 +169,9 @@ include/graphFlow/
             Classifier.hpp, ClassifyKernel.hpp, ScatterKernel.hpp, Kernels.hpp,
             DenseBinTable.hpp, BinTable.hpp, HashClassifyKernel.hpp,
             HashScatterKernel.hpp, TileDescriptor.hpp
-  flow/    Flow.hpp, Execution.hpp, PayloadStorage.hpp, Concepts.hpp,
-            NodeHandle.hpp, Payload.hpp, Ports.hpp, Status.hpp, Tuning.hpp
+  flow/    Flow.hpp, Execution.hpp, PayloadStorage.hpp, Attributes.hpp,
+            Concepts.hpp, NodeHandle.hpp, Payload.hpp, Ports.hpp, Status.hpp,
+            Tuning.hpp
   sched/   GraphRunner.hpp
   rng/     ParticleRng.hpp
   detail/  QueueProbe.hpp
