@@ -96,6 +96,9 @@ namespace graphFlow::detail
                 }
                 catch(...)
                 {
+                    // Observer hooks are diagnostics and must not throw. This catch is
+                    // deliberate: a throwing hook must never abort the operation or leak a
+                    // slot. The failure is silent and is not counted.
                 }
             }
             m_free.pop_back();
@@ -123,6 +126,9 @@ namespace graphFlow::detail
                 }
                 catch(...)
                 {
+                    // Observer hooks are diagnostics and must not throw. This catch is
+                    // deliberate: a throwing hook must never abort the operation or leak a
+                    // slot. The failure is silent and is not counted.
                 }
             }
         }

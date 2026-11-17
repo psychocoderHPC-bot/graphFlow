@@ -178,6 +178,18 @@ namespace graphFlow
             seed(storage);
         }
 
+        /** Declare whether the storage reports acquire and release transitions.
+         *
+         * The runner sets this after installing the storage observers. With observers installed
+         * a chunk that reaches dispatch or routing while its record is still `free` means the
+         * acquire notification was skipped, which is recorded as a sticky fault. Without observer
+         * support the same state is the documented fallback and is resynchronised silently.
+         */
+        void setObserverInstalled(bool installed) noexcept
+        {
+            m_observerInstalled = installed;
+        }
+
         /** Report a chunk acquired from the pool. The record enters `reserved`. */
         void onAcquire(ChunkHandle handle) noexcept
         {
@@ -527,6 +539,8 @@ namespace graphFlow
                 return nullptr;
             if(record->handle.generation != handle.generation || record->phase == ChunkPhase::free)
             {
+                if(record->phase == ChunkPhase::free && m_observerInstalled)
+                    noteFault("acquire notification was not observed", handle.index, ChunkPhase::free, record->phase);
                 record->handle = handle;
                 record->producingNode = invalidChunkNode;
                 record->ownerNode = invalidChunkNode;
@@ -562,5 +576,6 @@ namespace graphFlow
         std::uint32_t m_peaks[5] = {};
         mutable ChunkRegistrySummary m_counters;
         mutable Fault m_fault;
+        bool m_observerInstalled = false;
     };
 } // namespace graphFlow

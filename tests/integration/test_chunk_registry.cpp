@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -259,6 +260,138 @@ namespace
     private:
         graphFlow::ChunkPool<TDevice> m_pool;
     };
+
+    /** Storage that drops or throws the first acquire observation.
+     *
+     * `drop` proves that a skipped acquire is detected as a sticky fault. `throwing` proves that a
+     * throwing diagnostic cannot abort the acquire or lose the slot: the pool catches it.
+     */
+    template<typename TDevice>
+    class AcquireFaultStorage
+    {
+    public:
+        enum class Mode
+        {
+            drop,
+            throwing
+        };
+
+        using handle_type = graphFlow::ChunkHandle;
+
+        AcquireFaultStorage(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity, Mode mode)
+            : m_pool{device, numChunks, chunkCapacity}
+            , m_mode{mode}
+        {
+        }
+
+        [[nodiscard]] std::uint32_t numChunks() const
+        {
+            return m_pool.numChunks();
+        }
+
+        [[nodiscard]] std::uint32_t chunkCapacity() const
+        {
+            return m_pool.chunkCapacity();
+        }
+
+        [[nodiscard]] std::uint32_t freeCount() const
+        {
+            return m_pool.freeCount();
+        }
+
+        [[nodiscard]] std::uint32_t liveCount() const
+        {
+            return m_pool.liveCount();
+        }
+
+        [[nodiscard]] graphFlow::ChunkHandle acquire()
+        {
+            return m_pool.acquire();
+        }
+
+        void release(graphFlow::ChunkHandle handle)
+        {
+            m_pool.release(handle);
+        }
+
+        void acquireLease(graphFlow::ChunkHandle handle)
+        {
+            m_pool.acquireLease(handle);
+        }
+
+        void releaseLease(graphFlow::ChunkHandle handle)
+        {
+            m_pool.releaseLease(handle);
+        }
+
+        [[nodiscard]] std::uint32_t leaseCount(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.leaseCount(handle);
+        }
+
+        [[nodiscard]] bool isLive(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.isLive(handle);
+        }
+
+        [[nodiscard]] std::uint64_t base(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.base(handle);
+        }
+
+        [[nodiscard]] std::uint32_t generation(std::uint32_t index) const
+        {
+            return m_pool.generation(index);
+        }
+
+        void validateLive(graphFlow::ChunkHandle handle) const
+        {
+            m_pool.validateLive(handle);
+        }
+
+        [[nodiscard]] std::uint32_t peakLive() const
+        {
+            return m_pool.peakLive();
+        }
+
+        [[nodiscard]] std::uint32_t peakLeases() const
+        {
+            return m_pool.peakLeases();
+        }
+
+        void setChunkObservers(
+            std::function<void(graphFlow::ChunkHandle)> acquired,
+            std::function<void(graphFlow::ChunkHandle)> released)
+        {
+            m_acquired = std::move(acquired);
+            m_pool.setChunkObservers(
+                [this](graphFlow::ChunkHandle handle)
+                {
+                    if(!m_done)
+                    {
+                        m_done = true;
+                        if(m_mode == Mode::throwing)
+                            throw std::runtime_error{"deliberate observer failure"};
+                        return;
+                    }
+                    if(m_acquired)
+                        m_acquired(handle);
+                },
+                std::move(released));
+        }
+
+        void clearChunkObservers()
+        {
+            m_acquired = {};
+            m_pool.clearChunkObservers();
+        }
+
+    private:
+        graphFlow::ChunkPool<TDevice> m_pool;
+        Mode m_mode;
+        std::function<void(graphFlow::ChunkHandle)> m_acquired;
+        bool m_done = false;
+    };
 } // namespace
 
 TEST_CASE("chunk registry tracks a conserving pipeline", "[chunk-registry][integration]")
@@ -438,6 +571,90 @@ TEST_CASE("chunk registry rejects an impossible owner and destination pair", "[c
 
     pool.releaseLease(handle);
     pool.release(handle);
+}
+
+TEST_CASE("chunk pool observer throw does not leak the acquired slot", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::ChunkPool<decltype(device)> pool{device, 4u, 8u};
+    std::uint32_t freeWhenNotified = 0u;
+    bool notified = false;
+    pool.setChunkObservers(
+        [&](graphFlow::ChunkHandle)
+        {
+            freeWhenNotified = pool.freeCount();
+            notified = true;
+            throw std::runtime_error{"deliberate observer failure"};
+        },
+        {});
+
+    graphFlow::ChunkHandle handle{};
+    CHECK_NOTHROW(handle = pool.acquire());
+    CHECK(notified);
+    // Notify-before-pop: the slot is still accounted for when the observer runs. A pop-first
+    // acquire would observe numChunks - 1 here.
+    CHECK(freeWhenNotified == pool.numChunks());
+    CHECK(pool.freeCount() == 3u);
+    CHECK(pool.liveCount() == 1u);
+    CHECK(pool.freeCount() + pool.liveCount() == pool.numChunks());
+    pool.release(handle);
+    CHECK(pool.freeCount() == pool.numChunks());
+}
+
+TEST_CASE("throwing acquire observer does not abort or corrupt a run", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Storage = AcquireFaultStorage<decltype(device)>;
+    using Runner = graphFlow::GraphRunner<decltype(device), Storage>;
+    Storage storage{device, 16u, 8u, Storage::Mode::throwing};
+    Runner runner{device, storage};
+
+    std::uint64_t sunk = 0u;
+    auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        conservingTransformHooks<Runner>(runner, storage, 1u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, plainSinkHooks<Runner>(sunk));
+    runner.setSource(source, 16u, 16u);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    graphFlow::SchedulerStats stats{};
+    CHECK_NOTHROW(stats = runner.run());
+    CHECK(stats.sourceSunk == 16u);
+    CHECK(sunk == 16u);
+    CHECK(storage.freeCount() == storage.numChunks());
+    CHECK(storage.liveCount() == 0u);
+    // The skipped acquire is a sticky fault, not a fatal one.
+    CHECK(stats.chunkRegistryFaults >= 1u);
+}
+
+TEST_CASE("chunk registry records a dropped acquire notification", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Storage = AcquireFaultStorage<decltype(device)>;
+    using Runner = graphFlow::GraphRunner<decltype(device), Storage>;
+    Storage storage{device, 16u, 8u, Storage::Mode::drop};
+    Runner runner{device, storage};
+
+    std::uint64_t sunk = 0u;
+    auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        conservingTransformHooks<Runner>(runner, storage, 1u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, plainSinkHooks<Runner>(sunk));
+    runner.setSource(source, 16u, 16u);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    graphFlow::SchedulerStats const stats = runner.run();
+    CHECK(stats.sourceSunk == 16u);
+    CHECK(stats.chunkRegistryFaults >= 1u);
+    CHECK_THROWS_WITH(runner.validateChunkRegistry(), ContainsSubstring("acquire notification was not observed"));
 }
 
 TEST_CASE("chunk registry routes a generation mismatch through the fault channel", "[chunk-registry][integration]")

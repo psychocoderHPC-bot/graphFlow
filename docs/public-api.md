@@ -235,14 +235,21 @@ per-chunk transform kernels, and `chunkLimit`, the clamp name
 (`wave`, `maximum`, `grid`, `memory` or `latency`) that set the per-chunk
 launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A
 Phase 0 chunk registry adds `registryAcquisitions`, `registryRoutings`,
-`registryRetirements` and the phase peaks `peakRegistryReady`,
-`peakRegistryInflight`, `peakRegistryReserved`; these counters observe the
-pipeline and never feed a scheduling decision. A stall throws
+`registryRetirements`, `registryFaults` and the phase peaks
+`peakRegistryReady`, `peakRegistryInflight`, `peakRegistryReserved`; these
+counters observe the pipeline and never feed a scheduling decision. A stall throws
 `SchedulerStallError`; `snapshot()` on the runner and on the error exposes the
 same aggregate state, including the current registry phase counts, without
 topology. The low-level `GraphRunner` additionally exposes
 `chunkRegistry()` (one record per pool slot), `chunkRegistrySummary()` and
 `validateChunkRegistry()`.
+
+`ChunkRegistrySummary::liveChunks` is `chunks - freeChunks`, which is exactly
+`reserved + ready + inflight + retired`; it includes transient `retired`
+chunks. The stall line prints `registryLiveChunks`, `registryReadyChunks`,
+`registryInflightChunks` and `registryReservedChunks` but omits
+`registryRetiredChunks`, so those printed numbers cannot be summed against
+`live`.
 
 ## Quickstart: `SoAFlow<Particle>`
 

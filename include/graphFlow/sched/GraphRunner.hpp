@@ -1505,6 +1505,7 @@ namespace graphFlow
                 m_storage.setChunkObservers(
                     [this](ChunkHandle handle) { m_registry.onAcquire(handle); },
                     [this](ChunkHandle handle) { m_registry.onRelease(handle); });
+                m_registry.setObserverInstalled(true);
             }
         }
 
