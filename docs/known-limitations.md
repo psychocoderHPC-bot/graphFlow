@@ -27,8 +27,8 @@ one block per tile.
 ## HIP execution is validated on one AMD device
 
 HIP execution runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and
-ROCm 7.2. The current HIP CTest run passes **369/369** at
-`54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`; the previous 307/307 at `561b9a4c`, 301/301 at `ffe4074`,
+ROCm 7.2. The current HIP CTest run passes **380/380** at
+`25c73f31c736b1c5f765003ff8815d2a24c25808`; the previous 307/307 at `561b9a4c`, 301/301 at `ffe4074`,
 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at `a610281` are
 historical. The
 original gate passed 245/245
@@ -53,9 +53,9 @@ particle feedback/pressure cases. `ctest -L sycl` selects that matrix; the
 build registers every device case under the `sycl` label, plus the SYCL CLI
 and cross-backend exact-histogram cases (72 sycl-labelled cases at
 `9ace795`, historical). On `hal` with an Arc A770 (`spir64`, oneAPI
-2026.2) the current full suite passes 386/386 at
-`54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` (77 sycl-labelled), and the CPU-only build
-passes 312/312 on
+2026.2) the current full suite passes 397/397 at
+`25c73f31c736b1c5f765003ff8815d2a24c25808` (77 sycl-labelled), and the CPU-only build
+passes 323/323 on
 `fwk394`. The SYCL build disables the OpenCL CPU device kind
 (`alpaka_ONEAPI_Cpu=OFF`), so a missing Intel GPU fails the backend contract
 instead of falling back to the host. The GitHub-hosted `sycl-compile` job
@@ -110,7 +110,7 @@ JIT-compiled SPIR-V; the first kernel run pays the SPIR-V JIT cost.
 ## CPU OMP execution
 
 CPU execution with the OpenMP backend works on `rosi_v100` with passive
-spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 312/312; the
+spinning (`GOMP_SPINCOUNT=0`). The current CPU suite passes 323/323; the
 `rosi_v100` 202/202 OMP=ON Release total is historical. CPU OpenMP wall times
 at `N=1e5`, `C=128`/`P=1024`, `Q=1`:
 OMP=1 2.88 s, OMP=2 2.38 s (best), OMP=4 2.44 s, OMP=8 2.62 s; at `N=1e6`
@@ -123,8 +123,8 @@ with passive spinning.
 The last full integrated TSAN CTest passed 210/210 with 0 reports in 202.83 s
 on `rosi_v100` at `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` (non-PIE Debug
  with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`). That suite
- predates the current 312-case suite, so no full TSAN result exists for
- `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`. Since `gf/p10-sanitizers` at
+ predates the current 323-case suite, so no full TSAN result exists for
+ `25c73f31c736b1c5f765003ff8815d2a24c25808`. Since `gf/p10-sanitizers` at
 `cf3bc8a72942b01c4a1ed32e4db7b260e22cb750` (merged as
 `2fefe54c6d32e9156be5c08ea497119d0bacc21e`), hosted CI runs a dedicated
 `tsan` job on `ubuntu-latest` with the same accepted configuration (non-PIE,
@@ -163,8 +163,8 @@ the CPU CTest passed 202/202 in Release; the `f3ef355` runs (CPU 210/210, TSAN
 210/210 with 0 reports, and the `N=1e8` CUDA acceptance run) use the same
 workaround. The `Debug` build was not re-run after the seven hash cases, so the
 measured historical `Debug` totals are the pre-hash 247/247 CUDA and 195/195
- CPU. The current tree is 312/312 CPU, 378/378 CUDA on `fwk394` RTX 2080 Ti `sm_75`, and
- 369/369 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
+ CPU. The current tree is 323/323 CPU, 389/389 CUDA on `fwk394` RTX 2080 Ti `sm_75`, and
+ 380/380 HIP on `hal` RX 7900 XTX. The RNG main is preserved. The hash-path
 rerun remains open; H100 was not used. The historical full device suites at
 `f3ef355` were CUDA 264/264 on `hal` A30 `sm_80` (CUDA 13.4, 400.98 s) and
 HIP 255/255 on `hal` RX 7900 XTX `gfx1100` (ROCm 7.2, 99.44 s), both on the
@@ -193,8 +193,8 @@ earlier P07 run at `64d4a1e` (Q8 7.690 s, 1.300e7
 particles/s) and the `f3ef355` run (Q1 194.685 s, Q2 9.093 s, Q8 7.676 s) are
 historical.
 
-The current test totals are CPU 312/312, CUDA 378/378 on `fwk394` RTX 2080 Ti `sm_75`, and
-HIP 369/369 on `hal` RX 7900 XTX; PR #63 adds the public-Flow routed-axis cases
+The current test totals are CPU 323/323, CUDA 389/389 on `fwk394` RTX 2080 Ti `sm_75`, and
+HIP 380/380 on `hal` RX 7900 XTX; PR #63 adds the public-Flow routed-axis cases
 and PR #65 adds the six `[scheduler]` cases on top of the P07b 7/7. The
 previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
 298/298 at `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
@@ -359,7 +359,7 @@ gate needs a device host. TSAN was validated on the
 exclusive `rosi_v100` host (210/210, 0 reports, 202.83 s at `f3ef355`,
  non-PIE with `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); that
    run is historical and no full TSAN run exists for
-  `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`. The P10 fwk394 run
+  `25c73f31c736b1c5f765003ff8815d2a24c25808`. The P10 fwk394 run
 at `cf3bc8a` is ASAN+UBSAN 236/236, leak 1/1, TSAN 235/235 with 0 reports, and
 the hosted `tsan` and `leak` runtimes were not observed. No self-hosted
 runner, project GPU label, or GitLab pipeline is configured, and no H100 was
@@ -386,7 +386,7 @@ CUDA and HIP are mutually exclusive in a single build, and the CPU backend
 stays enabled in accelerator builds, so the CPU+CUDA pair and the CPU+HIP pair
 each ran the three Q cases 3/3 on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) with
  the row comparisons exact against the CPU reference. The current full device
-  suites are CUDA 378/378 on `fwk394` RTX 2080 Ti `sm_75` and HIP 369/369 on
+  suites are CUDA 389/389 on `fwk394` RTX 2080 Ti `sm_75` and HIP 380/380 on
   `hal` RX 7900 XTX `gfx1100` (ROCm 7.2), correctness only; the `f3ef355` totals
  264/264 and 255/255, the `561b9a4c` totals 316/316 and 307/307, and the
  `9ace795` 72/72 sycl-labelled total are historical.
@@ -441,8 +441,8 @@ only when `8N` bytes plus the payload pool exceeds the device budget.
   its CLI and output cases per backend. A CPU build registers 25 particle
   example tests; a CUDA build registers 49 (24 CPU, 24 CUDA, 1 contract); a HIP
   build adds 24 HIP particle CLI, 10 HIP photon CLI, 1 HIP photon output, and 8
-   typed Flow cases. The current CTest totals are 312/312 CPU, 378/378 CUDA on
-   `fwk394` RTX 2080 Ti `sm_75`, and 369/369 HIP on `hal` RX 7900 XTX; the previous
+   typed Flow cases. The current CTest totals are 323/323 CPU, 389/389 CUDA on
+   `fwk394` RTX 2080 Ti `sm_75`, and 380/380 HIP on `hal` RX 7900 XTX; the previous
    249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and 298/298 at
    `88de14f`, the 246/246, 306/306 and 297/297 at `56c11ac`, and the
    239/299/290 at `a610281` are historical. The other historical integrated totals are 194/194 CPU on

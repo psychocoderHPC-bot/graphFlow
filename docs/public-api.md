@@ -487,9 +487,9 @@ seed, offset, or purpose.
 ## Backend validation
 
 The contract is exercised on CPU, CUDA, HIP, and SYCL. The current suite
-counts at `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` are
-**312/312 CPU**, **378/378 CUDA** on `fwk394` RTX 2080 Ti `sm_75`,
-**369/369 HIP** on `hal` RX 7900 XTX, and **386/386 SYCL** on `hal` Arc A770
+counts at `25c73f31c736b1c5f765003ff8815d2a24c25808` are
+**323/323 CPU**, **389/389 CUDA** on `fwk394` RTX 2080 Ti `sm_75`,
+**380/380 HIP** on `hal` RX 7900 XTX, and **397/397 SYCL** on `hal` Arc A770
 (77 sycl-labelled). The last full recorded run before the AoS additions
 passed 255/255, 316/316 and 307/307 at
 `561b9a4c9435e37b164623bb6be60a3051783eb4`. The AoS-over-SoA matrix
