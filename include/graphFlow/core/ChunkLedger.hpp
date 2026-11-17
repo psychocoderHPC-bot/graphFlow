@@ -85,11 +85,21 @@ namespace graphFlow::detail
             if(m_free.empty())
                 throw std::runtime_error{"graphFlow::ChunkLedger: pool exhausted"};
             std::uint32_t const index = m_free.back();
+            ChunkHandle const handle{index, m_generations[index]};
+            // Notify before removing the slot: an observer fault can never leak the slot. The
+            // observer is a diagnostic, so its failure must never abort the acquire.
+            if(m_acquiredObserver)
+            {
+                try
+                {
+                    m_acquiredObserver(handle);
+                }
+                catch(...)
+                {
+                }
+            }
             m_free.pop_back();
             m_peakLive = liveCount() > m_peakLive ? liveCount() : m_peakLive;
-            ChunkHandle const handle{index, m_generations[index]};
-            if(m_acquiredObserver)
-                m_acquiredObserver(handle);
             return handle;
         }
 
@@ -106,7 +116,15 @@ namespace graphFlow::detail
                 = checkedCounterIncrement(m_generations[handle.index], "graphFlow::ChunkLedger generation");
             m_free.push_back(handle.index);
             if(m_releasedObserver)
-                m_releasedObserver(ChunkHandle{handle.index, m_generations[handle.index]});
+            {
+                try
+                {
+                    m_releasedObserver(ChunkHandle{handle.index, m_generations[handle.index]});
+                }
+                catch(...)
+                {
+                }
+            }
         }
 
         /** Register an asynchronous reader of a chunk. */

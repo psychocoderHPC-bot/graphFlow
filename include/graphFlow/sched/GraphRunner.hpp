@@ -177,6 +177,7 @@ namespace graphFlow
         std::uint64_t chunkRegistryAcquisitions = 0u;
         std::uint64_t chunkRegistryRoutings = 0u;
         std::uint64_t chunkRegistryRetirements = 0u;
+        std::uint64_t chunkRegistryFaults = 0u;
         std::uint32_t peakRegistryReadyChunks = 0u;
         std::uint32_t peakRegistryInflightChunks = 0u;
         std::uint32_t peakRegistryReservedChunks = 0u;
@@ -202,6 +203,7 @@ namespace graphFlow
                 << " registryAcquisitions=" << stats.chunkRegistryAcquisitions
                 << " registryRoutings=" << stats.chunkRegistryRoutings
                 << " registryRetirements=" << stats.chunkRegistryRetirements
+                << " registryFaults=" << stats.chunkRegistryFaults
                 << " peakRegistryReady=" << stats.peakRegistryReadyChunks
                 << " peakRegistryInflight=" << stats.peakRegistryInflightChunks
                 << " peakRegistryReserved=" << stats.peakRegistryReservedChunks;
@@ -227,10 +229,12 @@ namespace graphFlow
         std::uint32_t freeChunks = 0u;
 
         // Chunk-registry phase occupancy at capture time (aggregate only).
+        std::uint32_t registryLiveChunks = 0u;
         std::uint32_t registryReadyChunks = 0u;
         std::uint32_t registryInflightChunks = 0u;
         std::uint32_t registryReservedChunks = 0u;
         std::uint32_t registryRetiredChunks = 0u;
+        std::uint32_t registryFaults = 0u;
 
         // Peaks since the run started.
         std::uint32_t poolChunks = 0u;
@@ -286,6 +290,8 @@ namespace graphFlow
                     << ", peakInflightBatches=" << snapshot.peakInflightBatches
                     << ", peakInflightChunks=" << snapshot.peakInflightChunks
                     << ", peakEventSlotsInUse=" << snapshot.peakEventSlotsInUse
+                    << ", registryLiveChunks=" << snapshot.registryLiveChunks
+                    << ", registryFaults=" << snapshot.registryFaults
                     << ", registryReadyChunks=" << snapshot.registryReadyChunks
                     << ", registryInflightChunks=" << snapshot.registryInflightChunks
                     << ", registryReservedChunks=" << snapshot.registryReservedChunks
@@ -421,6 +427,7 @@ namespace graphFlow
         GraphRunner(TDevice device, TStorage& storage) : m_device{device}, m_storage{storage}
         {
             m_registry.resize(storage.numChunks());
+            m_registry.seed(storage);
             installRegistryObservers();
         }
 
@@ -622,6 +629,12 @@ namespace graphFlow
         [[nodiscard]] ChunkRegistrySummary chunkRegistrySummary() const noexcept
         {
             return m_registry.summary();
+        }
+
+        /** Detail of the first sticky registry fault; empty when the registry is consistent. */
+        [[nodiscard]] std::string chunkRegistryFaultDetail() const
+        {
+            return m_registry.faultDetail();
         }
 
         /** Strict registry consistency check, usable from tests and diagnostics.
@@ -970,7 +983,8 @@ namespace graphFlow
                             node.ready.pop_front();
                         lane->reserved = reserve;
                         reservedTotal += reserve;
-                        m_registry.onReserve(node.id, reserve);
+                        if(reserve != 0u)
+                            m_registry.onReserve(node.id, reserve);
                         if(reservedTotal > stats.peakReservedChunks)
                             stats.peakReservedChunks = reservedTotal;
                         return true;
@@ -1097,6 +1111,7 @@ namespace graphFlow
             stats.chunkRegistryAcquisitions = registry.acquisitions;
             stats.chunkRegistryRoutings = registry.routings;
             stats.chunkRegistryRetirements = registry.retirements;
+            stats.chunkRegistryFaults = registry.faults;
             stats.peakRegistryReadyChunks = registry.peakReadyChunks;
             stats.peakRegistryInflightChunks = registry.peakInflightChunks;
             stats.peakRegistryReservedChunks = registry.peakReservedChunks;
@@ -1343,6 +1358,8 @@ namespace graphFlow
             snapshot.reservedChunks = m_reservedTotal;
             snapshot.freeChunks = m_storage.freeCount();
             ChunkRegistrySummary const registry = m_registry.summary();
+            snapshot.registryLiveChunks = registry.liveChunks;
+            snapshot.registryFaults = static_cast<std::uint32_t>(registry.faults);
             snapshot.registryReadyChunks = registry.readyChunks;
             snapshot.registryInflightChunks = registry.inflightChunks;
             snapshot.registryReservedChunks = registry.reservedChunks;
@@ -1387,8 +1404,11 @@ namespace graphFlow
             ChunkRegistrySummary const registry = m_registry.summary();
             if(!first)
                 message << "; ";
-            message << "registry ready=" << registry.readyChunks << " inflight=" << registry.inflightChunks
-                    << " reserved=" << registry.reservedChunks;
+            message << "registry live=" << registry.liveChunks << " ready=" << registry.readyChunks
+                    << " inflight=" << registry.inflightChunks << " reserved=" << registry.reservedChunks
+                    << " faults=" << registry.faults;
+            if(registry.faults != 0u)
+                message << " fault-detail='" << m_registry.faultDetail() << "'";
             return message.str();
         }
 

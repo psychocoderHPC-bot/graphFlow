@@ -587,9 +587,12 @@ measured runs in [benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-
 `--chunk-queue-depth D` (default 1) sets the queue pool of each per-chunk
 transform node, and `--chunk-latency-cap-us U` (default 0, no cap) clamps the
 capacity and waves that launch-size policy reports without touching the storage
-chunk capacity. With `perChunk` the scheduler line ends in
-`chunkLaunches=<count> chunkLimit=<name>`; the off path ends in
-`chunkLaunches=0 chunkLimit=none`.
+chunk capacity. With `perChunk` the scheduler line reports
+`chunkLaunches=<count> chunkLimit=<name>`; the off path reports
+`chunkLaunches=0 chunkLimit=none`. Both paths then append the Phase 0 chunk
+registry keys: `registryAcquisitions`, `registryRoutings`,
+`registryRetirements`, `registryFaults`, `peakRegistryReady`,
+`peakRegistryInflight` and `peakRegistryReserved`.
 
 `--output-dir` writes `metadata.csv`, `outcomes.csv`,
 `scatter_histogram.csv`, `exits.csv`, `traces.csv` and `trace_summary.csv`.

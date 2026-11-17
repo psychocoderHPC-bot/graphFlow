@@ -23,7 +23,7 @@ namespace graphFlow
      *
      * The registry is observability only. `GraphRunner` updates it at the chunk transitions that
      * already exist and never reads it to make a scheduling decision. Phase 1 of the chunk
-     * pipeline redesign is the first consumer that reads the live-work count from the registry.
+     * pipeline redesign is the first consumer that reads the live-chunk count from the registry.
      */
     enum class ChunkPhase : std::uint8_t
     {
@@ -66,12 +66,14 @@ namespace graphFlow
 
     /** Aggregate view of the registry: phase occupancy, peaks and transition counters.
      *
-     * The counts are maintained incrementally by the registry transitions, so a summary is O(1)
-     * and never scans the records.
+     * `liveChunks` counts every incarnation that is still held by the pool, so it includes the
+     * transient `retired` state. `faults` is the number of invariant violations the observers
+     * recorded; a non-zero value is sticky for the run.
      */
     struct ChunkRegistrySummary
     {
         std::uint32_t chunks = 0u;
+        std::uint32_t liveChunks = 0u;
         std::uint32_t freeChunks = 0u;
         std::uint32_t readyChunks = 0u;
         std::uint32_t inflightChunks = 0u;
@@ -89,6 +91,7 @@ namespace graphFlow
         std::uint64_t routings = 0u;
         std::uint64_t dispatches = 0u;
         std::uint64_t retirements = 0u;
+        std::uint64_t faults = 0u;
     };
 
     /** Per-chunk pipeline ledger owned by the scheduler thread.
@@ -97,6 +100,11 @@ namespace graphFlow
      * including the output chunks a transform or partition stage acquires while planning. A caller
      * that has no observer support can still drive the record through `onDispatch()` and
      * `onRoute()`; those calls resynchronise a stale record.
+     *
+     * Every mutator is `noexcept`. A diagnostic must never abort a run: on an invariant violation
+     * the registry records the first fault in a fixed-size record and returns without changing the
+     * pool. `validate()` and the diagnostics surface report the sticky fault. Building the detail
+     * string is the only operation that allocates, and it is not on the observer path.
      */
     class ChunkRegistry
     {
@@ -108,9 +116,11 @@ namespace graphFlow
             resize(numChunks);
         }
 
+        /** Allocate the record vector. The only allocating operation; called at construction. */
         void resize(std::uint32_t numChunks)
         {
             m_records.assign(numChunks, ChunkRecord{});
+            clearFault();
             for(auto& count : m_counts)
                 count = 0u;
             for(auto& peak : m_peaks)
@@ -119,97 +129,180 @@ namespace graphFlow
             m_counters = {};
         }
 
-        /** Reset for a new run. The storage must be fully free, which every runner run guarantees.
+        /** Seed every record from the storage's current generation.
          *
-         * Records take the pool's current generation so the generation invariant holds from the
-         * first transition even after an earlier run bumped the counters.
+         * This runs in the runner constructor and at the start of every run. It never throws and
+         * never inspects liveness: a chunk that is already live when a runner is constructed is
+         * left `free` with the pool generation, which is the same state the pre-registry runner
+         * observed. No allocation, so it is safe on the run-start path.
          */
         template<typename TStorage>
-        void reset(TStorage const& storage)
+        void seed(TStorage const& storage) noexcept
         {
-            if(storage.liveCount() != 0u)
-                throw std::logic_error{"graphFlow: chunk registry cannot reset while chunks are live"};
-            resize(storage.numChunks());
-            for(std::uint32_t index = 0u; index < m_records.size(); ++index)
-                m_records[index].handle = ChunkHandle{index, storage.generation(index)};
+            if(m_records.size() != storage.numChunks())
+            {
+                noteFault(
+                    "record count does not match the pool",
+                    invalidChunkNode,
+                    ChunkPhase::free,
+                    ChunkPhase::free);
+                return;
+            }
+            try
+            {
+                for(std::uint32_t index = 0u; index < m_records.size(); ++index)
+                {
+                    ChunkRecord& record = m_records[index];
+                    record = ChunkRecord{};
+                    record.handle = ChunkHandle{index, storage.generation(index)};
+                }
+            }
+            catch(...)
+            {
+                noteFault("storage generation query failed", invalidChunkNode, ChunkPhase::free, ChunkPhase::free);
+                return;
+            }
+            for(auto& count : m_counts)
+                count = 0u;
+            m_counts[phaseIndex(ChunkPhase::free)] = static_cast<std::uint32_t>(m_records.size());
+            for(auto& peak : m_peaks)
+                peak = 0u;
+            m_counters = {};
+            clearFault();
+        }
+
+        /** Reset for a new run without allocating or throwing. */
+        template<typename TStorage>
+        void reset(TStorage const& storage) noexcept
+        {
+            seed(storage);
         }
 
         /** Report a chunk acquired from the pool. The record enters `reserved`. */
-        void onAcquire(ChunkHandle handle)
+        void onAcquire(ChunkHandle handle) noexcept
         {
-            ChunkRecord& record = at(handle);
-            if(record.phase != ChunkPhase::free)
-                throw std::logic_error{
-                    "graphFlow: chunk registry acquired chunk " + std::to_string(handle.index) + " while it was "
-                    + chunkPhaseName(record.phase)};
-            record.handle = handle;
-            record.producingNode = invalidChunkNode;
-            record.ownerNode = invalidChunkNode;
-            record.destinationNode = -1;
-            record.fill = 0u;
-            record.bin = 0u;
-            transition(record, ChunkPhase::reserved);
+            ChunkRecord* record = recordFor(handle.index);
+            if(record == nullptr)
+                return;
+            if(record->phase != ChunkPhase::free)
+            {
+                noteFault("acquire of a non-free chunk", handle.index, ChunkPhase::free, record->phase);
+                return;
+            }
+            record->handle = handle;
+            record->producingNode = invalidChunkNode;
+            record->ownerNode = invalidChunkNode;
+            record->destinationNode = -1;
+            record->fill = 0u;
+            record->bin = 0u;
+            transition(*record, ChunkPhase::reserved);
             ++m_counters.acquisitions;
         }
 
         /** Report a released chunk. `handle` carries the post-release generation. */
-        void onRelease(ChunkHandle handle)
+        void onRelease(ChunkHandle handle) noexcept
         {
-            ChunkRecord& record = at(handle);
-            record.handle = handle;
-            record.producingNode = invalidChunkNode;
-            record.ownerNode = invalidChunkNode;
-            record.destinationNode = -1;
-            record.fill = 0u;
-            record.bin = 0u;
-            transition(record, ChunkPhase::free);
+            ChunkRecord* record = recordFor(handle.index);
+            if(record == nullptr)
+                return;
+            if(record->phase == ChunkPhase::free)
+            {
+                noteFault("release of an already free chunk", handle.index, ChunkPhase::retired, record->phase);
+                return;
+            }
+            record->handle = handle;
+            record->producingNode = invalidChunkNode;
+            record->ownerNode = invalidChunkNode;
+            record->destinationNode = -1;
+            record->fill = 0u;
+            record->bin = 0u;
+            transition(*record, ChunkPhase::free);
             ++m_counters.releases;
         }
 
         /** Report a node publishing a descriptor to `destinationNode = route[bin]`. */
-        void onRoute(ChunkDescriptor const& chunk, std::uint32_t producingNode, std::int32_t destinationNode)
+        void onRoute(ChunkDescriptor const& chunk, std::uint32_t producingNode, std::int32_t destinationNode) noexcept
         {
             if(destinationNode < 0)
-                throw std::logic_error{"graphFlow: chunk registry routed a chunk to a negative destination"};
-            ChunkRecord& record = synchronise(chunk.handle);
-            if(record.producingNode == invalidChunkNode)
-                record.producingNode = producingNode;
-            record.ownerNode = static_cast<std::uint32_t>(destinationNode);
-            record.destinationNode = destinationNode;
-            record.fill = chunk.fill;
-            record.bin = chunk.bin;
-            transition(record, ChunkPhase::ready);
+            {
+                noteFault("route to a negative destination", chunk.handle.index, ChunkPhase::ready, ChunkPhase::ready);
+                return;
+            }
+            ChunkRecord* record = synchronise(chunk.handle);
+            if(record == nullptr)
+                return;
+            if(record->producingNode == invalidChunkNode)
+                record->producingNode = producingNode;
+            record->ownerNode = static_cast<std::uint32_t>(destinationNode);
+            record->destinationNode = destinationNode;
+            record->fill = chunk.fill;
+            record->bin = chunk.bin;
+            transition(*record, ChunkPhase::ready);
             ++m_counters.routings;
         }
 
         /** Report a lane taking ownership of a chunk. */
-        void onDispatch(ChunkDescriptor const& chunk, std::uint32_t ownerNode)
+        void onDispatch(ChunkDescriptor const& chunk, std::uint32_t ownerNode) noexcept
         {
-            ChunkRecord& record = synchronise(chunk.handle);
-            if(record.producingNode == invalidChunkNode)
-                record.producingNode = ownerNode;
-            record.ownerNode = ownerNode;
-            record.fill = chunk.fill;
-            record.bin = chunk.bin;
-            transition(record, ChunkPhase::inflight);
+            ChunkRecord* record = synchronise(chunk.handle);
+            if(record == nullptr)
+                return;
+            if(record->phase == ChunkPhase::inflight)
+            {
+                noteFault("dispatch of an inflight chunk", chunk.handle.index, ChunkPhase::ready, record->phase);
+                return;
+            }
+            if(record->phase == ChunkPhase::ready && record->ownerNode != ownerNode)
+            {
+                noteFault(
+                    "dispatch by a node that does not own the ready chunk",
+                    chunk.handle.index,
+                    ChunkPhase::ready,
+                    record->phase);
+                return;
+            }
+            if(record->producingNode == invalidChunkNode)
+                record->producingNode = ownerNode;
+            record->ownerNode = ownerNode;
+            record->fill = chunk.fill;
+            record->bin = chunk.bin;
+            transition(*record, ChunkPhase::inflight);
             ++m_counters.dispatches;
         }
 
         /** Report a sink consuming a chunk, before the release returns it to the pool. */
-        void onSinkArrival(ChunkDescriptor const& chunk, std::uint32_t sinkNode)
+        void onSinkArrival(ChunkDescriptor const& chunk, std::uint32_t sinkNode) noexcept
         {
-            ChunkRecord& record = synchronise(chunk.handle);
-            record.ownerNode = sinkNode;
-            record.destinationNode = static_cast<std::int32_t>(sinkNode);
-            record.fill = chunk.fill;
-            record.bin = chunk.bin;
-            transition(record, ChunkPhase::retired);
+            ChunkRecord* record = synchronise(chunk.handle);
+            if(record == nullptr)
+                return;
+            if(record->phase != ChunkPhase::inflight)
+            {
+                noteFault(
+                    "sink arrival of a non-inflight chunk",
+                    chunk.handle.index,
+                    ChunkPhase::inflight,
+                    record->phase);
+                return;
+            }
+            record->ownerNode = sinkNode;
+            record->destinationNode = static_cast<std::int32_t>(sinkNode);
+            record->fill = chunk.fill;
+            record->bin = chunk.bin;
+            transition(*record, ChunkPhase::retired);
             ++m_counters.retirements;
         }
 
-        /** Report the output-credit reservation of one lane. This is a credit count, not a chunk. */
+        /** Report a non-zero output-credit reservation of one lane.
+         *
+         * The reservation is a credit count, not a chunk. The node id is kept in the signature for
+         * future per-node accounting, but only aggregate credits are stored; a zero-credit
+         * dispatch (a sink) is not a reservation and is not counted.
+         */
         void onReserve([[maybe_unused]] std::uint32_t node, std::uint32_t credits) noexcept
         {
+            if(credits == 0u)
+                return;
             ++m_counters.reservations;
             m_counters.reservedCredits += credits;
         }
@@ -224,6 +317,7 @@ namespace graphFlow
             ChunkRegistrySummary result = m_counters;
             result.chunks = static_cast<std::uint32_t>(m_records.size());
             result.freeChunks = m_counts[phaseIndex(ChunkPhase::free)];
+            result.liveChunks = result.chunks - result.freeChunks;
             result.readyChunks = m_counts[phaseIndex(ChunkPhase::ready)];
             result.inflightChunks = m_counts[phaseIndex(ChunkPhase::inflight)];
             result.reservedChunks = m_counts[phaseIndex(ChunkPhase::reserved)];
@@ -234,7 +328,28 @@ namespace graphFlow
             return result;
         }
 
-        /** Strict consistency check. Throws `std::logic_error` on the first violation.
+        [[nodiscard]] bool hasFault() const noexcept
+        {
+            return m_fault.set;
+        }
+
+        /** Human-readable detail of the first sticky fault. Allocates; diagnostics only. */
+        [[nodiscard]] std::string faultDetail() const
+        {
+            if(!m_fault.set)
+                return {};
+            std::string detail = "graphFlow: chunk registry fault: ";
+            detail += m_fault.reason;
+            if(m_fault.index != invalidChunkNode)
+            {
+                detail += " (chunk " + std::to_string(m_fault.index) + ", phase " + chunkPhaseName(m_fault.actual)
+                          + ", expected " + chunkPhaseName(m_fault.expected) + ')';
+            }
+            return detail;
+        }
+
+        /** Strict consistency check. Throws `std::logic_error` on a sticky fault or the first
+         * violated invariant.
          *
          * `sourceNode` is exempt from the inflight-lease requirement: source chunks are handed
          * downstream without a reader lease. Pass `invalidChunkNode` when no source is known.
@@ -243,6 +358,8 @@ namespace graphFlow
         requires ChunkStorage<TStorage>
         void validate(TStorage const& storage, std::uint32_t sourceNode = invalidChunkNode) const
         {
+            if(m_fault.set)
+                throw std::logic_error{faultDetail()};
             if(m_records.size() != storage.numChunks())
                 throw std::logic_error{
                     "graphFlow: chunk registry has " + std::to_string(m_records.size()) + " records for "
@@ -284,21 +401,55 @@ namespace graphFlow
                             + " is inflight without a reader lease"};
                     }
                 }
-                if(record.phase == ChunkPhase::ready || record.phase == ChunkPhase::inflight
-                   || record.phase == ChunkPhase::retired)
+
+                // Phase and ownership must describe one consistent state. A dropped route leaves
+                // an impossible owner/destination pair once the chunk is dispatched, which the
+                // counts alone cannot detect.
+                if(record.phase == ChunkPhase::free || record.phase == ChunkPhase::reserved)
                 {
+                    if(record.ownerNode != invalidChunkNode || record.destinationNode >= 0)
+                        throw std::logic_error{
+                            "graphFlow: chunk registry chunk " + std::to_string(index) + " is "
+                            + chunkPhaseName(record.phase) + " but still names an owner or destination"};
+                    if(record.fill != 0u)
+                        throw std::logic_error{
+                            "graphFlow: chunk registry chunk " + std::to_string(index) + " is "
+                            + chunkPhaseName(record.phase) + " with a non-zero fill"};
+                }
+                else
+                {
+                    if(record.ownerNode == invalidChunkNode)
+                        throw std::logic_error{
+                            "graphFlow: chunk registry chunk " + std::to_string(index) + " is "
+                            + chunkPhaseName(record.phase) + " without an owner"};
                     if(record.fill == 0u || record.fill > storage.chunkCapacity())
                         throw std::logic_error{
                             "graphFlow: chunk registry chunk " + std::to_string(index) + " has fill "
                             + std::to_string(record.fill) + " outside [1, " + std::to_string(storage.chunkCapacity())
                             + ']'};
                 }
-                if((record.phase == ChunkPhase::ready || record.phase == ChunkPhase::inflight)
-                   && record.ownerNode != sourceNode && record.destinationNode < 0)
+                if(record.phase == ChunkPhase::ready || record.phase == ChunkPhase::retired)
                 {
-                    throw std::logic_error{
-                        "graphFlow: chunk registry chunk " + std::to_string(index)
-                        + " is ready or inflight without a destination"};
+                    if(record.destinationNode != static_cast<std::int32_t>(record.ownerNode))
+                        throw std::logic_error{
+                            "graphFlow: chunk registry chunk " + std::to_string(index) + " is "
+                            + chunkPhaseName(record.phase) + " at a node other than its destination"};
+                }
+                if(record.phase == ChunkPhase::inflight)
+                {
+                    if(record.ownerNode == sourceNode)
+                    {
+                        if(record.destinationNode >= 0)
+                            throw std::logic_error{
+                                "graphFlow: chunk registry source chunk " + std::to_string(index)
+                                + " is inflight with a destination"};
+                    }
+                    else if(record.destinationNode != static_cast<std::int32_t>(record.ownerNode))
+                    {
+                        throw std::logic_error{
+                            "graphFlow: chunk registry chunk " + std::to_string(index)
+                            + " is inflight at a node other than its destination"};
+                    }
                 }
             }
 
@@ -320,32 +471,62 @@ namespace graphFlow
         }
 
     private:
+        struct Fault
+        {
+            bool set = false;
+            char const* reason = "";
+            std::uint32_t index = invalidChunkNode;
+            ChunkPhase expected = ChunkPhase::free;
+            ChunkPhase actual = ChunkPhase::free;
+        };
+
         static constexpr std::size_t phaseIndex(ChunkPhase phase) noexcept
         {
             return static_cast<std::size_t>(phase);
         }
 
-        ChunkRecord& at(ChunkHandle handle)
+        void noteFault(char const* reason, std::uint32_t index, ChunkPhase expected, ChunkPhase actual) noexcept
         {
-            if(handle.index >= m_records.size())
-                throw std::logic_error{
-                    "graphFlow: chunk registry handle index " + std::to_string(handle.index) + " out of range"};
-            return m_records[handle.index];
+            ++m_counters.faults;
+            if(m_fault.set)
+                return;
+            m_fault.set = true;
+            m_fault.reason = reason;
+            m_fault.index = index;
+            m_fault.expected = expected;
+            m_fault.actual = actual;
+        }
+
+        void clearFault() noexcept
+        {
+            m_fault = Fault{};
+        }
+
+        ChunkRecord* recordFor(std::uint32_t index) noexcept
+        {
+            if(index >= m_records.size())
+            {
+                noteFault("handle index out of range", index, ChunkPhase::free, ChunkPhase::free);
+                return nullptr;
+            }
+            return &m_records[index];
         }
 
         /** Bring a record in line with a handle whose acquire was not observed. */
-        ChunkRecord& synchronise(ChunkHandle handle)
+        ChunkRecord* synchronise(ChunkHandle handle) noexcept
         {
-            ChunkRecord& record = at(handle);
-            if(record.handle.generation != handle.generation || record.phase == ChunkPhase::free)
+            ChunkRecord* record = recordFor(handle.index);
+            if(record == nullptr)
+                return nullptr;
+            if(record->handle.generation != handle.generation || record->phase == ChunkPhase::free)
             {
-                record.handle = handle;
-                record.producingNode = invalidChunkNode;
-                record.ownerNode = invalidChunkNode;
-                record.destinationNode = -1;
-                record.fill = 0u;
-                record.bin = 0u;
-                transition(record, ChunkPhase::reserved);
+                record->handle = handle;
+                record->producingNode = invalidChunkNode;
+                record->ownerNode = invalidChunkNode;
+                record->destinationNode = -1;
+                record->fill = 0u;
+                record->bin = 0u;
+                transition(*record, ChunkPhase::reserved);
                 ++m_counters.acquisitions;
             }
             return record;
@@ -373,5 +554,6 @@ namespace graphFlow
         std::uint32_t m_counts[5] = {};
         std::uint32_t m_peaks[5] = {};
         ChunkRegistrySummary m_counters;
+        Fault m_fault;
     };
 } // namespace graphFlow

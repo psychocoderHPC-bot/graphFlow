@@ -8,14 +8,18 @@
 #include "graphFlow/sched/GraphRunner.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
 namespace
 {
+    using Catch::Matchers::ContainsSubstring;
+
     template<typename TRunner>
     typename TRunner::Hooks sourceHooks()
     {
@@ -32,19 +36,12 @@ namespace
         return hooks;
     }
 
-    /** Sink that validates the registry from inside the scheduler loop. */
+    /** Sink without registry assertions; used by the fault-injection run. */
     template<typename TRunner>
-    typename TRunner::Hooks validatingSinkHooks(TRunner& runner, std::uint64_t& sunk)
+    typename TRunner::Hooks plainSinkHooks(std::uint64_t& sunk)
     {
         typename TRunner::Hooks hooks;
-        hooks.launch = [&runner](auto const&, typename TRunner::Batch const& batch)
-        {
-            // The chunk is in the sink batch; dispatch has not moved it to inflight yet.
-            graphFlow::ChunkPhase const phase = runner.chunkRegistry().at(batch.chunk().handle.index).phase;
-            bool const inPipeline = phase == graphFlow::ChunkPhase::ready || phase == graphFlow::ChunkPhase::inflight;
-            CHECK(inPipeline);
-            runner.validateChunkRegistry();
-        };
+        hooks.launch = [](auto const&, typename TRunner::Batch const&) {};
         hooks.advance = [](auto const&, typename TRunner::Batch const&, std::uint32_t& allocated)
         {
             allocated = 0u;
@@ -56,9 +53,50 @@ namespace
         return hooks;
     }
 
+    /** Sink that validates the registry from inside the scheduler loop.
+     *
+     * `launch` runs after routing and before the runner records the dispatch, so the chunk must be
+     * ready at the sink. `finish` runs after the dispatch record and before the retirement record,
+     * so the chunk must be inflight at the sink. Removing the dispatch record makes this fail.
+     */
+    template<typename TRunner>
+    typename TRunner::Hooks validatingSinkHooks(TRunner& runner, std::uint64_t& sunk, std::uint32_t sinkNode)
+    {
+        typename TRunner::Hooks hooks;
+        hooks.launch = [&runner, sinkNode](auto const&, typename TRunner::Batch const& batch)
+        {
+            graphFlow::ChunkRecord const& record = runner.chunkRegistry().at(batch.chunk().handle.index);
+            bool const readyAtSink = record.phase == graphFlow::ChunkPhase::ready && record.ownerNode == sinkNode
+                                     && record.destinationNode == static_cast<std::int32_t>(sinkNode);
+            CHECK(readyAtSink);
+            runner.validateChunkRegistry();
+        };
+        hooks.advance = [](auto const&, typename TRunner::Batch const&, std::uint32_t& allocated)
+        {
+            allocated = 0u;
+            return false;
+        };
+        hooks.finish =
+            [&runner, &sunk, sinkNode](typename TRunner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>&)
+        {
+            for(graphFlow::ChunkDescriptor const& chunk : batch.chunks)
+            {
+                graphFlow::ChunkRecord const& record = runner.chunkRegistry().at(chunk.handle.index);
+                bool const inflightAtSink = record.phase == graphFlow::ChunkPhase::inflight
+                                            && record.ownerNode == sinkNode
+                                            && record.destinationNode == static_cast<std::int32_t>(sinkNode);
+                CHECK(inflightAtSink);
+            }
+            CHECK(runner.chunkRegistrySummary().liveChunks > 0u);
+            sunk += batch.particles();
+        };
+        hooks.abort = [] {};
+        return hooks;
+    }
+
     /** Transform that conserves particles into one output chunk per input batch. */
     template<typename TRunner, typename TPool>
-    typename TRunner::Hooks conservingTransformHooks(TPool& pool)
+    typename TRunner::Hooks conservingTransformHooks(TRunner& runner, TPool& pool, std::uint32_t transformNode)
     {
         typename TRunner::Hooks hooks;
         hooks.launch = [](auto const&, typename TRunner::Batch const&) {};
@@ -67,8 +105,18 @@ namespace
             allocated = 0u;
             return false;
         };
-        hooks.finish = [&pool](typename TRunner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+        hooks.finish
+            = [&runner,
+               &pool,
+               transformNode](typename TRunner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
         {
+            for(graphFlow::ChunkDescriptor const& input : batch.chunks)
+            {
+                graphFlow::ChunkRecord const& record = runner.chunkRegistry().at(input.handle.index);
+                bool const inflightAtTransform
+                    = record.phase == graphFlow::ChunkPhase::inflight && record.ownerNode == transformNode;
+                CHECK(inflightAtTransform);
+            }
             graphFlow::ChunkHandle const handle = pool.acquire();
             outputs.push_back(graphFlow::ChunkDescriptor{handle, static_cast<std::uint32_t>(batch.particles()), 0u});
         };
@@ -102,6 +150,129 @@ namespace
         hooks.abort = [] {};
         return hooks;
     }
+
+    /** Chunk storage that swallows the first release notification.
+     *
+     * The pool still releases the slot; the registry misses the transition. This provokes a
+     * phase-mismatch fault on the next acquire of the reused index and proves that the run does
+     * not abort.
+     */
+    template<typename TDevice>
+    class DropFirstReleaseStorage
+    {
+    public:
+        using handle_type = graphFlow::ChunkHandle;
+
+        DropFirstReleaseStorage(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
+            : m_pool{device, numChunks, chunkCapacity}
+        {
+        }
+
+        [[nodiscard]] std::uint32_t numChunks() const
+        {
+            return m_pool.numChunks();
+        }
+
+        [[nodiscard]] std::uint32_t chunkCapacity() const
+        {
+            return m_pool.chunkCapacity();
+        }
+
+        [[nodiscard]] std::uint32_t freeCount() const
+        {
+            return m_pool.freeCount();
+        }
+
+        [[nodiscard]] std::uint32_t liveCount() const
+        {
+            return m_pool.liveCount();
+        }
+
+        [[nodiscard]] graphFlow::ChunkHandle acquire()
+        {
+            return m_pool.acquire();
+        }
+
+        void release(graphFlow::ChunkHandle handle)
+        {
+            m_pool.release(handle);
+        }
+
+        void acquireLease(graphFlow::ChunkHandle handle)
+        {
+            m_pool.acquireLease(handle);
+        }
+
+        void releaseLease(graphFlow::ChunkHandle handle)
+        {
+            m_pool.releaseLease(handle);
+        }
+
+        [[nodiscard]] std::uint32_t leaseCount(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.leaseCount(handle);
+        }
+
+        [[nodiscard]] bool isLive(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.isLive(handle);
+        }
+
+        [[nodiscard]] std::uint64_t base(graphFlow::ChunkHandle handle) const
+        {
+            return m_pool.base(handle);
+        }
+
+        [[nodiscard]] std::uint32_t generation(std::uint32_t index) const
+        {
+            return m_pool.generation(index);
+        }
+
+        void validateLive(graphFlow::ChunkHandle handle) const
+        {
+            m_pool.validateLive(handle);
+        }
+
+        [[nodiscard]] std::uint32_t peakLive() const
+        {
+            return m_pool.peakLive();
+        }
+
+        [[nodiscard]] std::uint32_t peakLeases() const
+        {
+            return m_pool.peakLeases();
+        }
+
+        void setChunkObservers(
+            std::function<void(graphFlow::ChunkHandle)> acquired,
+            std::function<void(graphFlow::ChunkHandle)> released)
+        {
+            m_released = std::move(released);
+            m_pool.setChunkObservers(
+                std::move(acquired),
+                [this](graphFlow::ChunkHandle handle)
+                {
+                    if(!m_dropped)
+                    {
+                        m_dropped = true;
+                        return;
+                    }
+                    if(m_released)
+                        m_released(handle);
+                });
+        }
+
+        void clearChunkObservers()
+        {
+            m_released = {};
+            m_pool.clearChunkObservers();
+        }
+
+    private:
+        graphFlow::ChunkPool<TDevice> m_pool;
+        std::function<void(graphFlow::ChunkHandle)> m_released;
+        bool m_dropped = false;
+    };
 } // namespace
 
 TEST_CASE("chunk registry tracks a conserving pipeline", "[chunk-registry][integration]")
@@ -113,8 +284,13 @@ TEST_CASE("chunk registry tracks a conserving pipeline", "[chunk-registry][integ
 
     std::uint64_t sunk = 0u;
     auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
-    runner.addNode("transform", graphFlow::NodeRole::transform, 1u, {2}, conservingTransformHooks<Runner>(pool));
-    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk));
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        conservingTransformHooks<Runner>(runner, pool, 1u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk, 2u));
     runner.setSource(source, 16u, 16u);
     runner.setStallTimeout(std::chrono::milliseconds{10000});
 
@@ -124,10 +300,12 @@ TEST_CASE("chunk registry tracks a conserving pipeline", "[chunk-registry][integ
     CHECK(stats.sourceGenerated == 16u);
     CHECK(stats.sourceSunk == 16u);
     CHECK(sunk == 16u);
+    CHECK(stats.chunkRegistryFaults == 0u);
     CHECK(pool.freeCount() == pool.numChunks());
 
     graphFlow::ChunkRegistrySummary const summary = runner.chunkRegistrySummary();
     CHECK(summary.chunks == 16u);
+    CHECK(summary.liveChunks == 0u);
     CHECK(summary.freeChunks == 16u);
     CHECK(summary.readyChunks == 0u);
     CHECK(summary.inflightChunks == 0u);
@@ -137,10 +315,13 @@ TEST_CASE("chunk registry tracks a conserving pipeline", "[chunk-registry][integ
     CHECK(summary.releases == 4u);
     CHECK(summary.routings == 4u);
     CHECK(summary.retirements == 2u);
+    CHECK(summary.reservations == 2u); // one non-zero reserve per transform batch
+    CHECK(summary.reservedCredits == 2u);
     CHECK(summary.peakInflightChunks >= 1u);
     CHECK(stats.chunkRegistryAcquisitions == summary.acquisitions);
     CHECK(stats.chunkRegistryRoutings == summary.routings);
     CHECK(stats.chunkRegistryRetirements == summary.retirements);
+    CHECK(stats.chunkRegistryFaults == summary.faults);
     CHECK(stats.peakRegistryInflightChunks == summary.peakInflightChunks);
 
     for(std::uint32_t index = 0u; index < pool.numChunks(); ++index)
@@ -170,7 +351,7 @@ TEST_CASE("chunk registry tracks a fragmented multiplexing run", "[chunk-registr
         8u,
         {2, 2, 2, 2, 2, 2, 2, 2},
         fragmentingTransformHooks<Runner>(pool, pending));
-    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk, 2u));
     runner.setSource(source, 16u, 16u);
     runner.setStallTimeout(std::chrono::milliseconds{10000});
 
@@ -183,18 +364,21 @@ TEST_CASE("chunk registry tracks a fragmented multiplexing run", "[chunk-registr
 
     graphFlow::ChunkRegistrySummary const summary = runner.chunkRegistrySummary();
     CHECK(summary.chunks == 32u);
+    CHECK(summary.liveChunks == 0u);
     CHECK(summary.freeChunks == 32u);
     CHECK(summary.acquisitions == 18u); // two source chunks and sixteen one-particle outputs
     CHECK(summary.releases == 18u);
     CHECK(summary.routings == 18u);
     CHECK(summary.retirements == 16u);
+    CHECK(summary.reservations == 2u); // one eight-credit reserve per transform batch
+    CHECK(summary.reservedCredits == 16u);
     // The stream really fragmented: more chunks were live than the two source chunks.
     CHECK(summary.peakReservedChunks == 8u);
     CHECK(summary.peakReadyChunks >= 8u);
     CHECK(summary.peakInflightChunks >= 2u);
-    // Every chunk incarnation was tracked and retired, not just the source chunks.
     CHECK(stats.chunkRegistryRoutings == 18u);
     CHECK(stats.chunkRegistryRetirements == 16u);
+    CHECK(stats.chunkRegistryFaults == 0u);
 
     for(std::uint32_t index = 0u; index < pool.numChunks(); ++index)
     {
@@ -213,8 +397,13 @@ TEST_CASE("chunk registry resets for a second run on the same runner", "[chunk-r
 
     std::uint64_t sunk = 0u;
     auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
-    runner.addNode("transform", graphFlow::NodeRole::transform, 1u, {2}, conservingTransformHooks<Runner>(pool));
-    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk));
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        conservingTransformHooks<Runner>(runner, pool, 1u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, validatingSinkHooks<Runner>(runner, sunk, 2u));
     runner.setSource(source, 16u, 16u);
     runner.setStallTimeout(std::chrono::milliseconds{10000});
 
@@ -227,6 +416,68 @@ TEST_CASE("chunk registry resets for a second run on the same runner", "[chunk-r
     CHECK(second.sourceSunk == 16u);
     CHECK(firstRegistry.acquisitions == secondRegistry.acquisitions);
     CHECK(firstRegistry.releases == secondRegistry.releases);
+    CHECK(secondRegistry.liveChunks == 0u);
     CHECK(secondRegistry.freeChunks == secondRegistry.chunks);
     runner.validateChunkRegistry();
+}
+
+TEST_CASE("chunk registry seeds from a pool that already advanced a generation", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Runner = graphFlow::GraphRunner<decltype(device)>;
+    graphFlow::ChunkPool<decltype(device)> pool{device, 4u, 8u};
+    graphFlow::ChunkHandle const recycled = pool.acquire();
+    pool.release(recycled);
+    REQUIRE(pool.generation(recycled.index) == 1u);
+
+    Runner runner{device, pool};
+    CHECK_NOTHROW(runner.validateChunkRegistry());
+    CHECK(runner.chunkRegistry()[recycled.index].handle.generation == 1u);
+    CHECK(runner.chunkRegistrySummary().freeChunks == 4u);
+}
+
+TEST_CASE("chunk registry rejects an impossible owner and destination pair", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::ChunkPool<decltype(device)> pool{device, 2u, 8u};
+    graphFlow::ChunkRegistry registry{2u};
+    registry.seed(pool);
+
+    graphFlow::ChunkHandle const handle = pool.acquire();
+    registry.onAcquire(handle);
+    pool.acquireLease(handle);
+    // Dispatch without a route: the chunk is inflight at a non-source node but has no destination.
+    registry.onDispatch(graphFlow::ChunkDescriptor{handle, 4u, 0u}, 4u);
+    CHECK_THROWS_WITH(registry.validate(pool, 0u), ContainsSubstring("destination"));
+
+    pool.releaseLease(handle);
+    pool.release(handle);
+}
+
+TEST_CASE("chunk registry phase mismatch does not abort a run", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Storage = DropFirstReleaseStorage<decltype(device)>;
+    using Runner = graphFlow::GraphRunner<decltype(device), Storage>;
+    Storage storage{device, 16u, 8u};
+    Runner runner{device, storage};
+
+    std::uint64_t sunk = 0u;
+    auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, sourceHooks<Runner>());
+    runner.addNode(
+        "transform",
+        graphFlow::NodeRole::transform,
+        1u,
+        {2},
+        conservingTransformHooks<Runner>(runner, storage, 1u));
+    runner.addNode("sink", graphFlow::NodeRole::sink, 0u, {}, plainSinkHooks<Runner>(sunk));
+    runner.setSource(source, 16u, 16u);
+    runner.setStallTimeout(std::chrono::milliseconds{10000});
+
+    graphFlow::SchedulerStats const stats = runner.run();
+    CHECK(stats.sourceSunk == 16u);
+    CHECK(sunk == 16u);
+    CHECK(stats.chunkRegistryFaults >= 1u);
+    CHECK_FALSE(runner.chunkRegistryFaultDetail().empty());
+    CHECK_THROWS_WITH(runner.validateChunkRegistry(), ContainsSubstring("chunk registry fault"));
 }

@@ -13,6 +13,7 @@ TEST_CASE("chunk registry follows one incarnation through every phase", "[chunk-
     graphFlow::ChunkRegistry registry{4u};
     REQUIRE(registry.summary().chunks == 4u);
     REQUIRE(registry.summary().freeChunks == 4u);
+    REQUIRE(registry.summary().liveChunks == 0u);
 
     graphFlow::ChunkHandle const handle{2u, 0u};
     registry.onAcquire(handle);
@@ -20,6 +21,7 @@ TEST_CASE("chunk registry follows one incarnation through every phase", "[chunk-
         graphFlow::ChunkRegistrySummary const summary = registry.summary();
         CHECK(summary.reservedChunks == 1u);
         CHECK(summary.freeChunks == 3u);
+        CHECK(summary.liveChunks == 1u);
         CHECK(summary.acquisitions == 1u);
         CHECK(summary.peakReservedChunks == 1u);
         CHECK(registry.records()[2u].phase == graphFlow::ChunkPhase::reserved);
@@ -61,6 +63,7 @@ TEST_CASE("chunk registry follows one incarnation through every phase", "[chunk-
     {
         graphFlow::ChunkRegistrySummary const summary = registry.summary();
         CHECK(summary.freeChunks == 4u);
+        CHECK(summary.liveChunks == 0u);
         CHECK(summary.releases == 1u);
         CHECK(registry.records()[2u].phase == graphFlow::ChunkPhase::free);
         CHECK(registry.records()[2u].handle == released);
@@ -68,19 +71,32 @@ TEST_CASE("chunk registry follows one incarnation through every phase", "[chunk-
     }
 }
 
-TEST_CASE("chunk registry rejects an acquire of a non-free chunk", "[chunk-registry][unit]")
+TEST_CASE("chunk registry records an acquire phase mismatch without throwing", "[chunk-registry][unit]")
 {
     graphFlow::ChunkRegistry registry{2u};
     registry.onAcquire(graphFlow::ChunkHandle{0u, 0u});
-    CHECK_THROWS_AS(registry.onAcquire(graphFlow::ChunkHandle{0u, 0u}), std::logic_error);
-    CHECK_THROWS_AS(registry.onAcquire(graphFlow::ChunkHandle{9u, 0u}), std::logic_error);
+    CHECK_NOTHROW(registry.onAcquire(graphFlow::ChunkHandle{0u, 0u}));
+    CHECK(registry.hasFault());
+    CHECK(registry.summary().faults == 1u);
+    CHECK(registry.summary().acquisitions == 1u);
+    CHECK_FALSE(registry.faultDetail().empty());
 }
 
-TEST_CASE("chunk registry rejects an unroutable destination", "[chunk-registry][unit]")
+TEST_CASE("chunk registry records an out-of-range handle without throwing", "[chunk-registry][unit]")
+{
+    graphFlow::ChunkRegistry registry{2u};
+    CHECK_NOTHROW(registry.onAcquire(graphFlow::ChunkHandle{9u, 0u}));
+    CHECK(registry.hasFault());
+    CHECK(registry.summary().faults == 1u);
+}
+
+TEST_CASE("chunk registry records a negative route without throwing", "[chunk-registry][unit]")
 {
     graphFlow::ChunkRegistry registry{2u};
     registry.onAcquire(graphFlow::ChunkHandle{1u, 0u});
-    CHECK_THROWS_AS(registry.onRoute(graphFlow::ChunkDescriptor{{1u, 0u}, 1u, 0u}, 0u, -1), std::logic_error);
+    CHECK_NOTHROW(registry.onRoute(graphFlow::ChunkDescriptor{{1u, 0u}, 1u, 0u}, 0u, -1));
+    CHECK(registry.hasFault());
+    CHECK(registry.records()[1u].phase == graphFlow::ChunkPhase::reserved);
 }
 
 TEST_CASE("chunk registry resynchronises a chunk whose acquire was not observed", "[chunk-registry][unit]")
@@ -97,12 +113,36 @@ TEST_CASE("chunk registry resynchronises a chunk whose acquire was not observed"
     CHECK(registry.records()[1u].ownerNode == 5u);
 }
 
-TEST_CASE("chunk registry reports output-credit reservations separately", "[chunk-registry][unit]")
+TEST_CASE("chunk registry counts only non-zero output-credit reservations", "[chunk-registry][unit]")
 {
     graphFlow::ChunkRegistry registry{2u};
     registry.onReserve(0u, 3u);
+    registry.onReserve(0u, 0u);
     registry.onReserve(0u, 2u);
     CHECK(registry.summary().reservations == 2u);
     CHECK(registry.summary().reservedCredits == 5u);
     CHECK(registry.summary().reservedChunks == 0u);
+}
+
+TEST_CASE("chunk registry seed takes the pool generation", "[chunk-registry][unit]")
+{
+    struct GenerationSource
+    {
+        std::uint32_t numChunks() const
+        {
+            return 2u;
+        }
+
+        std::uint32_t generation(std::uint32_t index) const
+        {
+            return index == 0u ? 5u : 7u;
+        }
+    };
+
+    graphFlow::ChunkRegistry registry{2u};
+    registry.seed(GenerationSource{});
+    CHECK(registry.records()[0u].handle == graphFlow::ChunkHandle{0u, 5u});
+    CHECK(registry.records()[1u].handle == graphFlow::ChunkHandle{1u, 7u});
+    CHECK(registry.records()[1u].phase == graphFlow::ChunkPhase::free);
+    CHECK(registry.summary().freeChunks == 2u);
 }
