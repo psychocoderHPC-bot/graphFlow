@@ -283,6 +283,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_attributes_static.cpp
         tests/unit/test_soa_flow_alias.cpp
         tests/unit/test_chunk_pool.cpp
+        tests/unit/test_chunk_registry.cpp
         tests/unit/test_payload_storage.cpp
         tests/unit/test_payload_slot_storage.cpp
         tests/unit/test_flow_builder.cpp
@@ -305,6 +306,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_batching.cpp
         tests/integration/test_async_execution.cpp
         tests/integration/test_scheduler_validation.cpp
+        tests/integration/test_chunk_registry.cpp
         tests/integration/test_framespec.cpp
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp

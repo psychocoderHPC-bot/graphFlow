@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -94,6 +95,24 @@ namespace graphFlow
             return m_numChunks - freeCount();
         }
 
+        /** Optional observation hooks for the chunk registry.
+         *
+         * The hooks run after a successful acquire and after a successful release, on the thread
+         * that owns the pool. They are empty by default; the scheduler installs them once per run.
+         * A hook must not change the lifecycle, so the pool never reads its value.
+         */
+        void setChunkObservers(std::function<void(ChunkHandle)> acquired, std::function<void(ChunkHandle)> released)
+        {
+            m_acquiredObserver = std::move(acquired);
+            m_releasedObserver = std::move(released);
+        }
+
+        void clearChunkObservers()
+        {
+            m_acquiredObserver = {};
+            m_releasedObserver = {};
+        }
+
         /** Pop one chunk from the free list. Throws when the pool is exhausted. */
         ChunkHandle acquire()
         {
@@ -102,7 +121,10 @@ namespace graphFlow
             std::uint32_t const index = m_free.back();
             m_free.pop_back();
             m_peakLive = liveCount() > m_peakLive ? liveCount() : m_peakLive;
-            return ChunkHandle{index, m_generations[index]};
+            ChunkHandle const handle{index, m_generations[index]};
+            if(m_acquiredObserver)
+                m_acquiredObserver(handle);
+            return handle;
         }
 
         /** Return a chunk to the free list and invalidate all outstanding handles.
@@ -121,6 +143,8 @@ namespace graphFlow
             m_generations[handle.index]
                 = checkedCounterIncrement(m_generations[handle.index], "graphFlow::ChunkPool generation");
             m_free.push_back(handle.index);
+            if(m_releasedObserver)
+                m_releasedObserver(ChunkHandle{handle.index, m_generations[handle.index]});
         }
 
         /** Register an asynchronous reader of a chunk.
@@ -280,5 +304,7 @@ namespace graphFlow
         std::vector<std::uint32_t> m_free;
         std::uint32_t m_peakLive = 0u;
         std::uint32_t m_peakLeases = 0u;
+        std::function<void(ChunkHandle)> m_acquiredObserver;
+        std::function<void(ChunkHandle)> m_releasedObserver;
     };
 } // namespace graphFlow

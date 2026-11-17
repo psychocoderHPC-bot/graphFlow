@@ -233,8 +233,16 @@ hash path, or when a hash run requests a tile wider than
 `chunkCapacity`). The schedule adds `chunkLaunches`, the number of enqueued
 per-chunk transform kernels, and `chunkLimit`, the clamp name
 (`wave`, `maximum`, `grid`, `memory` or `latency`) that set the per-chunk
-launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A stall throws `SchedulerStallError`; `snapshot()` on the
-runner and on the error exposes the same aggregate state without topology.
+launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A
+Phase 0 chunk registry adds `registryAcquisitions`, `registryRoutings`,
+`registryRetirements` and the phase peaks `peakRegistryReady`,
+`peakRegistryInflight`, `peakRegistryReserved`; these counters observe the
+pipeline and never feed a scheduling decision. A stall throws
+`SchedulerStallError`; `snapshot()` on the runner and on the error exposes the
+same aggregate state, including the current registry phase counts, without
+topology. The low-level `GraphRunner` additionally exposes
+`chunkRegistry()` (one record per pool slot), `chunkRegistrySummary()` and
+`validateChunkRegistry()`.
 
 ## Quickstart: `SoAFlow<Particle>`
 
