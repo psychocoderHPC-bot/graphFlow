@@ -896,9 +896,12 @@ namespace graphFlow
                     // never derived from `reservedCredits`, which is a cumulative aggregate.
                     std::uint32_t const liveWork = m_registry.liveWorkChunks();
                     bool const withinOccupancy = m_occupancyTarget == 0u || liveWork < m_occupancyTarget;
-                    // Consume the retirement-driven refill signal. The scheduler loop revisits
-                    // admission every iteration; the flag only makes the trigger explicit, so it
-                    // can never widen the gate or cause a spin.
+                    // Read and clear the retirement-driven refill signal. The read is accounting
+                    // only: admission is governed solely by live work versus the occupancy target
+                    // together with the particle budget, the fill cap and the free-list
+                    // precondition, so the signal can never force an admission or breach the
+                    // target. No busy-wait is needed because this loop rechecks those
+                    // preconditions every iteration and admits whenever they allow it.
                     bool const refillRequested = m_refillPending;
                     m_refillPending = false;
                     Lane* sourceLane = Node::freeLane(source);
@@ -1678,7 +1681,13 @@ namespace graphFlow
         std::uint32_t m_reservedTotal = 0u;
         /** Steady-state chunk occupancy target; zero keeps the historical admission path. */
         std::uint32_t m_occupancyTarget = 0u;
-        /** Set by a sink retirement, consumed by the next admission pass. */
+        /** Sink-retirement refill signal. Observational and accounting-only: it is set when a
+         *  chunk retires at the sink, read and cleared at the next admission pass, and counted
+         *  there. Admission is governed solely by live work versus the occupancy target together
+         *  with the particle budget, the fill cap and the free-list precondition, so the signal
+         *  can never force an admission or breach the target. No busy-wait is needed because the
+         *  loop rechecks those preconditions every iteration and admits whenever they allow it.
+         */
         bool m_refillPending = false;
         std::uint64_t m_refillCount = 0u;
         bool m_diagnostics = false;
