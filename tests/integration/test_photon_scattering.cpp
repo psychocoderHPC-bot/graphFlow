@@ -631,7 +631,7 @@ TEST_CASE("photon graph matches the independent scalar transport", "[photon][sca
 TEST_CASE("photon transport is independent of chunk capacity and batch size", "[photon][tuning]")
 {
     auto const device = graphFlow::test::makeCpuDevice();
-    auto run = [&](std::uint32_t chunkSize, std::uint32_t batchChunks)
+    auto run = [&](std::uint32_t chunkSize, std::uint32_t batchChunks, std::uint32_t occupancyTarget = 0u)
     {
         Parameters parameters;
         parameters.numPhotons = 513u;
@@ -643,23 +643,36 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
         parameters.sigmaA = 0.2;
         parameters.mode = ScatterMode::isotropic;
         parameters.maxScatters = 256u;
-        return graphFlow::photon::runPhotonScattering(device, parameters);
+        graphFlow::Tuning tuning = graphFlow::photon::tuningOf(parameters);
+        if(occupancyTarget != 0u)
+            tuning.occupancyTargetChunks = occupancyTarget;
+        return graphFlow::photon::runPhotonScattering(device, parameters, tuning);
     };
 
     auto const small = run(1u, 1u);
     auto const large = run(128u, 8u);
-    REQUIRE(small.terminal.size() == large.terminal.size());
-    for(std::size_t id = 0u; id < small.terminal.size(); ++id)
+    // The photon graph registers five lanes, so a target of five is reachable and binds.
+    auto const gated = run(128u, 8u, 5u);
+    CHECK(gated.stats.occupancyTargetChunks == 5u);
+    CHECK(gated.stats.liveWorkChunks == 0u);
+
+    auto const compare = [&](graphFlow::photon::ScatteringResult const& expected)
     {
-        CHECK(small.terminal[id].event == large.terminal[id].event);
-        CHECK(small.terminal[id].scatterCount == large.terminal[id].scatterCount);
-        CHECK(small.terminal[id].position.x == large.terminal[id].position.x);
-        CHECK(small.terminal[id].position.y == large.terminal[id].position.y);
-        CHECK(small.terminal[id].position.z == large.terminal[id].position.z);
-        CHECK(small.terminal[id].direction.x == large.terminal[id].direction.x);
-        CHECK(small.terminal[id].direction.y == large.terminal[id].direction.y);
-        CHECK(small.terminal[id].direction.z == large.terminal[id].direction.z);
-    }
+        REQUIRE(small.terminal.size() == expected.terminal.size());
+        for(std::size_t id = 0u; id < small.terminal.size(); ++id)
+        {
+            CHECK(small.terminal[id].event == expected.terminal[id].event);
+            CHECK(small.terminal[id].scatterCount == expected.terminal[id].scatterCount);
+            CHECK(small.terminal[id].position.x == expected.terminal[id].position.x);
+            CHECK(small.terminal[id].position.y == expected.terminal[id].position.y);
+            CHECK(small.terminal[id].position.z == expected.terminal[id].position.z);
+            CHECK(small.terminal[id].direction.x == expected.terminal[id].direction.x);
+            CHECK(small.terminal[id].direction.y == expected.terminal[id].direction.y);
+            CHECK(small.terminal[id].direction.z == expected.terminal[id].direction.z);
+        }
+    };
+    compare(large);
+    compare(gated);
 }
 
 TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[photon][physics][diagnostics]")

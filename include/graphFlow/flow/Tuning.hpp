@@ -49,6 +49,10 @@ namespace graphFlow
         // Storage and pool limits.
         std::optional<std::uint32_t> chunkCapacity;
         std::optional<std::uint32_t> liveParticles;
+        /** Steady-state chunk occupancy target D. Absence keeps the historical particle-budget
+         * admission; a present value adds the chunk-count gate described in `Config`.
+         */
+        std::optional<std::uint32_t> occupancyTargetChunks;
         std::optional<std::uint32_t> tileSize;
         std::optional<std::uint32_t> numChunks;
         std::optional<std::uint32_t> frameCap;
@@ -93,6 +97,7 @@ namespace graphFlow
             validateNonZero(chunkQueueDepth, "chunkQueueDepth");
             validateNonZero(chunkCapacity, "chunkCapacity");
             validateNonZero(liveParticles, "liveParticles");
+            validateNonZero(occupancyTargetChunks, "occupancyTargetChunks");
             validateNonZero(tileSize, "tileSize");
             validateNonZero(numChunks, "numChunks");
             validateNonZero(frameCap, "frameCap");

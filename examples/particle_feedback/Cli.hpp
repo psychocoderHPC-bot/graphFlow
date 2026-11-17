@@ -38,6 +38,7 @@ namespace graphFlow::cli
         std::optional<std::uint32_t> liveParticles; // P, absent means policy
         std::optional<std::uint32_t> tileSize; // T, absent means policy
         std::uint32_t batchChunks = 1u; // Q
+        std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
@@ -69,6 +70,7 @@ namespace graphFlow::cli
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
+               "                                    [--occupancy-target D]\n"
                "                                    [--seed S] [--max-visits M]\n"
                "                                    [--workload feedback|kernel]\n"
                "       kernel workload only: [--scatter shared|direct]\n"
@@ -199,6 +201,10 @@ namespace graphFlow::cli
             {
                 options.frameCap = parseU32(flag, nextValue(flag));
             }
+            else if(flag == "--occupancy-target")
+            {
+                options.occupancyTarget = parseU32(flag, nextValue(flag));
+            }
             else if(flag == "--seed")
             {
                 options.seed = parseU64(flag, nextValue(flag));
@@ -307,6 +313,10 @@ namespace graphFlow::cli
         }
 
         resolved.tuning = particle::tuningOf(resolved.parameters);
+        // Opt-in occupancy target. Absent keeps the default tuning unchanged, so the example
+        // output is byte-identical to the pre-phase-1 binary.
+        if(options.occupancyTarget)
+            resolved.tuning.occupancyTargetChunks = options.occupancyTarget;
         return resolved;
     }
 } // namespace graphFlow::cli

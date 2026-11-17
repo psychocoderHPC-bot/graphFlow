@@ -181,6 +181,13 @@ namespace graphFlow
         std::uint32_t peakRegistryReadyChunks = 0u;
         std::uint32_t peakRegistryInflightChunks = 0u;
         std::uint32_t peakRegistryReservedChunks = 0u;
+        /** Steady-state occupancy target D; zero means the gate is off (historical admission). */
+        std::uint32_t occupancyTargetChunks = 0u;
+        /** Registry live work at stats capture: `reserved + ready + inflight` chunks. */
+        std::uint32_t liveWorkChunks = 0u;
+        std::uint32_t peakLiveWorkChunks = 0u;
+        /** Source admissions taken while a sink retirement refill signal was pending. */
+        std::uint64_t refills = 0u;
     };
 
     /** One-line aggregate key=value rendering of `SchedulerStats`.
@@ -207,6 +214,12 @@ namespace graphFlow
                 << " peakRegistryReady=" << stats.peakRegistryReadyChunks
                 << " peakRegistryInflight=" << stats.peakRegistryInflightChunks
                 << " peakRegistryReserved=" << stats.peakRegistryReservedChunks;
+        // Append the occupancy keys only when the gate is configured, so the default stats line
+        // stays byte-identical to the pre-phase-1 output.
+        if(stats.occupancyTargetChunks != 0u)
+            message << " occupancyTargetChunks=" << stats.occupancyTargetChunks
+                    << " liveWorkChunks=" << stats.liveWorkChunks
+                    << " peakLiveWorkChunks=" << stats.peakLiveWorkChunks << " refills=" << stats.refills;
         return message.str();
     }
 
@@ -235,6 +248,11 @@ namespace graphFlow
         std::uint32_t registryReservedChunks = 0u;
         std::uint32_t registryRetiredChunks = 0u;
         std::uint32_t registryFaults = 0u;
+
+        // Occupancy-target state at capture time (aggregate only; zero target means the gate is off).
+        std::uint32_t occupancyTargetChunks = 0u;
+        std::uint32_t liveWorkChunks = 0u;
+        std::uint64_t refills = 0u;
 
         // Peaks since the run started.
         std::uint32_t poolChunks = 0u;
@@ -295,7 +313,12 @@ namespace graphFlow
                     << ", registryReadyChunks=" << snapshot.registryReadyChunks
                     << ", registryInflightChunks=" << snapshot.registryInflightChunks
                     << ", registryReservedChunks=" << snapshot.registryReservedChunks
-                    << ", registryRetiredChunks=" << snapshot.registryRetiredChunks << ')';
+                    << ", registryRetiredChunks=" << snapshot.registryRetiredChunks;
+            // Only an enabled gate changes the message; the disabled path stays byte-identical.
+            if(snapshot.occupancyTargetChunks != 0u)
+                message << ", occupancyTargetChunks=" << snapshot.occupancyTargetChunks
+                        << ", liveWorkChunks=" << snapshot.liveWorkChunks << ", refills=" << snapshot.refills;
+            message << ')';
             return message.str();
         }
     } // namespace detail
@@ -561,6 +584,26 @@ namespace graphFlow
             m_batchChunks = batchChunks;
         }
 
+        /** Set the steady-state chunk occupancy target D; zero restores the historical admission.
+         *
+         * D counts chunks, not particles. With D non-zero the source admits only while the
+         * registry reports fewer than D chunks in `reserved + ready + inflight`; the particle
+         * budget P, the per-chunk fill cap and the free-list precondition stay in force. The value
+         * is validated in `run()` before the first launch: `D` must cover the registered lanes and
+         * must fit into `numChunks - output-credit reserve`. Setting a value does not change the
+         * pool size or the reserve formula.
+         */
+        void setOccupancyTarget(std::uint32_t target) noexcept
+        {
+            m_occupancyTarget = target;
+        }
+
+        /** Configured occupancy target; zero when the gate is off. */
+        [[nodiscard]] std::uint32_t occupancyTargetChunks() const noexcept
+        {
+            return m_occupancyTarget;
+        }
+
         /** Select the transform launch schedule and validate the per-chunk queue width.
          *
          * The default `ChunkKernelSchedule::off` keeps the historical batch-wide dispatch and the
@@ -651,6 +694,9 @@ namespace graphFlow
         {
             if(!m_sourceNode)
                 throw std::logic_error{"graphFlow: no source node configured"};
+            // Fail before any query reset or kernel launch. An undersized or unreachable target
+            // otherwise surfaces only as a 120 s scheduler stall or a pool-exhaustion throw.
+            validateOccupancyTarget();
             for(auto const& nodePtr : m_nodes)
             {
                 for(int const dst : nodePtr->route)
@@ -665,6 +711,8 @@ namespace graphFlow
             m_sunkParticles = 0u;
             m_reservedTotal = 0u;
             m_roundRobin = 0u;
+            m_refillPending = false;
+            m_refillCount = 0u;
             m_registry.reset(m_storage);
             if constexpr(debug::checksEnabled)
             {
@@ -791,6 +839,11 @@ namespace graphFlow
                                     for(ChunkDescriptor const& input : batch.chunks)
                                         m_registry.onSinkArrival(input, node.id);
                                     sunkParticles += batch.particles();
+                                    // Retirement-driven refill: a sink consumed work, so the next
+                                    // admission pass may feed the pipeline again. The flag is only
+                                    // a trigger; the exact gate below decides whether to admit.
+                                    if(m_occupancyTarget != 0u)
+                                        m_refillPending = true;
                                 }
 
                                 // A source hands its chunk downstream; every other node retires
@@ -816,9 +869,11 @@ namespace graphFlow
                     observePeaks(stats);
 
                     // 2) Admit the next source chunk. The admission decision is the configured
-                    //    particle budget P (chunk form ceil(P/C)); the free-list comparison is only
-                    //    the physical storage precondition (one chunk beyond the output reserve),
-                    //    so ready input chunks cannot consume the output-credit reserve.
+                    //    particle budget P (chunk form ceil(P/C)) and, when configured, the
+                    //    occupancy target D; the free-list comparison is only the physical storage
+                    //    precondition (one chunk beyond the output reserve), so ready input chunks
+                    //    cannot consume the output-credit reserve. The target is an additional
+                    //    constraint: it never replaces P or the free-list precondition.
                     Node& source = *m_nodes[*m_sourceNode];
                     std::uint64_t const liveParticles = generated - sunkParticles;
                     std::uint64_t const remaining = m_sourceParticles - generated;
@@ -835,9 +890,20 @@ namespace graphFlow
                     bool const enoughBudget
                         = configuredLive == 0u
                           || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
+                    // Live work is `reserved + ready + inflight` chunks from the registry. It
+                    // excludes the transient `retired` phase on purpose: a retired chunk has
+                    // already been consumed and would otherwise let the gate over-admit. It is
+                    // never derived from `reservedCredits`, which is a cumulative aggregate.
+                    std::uint32_t const liveWork = m_registry.liveWorkChunks();
+                    bool const withinOccupancy = m_occupancyTarget == 0u || liveWork < m_occupancyTarget;
+                    // Consume the retirement-driven refill signal. The scheduler loop revisits
+                    // admission every iteration; the flag only makes the trigger explicit, so it
+                    // can never widen the gate or cause a spin.
+                    bool const refillRequested = m_refillPending;
+                    m_refillPending = false;
                     Lane* sourceLane = Node::freeLane(source);
                     if(generated < m_sourceParticles && sourceLane != nullptr && withinAdmission && enoughBudget
-                       && m_storage.freeCount() > reservedTotal)
+                       && withinOccupancy && m_storage.freeCount() > reservedTotal)
                     {
                         std::uint64_t budget = remaining;
                         std::uint32_t const fillCap = configuredLive == 0u
@@ -860,6 +926,10 @@ namespace graphFlow
                         m_registry.onDispatch(chunk, source.id);
                         sourceLane->hooks.launch(source.queue, batch);
                         enqueueEvent(source, *sourceLane);
+                        // One admission per loop iteration, so at most one retirement-driven
+                        // refill is consumed per iteration even when several chunks retire.
+                        if(refillRequested)
+                            ++m_refillCount;
                         progress = true;
                     }
                     observePeaks(stats);
@@ -1115,6 +1185,9 @@ namespace graphFlow
             stats.peakRegistryReadyChunks = registry.peakReadyChunks;
             stats.peakRegistryInflightChunks = registry.peakInflightChunks;
             stats.peakRegistryReservedChunks = registry.peakReservedChunks;
+            stats.occupancyTargetChunks = m_occupancyTarget;
+            stats.liveWorkChunks = m_registry.liveWorkChunks();
+            stats.refills = m_refillCount;
             return stats;
         }
 
@@ -1237,6 +1310,68 @@ namespace graphFlow
                 "graphFlow: transform batch output reserve");
         }
 
+        /** Total number of lanes the registered nodes expose.
+         *
+         * A target below this value cannot keep every lane busy, which the design calls the
+         * starvation failure mode. Source and sink lanes are included, so a target that only
+         * covers the transform depth is rejected as well.
+         */
+        [[nodiscard]] std::uint32_t registeredLaneCount() const noexcept
+        {
+            std::uint32_t lanes = 0u;
+            for(auto const& nodePtr : m_nodes)
+                lanes += static_cast<std::uint32_t>(nodePtr->lanes.size());
+            return lanes;
+        }
+
+        /** Output-credit reserve `K*R`, one `R = outputChunkBound(C, C, B)` per transform node.
+         *
+         * This is the same reserve the pool sizing uses (`S = P + K*R`) and that `Flow` passes as
+         * `poolOutputReserveChunks`. It is the number of chunks a live transform lane may need for
+         * its outputs, so the occupancy target must leave it untouched.
+         */
+        [[nodiscard]] std::uint32_t outputCreditReserveChunks() const
+        {
+            std::uint64_t total = 0u;
+            for(auto const& nodePtr : m_nodes)
+            {
+                if(nodePtr->role != NodeRole::transform)
+                    continue;
+                std::uint64_t const bound = checkedReserveBound(m_storage.chunkCapacity(), nodePtr->maxBins);
+                total += bound;
+                if(total > std::numeric_limits<std::uint32_t>::max())
+                    throw std::overflow_error{
+                        "graphFlow: occupancy target validation: output-credit reserve exceeds 32 bits"};
+            }
+            return static_cast<std::uint32_t>(total);
+        }
+
+        /** Reject an unreachable occupancy target before the first launch.
+         *
+         * The lower bound is the registered lane count; the upper bound is the reachable
+         * occupancy `numChunks - K*R`. Both failures otherwise surface late, as a scheduler stall
+         * or a pool-exhaustion throw, so they are reported with the exact numbers here.
+         */
+        void validateOccupancyTarget() const
+        {
+            if(m_occupancyTarget == 0u)
+                return;
+            std::uint32_t const lanes = registeredLaneCount();
+            if(m_occupancyTarget < lanes)
+                throw std::invalid_argument{
+                    "graphFlow: occupancyTargetChunks=" + std::to_string(m_occupancyTarget)
+                    + " is below the registered lane count " + std::to_string(lanes)
+                    + "; the pipeline would starve"};
+            std::uint64_t const poolChunks = m_storage.numChunks();
+            std::uint64_t const reserve = outputCreditReserveChunks();
+            if(reserve >= poolChunks || m_occupancyTarget > poolChunks - reserve)
+                throw std::invalid_argument{
+                    "graphFlow: occupancyTargetChunks=" + std::to_string(m_occupancyTarget)
+                    + " exceeds the reachable occupancy " + std::to_string(poolChunks) + " (poolChunks) - "
+                    + std::to_string(reserve) + " (outputReserveChunks) = "
+                    + std::to_string(reserve < poolChunks ? poolChunks - reserve : 0u)};
+        }
+
         /** Debug-only fill-level check of one published descriptor. */
         void debugCheckFill(ChunkDescriptor const& chunk, char const* stage) const
         {
@@ -1329,6 +1464,8 @@ namespace graphFlow
             stats.peakInflightBatches = std::max(stats.peakInflightBatches, inflightBatches);
             stats.peakInflightChunks = std::max(stats.peakInflightChunks, inflightChunks);
             stats.peakEventSlotsInUse = std::max(stats.peakEventSlotsInUse, eventSlots);
+            if(m_occupancyTarget != 0u)
+                stats.peakLiveWorkChunks = std::max(stats.peakLiveWorkChunks, m_registry.liveWorkChunks());
         }
 
         /** Build the aggregate snapshot of the current scheduler state and run peaks. */
@@ -1364,6 +1501,9 @@ namespace graphFlow
             snapshot.registryInflightChunks = registry.inflightChunks;
             snapshot.registryReservedChunks = registry.reservedChunks;
             snapshot.registryRetiredChunks = registry.retiredChunks;
+            snapshot.occupancyTargetChunks = m_occupancyTarget;
+            snapshot.liveWorkChunks = m_registry.liveWorkChunks();
+            snapshot.refills = m_refillCount;
             snapshot.poolChunks = m_storage.numChunks();
             snapshot.peakLiveChunks = m_storage.peakLive();
             snapshot.peakReservedChunks = m_stats.peakReservedChunks;
@@ -1536,6 +1676,11 @@ namespace graphFlow
         std::uint64_t m_generated = 0u;
         std::uint64_t m_sunkParticles = 0u;
         std::uint32_t m_reservedTotal = 0u;
+        /** Steady-state chunk occupancy target; zero keeps the historical admission path. */
+        std::uint32_t m_occupancyTarget = 0u;
+        /** Set by a sink retirement, consumed by the next admission pass. */
+        bool m_refillPending = false;
+        std::uint64_t m_refillCount = 0u;
         bool m_diagnostics = false;
     };
 } // namespace graphFlow
