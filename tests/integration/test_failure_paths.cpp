@@ -24,6 +24,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -420,16 +421,21 @@ namespace
 
     /** Run a 1:1 transform on the per-chunk schedule and inject a failure at the Nth chunk.
      *
+     * The device type is a template parameter on purpose. nvcc's cudafe++ segfaults in 12.5 and 12.6
+     * when non-template code assigns a lambda to a `GraphRunner::Hooks` member whose `std::function`
+     * signature names `GraphRunner::Queue` or `Batch`; the `wrap*` helpers in HookAdapters.hpp work
+     * around the same frontend bug. Inside a template body the conversion is deferred.
+     *
      * The hooks are deliberately small: a one-word memset per chunk gives the event real device
      * work, `advance` acquires exactly one output chunk and `finish` publishes the batch's own
      * fill. That makes every lane a complete per-chunk retirement slot (event, lease, input chunk,
      * output credit) without dragging the typed stage into the failure path. The sink reads no
      * payload, so the fake copy needs no device data movement.
      */
-    PerChunkFailureOutcome runPerChunkLaunchFailure(std::uint32_t failAt)
+    template<typename TDevice>
+    PerChunkFailureOutcome runPerChunkLaunchFailure(TDevice const& device, std::uint32_t failAt)
     {
-        auto device = graphFlow::test::makeCpuDevice();
-        using Device = ALPAKA_TYPEOF(device);
+        using Device = std::decay_t<TDevice>;
         using Runner = graphFlow::GraphRunner<Device>;
 
         constexpr std::uint32_t capacity = 8u;
@@ -449,7 +455,7 @@ namespace
             // be an actual concurrent write (TSAN catches it) as well as a false completion signal.
             auto laneStatus = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
             auto pending = std::make_shared<std::optional<graphFlow::ChunkHandle>>();
-            Runner::Hooks hooks;
+            typename Runner::Hooks hooks;
             hooks.launch
                 = [laneStatus, &launches](typename Runner::Queue const& queue, typename Runner::Batch const&) mutable
             {
@@ -494,7 +500,7 @@ namespace
         // Four lanes, four queues: each lane owns one chunk and retires it on its own completion.
         runner
             .addNode("copy", graphFlow::NodeRole::transform, 1u, {2}, std::move(chunkHooks), chunkQueues, chunkQueues);
-        Runner::Hooks sinkHooks;
+        typename Runner::Hooks sinkHooks;
         sinkHooks.launch = [](typename Runner::Queue const&, typename Runner::Batch const&) {};
         sinkHooks.advance = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
         {
@@ -541,7 +547,7 @@ TEST_CASE(
 {
     // Control run: eight chunks over four queues. The run-end `freeCount == numChunks` check of
     // the runner would already throw "chunk leak after the run" on a leaked slot.
-    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(0u);
+    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(graphFlow::test::makeCpuDevice(), 0u);
     CHECK_FALSE(outcome.threw);
     CHECK(outcome.launches == 8u);
     CHECK(outcome.sinkCompleted == 8u);
@@ -554,7 +560,7 @@ TEST_CASE(
     "per-chunk failure at the fifth chunk leaves no lease or chunk behind",
     "[integration][failure][chunk-schedule]")
 {
-    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(5u);
+    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(graphFlow::test::makeCpuDevice(), 5u);
     CHECK(outcome.threw);
     // The injected error must be the one the runner reports: a pool invariant (double release,
     // release with an outstanding lease) or a leak check would have replaced it.
