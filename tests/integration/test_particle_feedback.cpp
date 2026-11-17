@@ -118,6 +118,9 @@ TEST_CASE("occupancy target does not change particle feedback physics", "[integr
     CHECK(gated.stats.occupancyTargetChunks == 8u);
     CHECK(gated.stats.sourceSunk == parameters.numParticles);
     CHECK(gated.stats.liveWorkChunks == 0u);
+    // The gated run must be observed to engage the path: a sink retirement was seen while the
+    // target was configured, so this case cannot pass with the gate silently absent.
+    CHECK(gated.stats.refills > 0u);
     // Scheduling changed, physics did not.
     CHECK(gated.weights == baseline.weights);
     CHECK(gated.histogram == baseline.histogram);

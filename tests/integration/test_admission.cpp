@@ -4,6 +4,7 @@
 
 #include "TestDevice.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
+#include "graphFlow/flow/Tuning.hpp"
 #include "graphFlow/sched/GraphRunner.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -561,4 +562,15 @@ namespace
 TEST_CASE("invalid occupancy target is rejected before any kernel runs", "[integration][admission]")
 {
     expectInvalidOccupancyTargetRejected(graphFlow::test::makeCpuDevice());
+}
+
+TEST_CASE("Tuning accepts a zero occupancy target as disabled", "[config][admission]")
+{
+    graphFlow::Tuning tuning;
+    tuning.occupancyTargetChunks = 0u;
+    CHECK_NOTHROW(tuning.validate());
+
+    // Every other present zero stays a rejected configuration error.
+    tuning.batchChunks = 0u;
+    CHECK_THROWS_WITH(tuning.validate(), Catch::Matchers::ContainsSubstring("batchChunks must be non-zero"));
 }
