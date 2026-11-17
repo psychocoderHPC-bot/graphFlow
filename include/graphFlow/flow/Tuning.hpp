@@ -19,8 +19,9 @@ namespace graphFlow
     /** Optional execution knobs of `Flow`.
      *
      * Absent values are derived from the device, the run size and the graph. Tuning never changes
-     * payload semantics or routes. Every present value must be non-zero; zero has no distinct
-     * "automatic" meaning here because absence already selects the automatic path.
+     * payload semantics or routes. Every present value must be non-zero, except the two knobs
+     * whose zero is a defined setting: `chunkLatencyCapUs` (no cap) and `occupancyTargetChunks`
+     * (gate disabled, matching `Config::occupancyTargetChunks`).
      */
     struct Tuning
     {
@@ -49,8 +50,9 @@ namespace graphFlow
         // Storage and pool limits.
         std::optional<std::uint32_t> chunkCapacity;
         std::optional<std::uint32_t> liveParticles;
-        /** Steady-state chunk occupancy target D. Absence keeps the historical particle-budget
-         * admission; a present value adds the chunk-count gate described in `Config`.
+        /** Steady-state chunk occupancy target D. Absence and an explicit zero both keep the
+         * historical particle-budget admission; a non-zero value adds the chunk-count gate
+         * described in `Config`.
          */
         std::optional<std::uint32_t> occupancyTargetChunks;
         std::optional<std::uint32_t> tileSize;
@@ -94,10 +96,12 @@ namespace graphFlow
             validateNonZero(batchChunks, "batchChunks");
             validateNonZero(inflightBatches, "inflightBatches");
             // `chunkLatencyCapUs` is deliberately excluded: zero means "no cap" and is valid.
+            // `occupancyTargetChunks` is excluded as well: zero disables the gate, which is the
+            // same semantics `Config` documents, so an explicit `--occupancy-target 0` is an
+            // off switch rather than an error.
             validateNonZero(chunkQueueDepth, "chunkQueueDepth");
             validateNonZero(chunkCapacity, "chunkCapacity");
             validateNonZero(liveParticles, "liveParticles");
-            validateNonZero(occupancyTargetChunks, "occupancyTargetChunks");
             validateNonZero(tileSize, "tileSize");
             validateNonZero(numChunks, "numChunks");
             validateNonZero(frameCap, "frameCap");

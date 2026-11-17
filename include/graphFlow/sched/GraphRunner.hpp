@@ -218,8 +218,8 @@ namespace graphFlow
         // stays byte-identical to the pre-phase-1 output.
         if(stats.occupancyTargetChunks != 0u)
             message << " occupancyTargetChunks=" << stats.occupancyTargetChunks
-                    << " liveWorkChunks=" << stats.liveWorkChunks
-                    << " peakLiveWorkChunks=" << stats.peakLiveWorkChunks << " refills=" << stats.refills;
+                    << " liveWorkChunks=" << stats.liveWorkChunks << " peakLiveWorkChunks=" << stats.peakLiveWorkChunks
+                    << " refills=" << stats.refills;
         return message.str();
     }
 
@@ -891,9 +891,13 @@ namespace graphFlow
                         = configuredLive == 0u
                           || (liveParticles < configuredLive && (configuredLive - liveParticles) >= minFill);
                     // Live work is `reserved + ready + inflight` chunks from the registry. It
-                    // excludes the transient `retired` phase on purpose: a retired chunk has
-                    // already been consumed and would otherwise let the gate over-admit. It is
-                    // never derived from `reservedCredits`, which is a cumulative aggregate.
+                    // excludes the transient `retired` phase on purpose: `liveChunks` is
+                    // `liveWork + retired`, so counting retired would add chunks the sink has
+                    // already consumed and make the gate stricter than the target it enforces. The
+                    // sink retire loop calls `onSinkArrival` and releases the chunk immediately in
+                    // the same iteration, so a retired chunk never exists at an admission pass and
+                    // including it would only distort the number. It is never derived from
+                    // `reservedCredits`, which is a cumulative aggregate.
                     std::uint32_t const liveWork = m_registry.liveWorkChunks();
                     bool const withinOccupancy = m_occupancyTarget == 0u || liveWork < m_occupancyTarget;
                     // Read and clear the retirement-driven refill signal. The read is accounting
@@ -1363,16 +1367,15 @@ namespace graphFlow
             if(m_occupancyTarget < lanes)
                 throw std::invalid_argument{
                     "graphFlow: occupancyTargetChunks=" + std::to_string(m_occupancyTarget)
-                    + " is below the registered lane count " + std::to_string(lanes)
-                    + "; the pipeline would starve"};
+                    + " is below the registered lane count " + std::to_string(lanes) + "; the pipeline would starve"};
             std::uint64_t const poolChunks = m_storage.numChunks();
             std::uint64_t const reserve = outputCreditReserveChunks();
             if(reserve >= poolChunks || m_occupancyTarget > poolChunks - reserve)
                 throw std::invalid_argument{
                     "graphFlow: occupancyTargetChunks=" + std::to_string(m_occupancyTarget)
                     + " exceeds the reachable occupancy " + std::to_string(poolChunks) + " (poolChunks) - "
-                    + std::to_string(reserve) + " (outputReserveChunks) = "
-                    + std::to_string(reserve < poolChunks ? poolChunks - reserve : 0u)};
+                    + std::to_string(reserve)
+                    + " (outputReserveChunks) = " + std::to_string(reserve < poolChunks ? poolChunks - reserve : 0u)};
         }
 
         /** Debug-only fill-level check of one published descriptor. */

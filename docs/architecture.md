@@ -135,10 +135,17 @@ transitions that already exist: acquire and release are reported by the storage
 (`ChunkPool`/`ChunkLedger` optional hooks), routing sets the destination from
 `node.route[bin]`, dispatch moves a chunk to its lane, and a sink arrival marks
 it retired before the release returns it to the free list. Phase 0 records the
-transitions without reading them. Phase 1 reads exactly one quantity from the
-registry: `liveWorkChunks() = reserved + ready + inflight`, which gates opt-in
-source admission. That count excludes the transient `retired` phase, so a chunk
-the sink has already consumed cannot make the gate over-admit. No other
+transitions and reads them for diagnostics only. Phase 1 reads exactly one
+quantity from the registry: `liveWorkChunks() = reserved + ready + inflight`,
+which gates opt-in source admission. That count excludes the transient
+`retired` phase because `liveChunks = liveWork + retired`: adding `retired`
+would count chunks the sink has already consumed, so the number would exceed
+the work still competing for admission and the gate would under-admit. A
+retired chunk never reaches an admission pass in the first place, because
+`onSinkArrival` is immediately followed by `release()` in the same retire loop,
+so the chunk is `free` before the loop revisits admission. Excluding `retired`
+therefore measures exactly the set admission competes over; adding a phase that
+does not exist at admission time would only distort the number. No other
 scheduling decision reads a record. The constructor seeds every record
 from the pool's current generations, and the run-start reset re-seeds in
 place without allocating.
