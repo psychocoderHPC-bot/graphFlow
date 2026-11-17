@@ -25,17 +25,17 @@ Documentation:
 
 ## Status
 
-Current code main: `3b90ffd8962084d59ebc672f7848b093f2d99582` (the AoS
-attribute storage and the record-pipeline example; `561b9a4c` is the previous
+Current code main: `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` (the AoS
+attribute storage and the record-pipeline example; `3b90ffd` is the previous
 total). The recorded CTest runs pass with no skipped case; the SYCL row is the
-full suite of the `hal` build, of which 75 cases carry the `sycl` label:
+full suite of the `hal` build, of which 77 cases carry the `sycl` label:
 
 | Configuration | Host / device | Result |
 | --- | --- | --- |
-| CPU Release | fwk394, g++ 13.3 | **270/270 passed** |
-| CUDA Release | `fwk394`, RTX 2080 Ti `sm_75` | **334/334 passed** |
-| HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **325/325 passed** |
-| SYCL Release | `hal`, Intel Arc A770 `spir64`, oneAPI 2026.2 | **342/342 passed** (75 sycl-labelled) |
+| CPU Release | fwk394, g++ 13.3 | **312/312 passed** |
+| CUDA Release | `fwk394`, RTX 2080 Ti `sm_75` | **378/378 passed** |
+| HIP Release | `hal`, RX 7900 XTX `gfx1100`, ROCm 7.2 | **369/369 passed** |
+| SYCL Release | `hal`, Intel Arc A770 `spir64`, oneAPI 2026.2 | **386/386 passed** (77 sycl-labelled) |
 
 Pins, commands, the no-skip assertion, and the historical totals are in the
 [acceptance record](docs/acceptance.md). PR #65 adds 6/6 CPU, 6/6 CUDA and
@@ -268,7 +268,7 @@ and REUSE commands are in [build](docs/build.md).
 `[photon][debug]` CTest cases run in both modes: Release asserts that the hot
 path has no per-event state branch, and Debug exercises the compiled checks.
 Host setup validates the run configuration once. The current tree passes
-270/270 CPU, 334/334 CUDA, 325/325 HIP, and 342/342 SYCL on `hal` Arc A770 in
+312/312 CPU, 378/378 CUDA, 369/369 HIP, and 386/386 SYCL on `hal` Arc A770 in
 Release; the
 [acceptance record](docs/acceptance.md) carries the current block. The
 `rosi_v100` Release totals 202/202 CPU and 254/254 CUDA are historical. The
@@ -429,16 +429,16 @@ are not part of the default CTest suite. Configure with
 `-DGRAPHFLOW_ENABLE_PHOTON_DIAGNOSTICS=ON` and run
 `ctest --test-dir <build> -L diagnostics` to opt in. HIP execution is validated
 on `hal` with the RX 7900 XTX (`gfx1100`, ROCm 7.2); the HIP photon CLI and
-output cases are part of the current 325/325 run at
-`3b90ffd8962084d59ebc672f7848b093f2d99582`; the SYCL photon CLI and output
-cases are part of the 342/342 full suite (75 sycl-labelled) at
-`3b90ffd8962084d59ebc672f7848b093f2d99582` on the Arc A770. The default fp32
+output cases are part of the current 369/369 run at
+`54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`; the SYCL photon CLI and output
+cases are part of the 386/386 full suite (77 sycl-labelled) at
+`54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` on the Arc A770. The default fp32
 path covers those cases, and the environment-scoped FP64 case adds the double
 run. The previous
 307/307 at `561b9a4c`, 72/72 sycl-labelled at `9ace795`,
 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
 `a610281` and 245/245 at `b972eaa` are historical. CUDA execution is part of
-the current 334/334 run on `fwk394` RTX 2080 Ti `sm_75`; the previous 316/316
+the current 378/378 run on `fwk394` RTX 2080 Ti `sm_75`; the previous 316/316
 on `hal` A30 `sm_80` (CUDA 13.4) and the `rosi_v100` V100 `sm_70` 254/254 run
 are historical.
 
@@ -592,16 +592,16 @@ yet; that is an operator action and is not changed from this repository. See
   `F * multiProcessorCount` blocks (default 8); kernels stride the tile list and
   the host backend uses a unit frame extent.
 - HIP execution is validated on one AMD device: `hal` with an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2), **325/325 CTest at
-  `3b90ffd8962084d59ebc672f7848b093f2d99582`**. The previous 307/307 at
+  7900 XTX (`gfx1100`, ROCm 7.2), **369/369 CTest at
+  `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`**. The previous 307/307 at
   `561b9a4c`, 301/301 at
   `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
   `a610281` and 245/245 with 43 HIP cases at `b972eaa` are historical. Other AMD architectures and the hash path are not run on HIP.
   `hal` reports `sharing=unknown`, so there is no HIP performance claim.
   GitHub-hosted HIP remains compile-only because its runners have no AMD GPU.
 - SYCL execution is validated on one Intel device: `hal` with an Intel Arc
-  A770 (`spir64`, oneAPI 2026.2), **342/342 CTest at
-  `3b90ffd8962084d59ebc672f7848b093f2d99582`** (75 sycl-labelled). The previous
+  A770 (`spir64`, oneAPI 2026.2), **386/386 CTest at
+  `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`** (77 sycl-labelled). The previous
   72/72 sycl-labelled run at
   `9ace795798c0e8db9f4e74885cc131ef05bc5163` is historical. By default the Arc A770 does
   not advertise the SYCL `fp64` aspect, so the oneAPI photon path runs in fp32
@@ -624,8 +624,8 @@ yet; that is an operator action and is not changed from this repository. See
   added at `2fefe54c6d32e9156be5c08ea497119d0bacc21e` runs the same
   configuration. `hal` still cannot run TSAN: the kernel aborts with
   `unexpected memory mapping`. The 210-case TSAN run predates the current
-  270-case suite, so no full TSAN result exists for
-  `3b90ffd8962084d59ebc672f7848b093f2d99582`; the hosted `tsan` job runtime
+  312-case suite, so no full TSAN result exists for
+  `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`; the hosted `tsan` job runtime
   was not observed.
 - `hal` is shared. The historical throughput is a baseline, not an exclusive
   acceptance number. JURECA `jrc0880.jureca` (4x H100 PCIe 80GB, SM 9.0) is
@@ -638,12 +638,12 @@ yet; that is an operator action and is not changed from this repository. See
   through `Tuning::inflightBatches`.
 - The generic graph API core is host-only and not yet used by the example.
 - CPU OpenMP works with passive spinning (`GOMP_SPINCOUNT=0`); the previous
-  multi-region pathology is not observed. The current CPU suite is 270/270 in
+  multi-region pathology is not observed. The current CPU suite is 312/312 in
   Release. The `rosi_v100` 202/202 Release and pre-hash 195/195 Debug totals
   are historical.
 - CUDA V100 `sm_70` on `rosi_v100` passed 254/254 (CUDA 12.6.85 Release) with
   the explicit concept-parameter workaround; that total is historical. The
-  current CUDA suite is 334/334 on `fwk394` RTX 2080 Ti `sm_75`; the 316/316
+  current CUDA suite is 378/378 on `fwk394` RTX 2080 Ti `sm_75`; the 316/316
   run on `hal` A30 `sm_80` (CUDA 13.4) is historical.
 - Release builds have no per-event payload checks; the Debug default compiles
   them in. Genuine physics failures stay on the `StatusCode` channel in both

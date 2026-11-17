@@ -295,16 +295,16 @@ which reports `sharing=unknown`, so they are baselines, not acceptance numbers.
   exclusive-platform run on `rosi_v100` (V100 SXM2-32GB). The older `f3ef355`
   acceptance table is historical.
  - HIP execution is validated for correctness on `hal` (AMD Radeon RX 7900 XTX,
-   `gfx1100`, ROCm 7.2); the current suite is 325/325 at
-   `3b90ffd8962084d59ebc672f7848b093f2d99582` and the previous 307/307 at
+   `gfx1100`, ROCm 7.2); the current suite is 369/369 at
+   `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` and the previous 307/307 at
    `561b9a4c`, 301/301 at
    `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac`, the 290/290 at
    `a610281`, and the 245/245 run at `b972eaa` are historical.
    The measured AoS section records HIP wall times on `hal`; because `hal`
    reports `sharing=unknown`, those are baselines, not an acceptance claim.
-- The current CUDA suite (334/334 at
-  `3b90ffd8962084d59ebc672f7848b093f2d99582`) is the first recorded RTX 2080 Ti
-  `sm_75` run, on `fwk394`, correctness only. The exclusive performance record
+- The current CUDA suite (378/378 at
+  `54ba63f8d3696993bc65670b7c1d9f8b8d5d3016`) runs on the RTX 2080 Ti
+  `sm_75`, on `fwk394`, correctness only. The exclusive performance record
   (P07b) remains the V100 `sm_70` measurement at `56c11ac`, which predates the
   AoS-over-SoA additions. No benchmark was taken at `3b90ffd`; the measured
   AoS section above is the only record that compares the default and opt-in
