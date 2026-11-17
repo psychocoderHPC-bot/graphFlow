@@ -203,7 +203,9 @@ namespace graphFlow::cli
             }
             else if(flag == "--occupancy-target")
             {
-                options.occupancyTarget = parseU32(flag, nextValue(flag));
+                // Zero is a defined value: it disables the gate, matching `Config` and `Tuning`,
+                // so `--occupancy-target 0` is the explicit off switch.
+                options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             }
             else if(flag == "--seed")
             {
