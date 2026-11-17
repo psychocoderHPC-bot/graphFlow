@@ -574,8 +574,8 @@ python3 tools/plot_photon_scattering.py --input /tmp/photon-forward \
 
 `--chunk-kernel-schedule off|perChunk` (default `off`) selects the transform
 launch schedule described above; a user opts in when the device has enough
-sufficient device capacity, for example the measured runs in
-[benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-scattering).
+capacity for the per-chunk launch pattern to pay off, for example the
+measured runs in [benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-scattering).
 `--chunk-queue-depth D` (default 1) sets the queue pool of each per-chunk
 transform node, and `--chunk-latency-cap-us U` (default 0, no cap) clamps the
 capacity and waves that launch-size policy reports without touching the storage
