@@ -70,6 +70,7 @@ namespace graphFlow::particle
         std::uint32_t deviceIndex = 0u;
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per batch
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
+        graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
     };
 
     /** Workload of the example binary.
@@ -181,6 +182,7 @@ namespace graphFlow::particle
         tuning.tileSize = parameters.tileSize;
         tuning.batchChunks = parameters.batchChunks;
         tuning.frameCap = parameters.frameCap;
+        tuning.poolMode = parameters.poolMode;
         return tuning;
     }
 

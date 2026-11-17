@@ -767,6 +767,14 @@ namespace graphFlow
                                 reservedTotal -= lane.reserved;
                                 lane.reserved = 0u;
                             }
+                            if constexpr(debug::checksEnabled)
+                            {
+                                // Per-batch arena probe: every live range must be disjoint and
+                                // together with the free list tile the arena exactly once, and
+                                // the published base table must match the authoritative map.
+                                if constexpr(requires { m_storage.verifyArena(); })
+                                    m_storage.verifyArena();
+                            }
 
                             if(moreWork)
                             {
@@ -921,7 +929,17 @@ namespace graphFlow
                         if(budget > m_storage.chunkCapacity())
                             budget = m_storage.chunkCapacity();
                         std::uint32_t const fill = static_cast<std::uint32_t>(budget);
-                        ChunkDescriptor chunk{m_storage.acquire(), fill, 0u};
+                        // A slot-arena storage commits exactly this fill, so a one-particle
+                        // fragment owns one slot instead of a full chunk. Fixed storages accept
+                        // the same call and ignore it beyond validation.
+                        ChunkHandle handle = [&]()
+                        {
+                            if constexpr(requires { m_storage.acquire(fill); })
+                                return m_storage.acquire(fill);
+                            else
+                                return m_storage.acquire();
+                        }();
+                        ChunkDescriptor chunk{handle, fill, 0u};
                         if constexpr(debug::checksEnabled)
                             debugCheckFill(chunk, "source");
                         Batch const batch{{chunk}, generated};
@@ -1166,9 +1184,15 @@ namespace graphFlow
             }
             if(m_storage.freeCount() != m_storage.numChunks())
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
-
             if constexpr(debug::checksEnabled)
+            {
+                // The chunk-count check above is necessary but not sufficient for the arena: a
+                // released chunk whose range was lost keeps `freeCount` correct. The arena leak
+                // check also proves the free list tiles the whole arena again.
+                if constexpr(requires { m_storage.verifyArenaReleased(); })
+                    m_storage.verifyArenaReleased();
                 this->debugCheckTotals(generated, sunkParticles);
+            }
 
             stats.poolChunks = m_storage.numChunks();
             stats.peakLiveChunks = m_storage.peakLive();
@@ -1640,6 +1664,11 @@ namespace graphFlow
                 for(ChunkDescriptor const& chunk : node.ready)
                     m_storage.release(chunk.handle);
                 node.ready.clear();
+            }
+            if constexpr(debug::checksEnabled)
+            {
+                if constexpr(requires { m_storage.verifyArenaReleased(); })
+                    m_storage.verifyArenaReleased();
             }
         }
 

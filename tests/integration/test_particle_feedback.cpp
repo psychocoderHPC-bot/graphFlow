@@ -97,6 +97,33 @@ TEST_CASE("particle feedback matches the scalar oracle for the N matrix", "[inte
     }
 }
 
+TEST_CASE("slot arena produces the same physics as the fixed layout", "[integration][arena]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 4097u;
+    parameters.chunkSize = 128u;
+    parameters.liveParticles = 256u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    auto const fixed = graphFlow::particle::runParticleFeedback(device, parameters);
+    parameters.poolMode = graphFlow::PoolMode::slotArena;
+    auto const arena = graphFlow::particle::runParticleFeedback(device, parameters);
+
+    // Same graph, same seed, same admission: only the chunk-slot layout and the base lookup
+    // changed, so both runs must produce the same ids, weights and histogram.
+    CHECK(arena.weights == fixed.weights);
+    CHECK(arena.histogram == fixed.histogram);
+    CHECK(arena.cappedParticles == fixed.cappedParticles);
+    CHECK(arena.sunkParticles == fixed.sunkParticles);
+    CHECK(arena.liveParticles == fixed.liveParticles);
+    // The chunk-index count is P + K*R in both layouts; only the slot count differs.
+    CHECK(arena.stats.poolChunks == fixed.stats.poolChunks);
+    checkAgainstReference(parameters, arena);
+}
+
 TEST_CASE("occupancy target does not change particle feedback physics", "[integration][occupancy]")
 {
     auto const device = makeNativeTestDevice();

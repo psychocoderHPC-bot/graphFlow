@@ -333,7 +333,7 @@ namespace graphFlow
 
             Config const config = resolveConfig(itemCount);
 
-            auto storage = std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
+            auto storage = makeStorage(config);
             // Each submitted-depth lane gets its own typed stage. The stage owns the per-batch
             // device staging, status and histogram buffers, so independent lanes must never share
             // one instance once `inflightBatches` is above one.
@@ -625,6 +625,31 @@ namespace graphFlow
             return static_cast<std::uint32_t>(live + reserve);
         }
 
+        /** Build the storage with the layout the resolved configuration selected.
+         *
+         * The slot arena uses `slotArenaSlots` (the payload budget in slots) and the validation
+         * has already proven that the `P + K*R*C` reservation fits. A storage without an arena
+         * constructor is rejected instead of quietly running the fixed layout.
+         */
+        [[nodiscard]] std::unique_ptr<TStorage> makeStorage(Config const& config) const
+        {
+            if(config.poolMode != PoolMode::slotArena)
+                return std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity);
+            if constexpr(
+                std::is_constructible_v<TStorage, TDevice, std::uint32_t, std::uint32_t, SlotArenaOptions const&>)
+            {
+                SlotArenaOptions options;
+                options.payloadBudgetBytes = config.poolPayloadBudgetBytes;
+                options.arenaSlots = config.slotArenaSlots;
+                return std::make_unique<TStorage>(m_device, config.numChunks, config.chunkCapacity, options);
+            }
+            else
+            {
+                throw std::invalid_argument{
+                    "graphFlow: poolMode slotArena needs a storage with a SlotArenaOptions constructor"};
+            }
+        }
+
         [[nodiscard]] Config resolveConfig(std::uint64_t itemCount) const
         {
             std::uint32_t const bins = maxBins();
@@ -652,6 +677,8 @@ namespace graphFlow
             config.policyMemoryBudgetBytes = m_tuning.policyMemoryBudgetBytes.value_or(config.policyMemoryBudgetBytes);
             config.scatterMode = m_tuning.scatterMode.value_or(config.scatterMode);
             config.binPath = m_tuning.binPath.value_or(config.binPath);
+            config.poolMode = m_tuning.poolMode.value_or(config.poolMode);
+            config.debugStaleBaseTable = m_tuning.debugStaleBaseTable;
             config.slotBytes = TStorage::slotBytes;
 
             DevicePolicyOverrides overrides;
@@ -687,14 +714,12 @@ namespace graphFlow
                     config.poolOutputReserveChunks);
             if(config.poolMode == PoolMode::slotArena)
             {
-                // One `P + K*R*C` geometry shared with the policy and the validation: a chunk
-                // index per live particle, and a full `C`-slot range per output credit.
-                config.slotArenaSlots = deriveSlotArenaGeometry(
-                                            config.liveParticles,
-                                            config.chunkCapacity,
-                                            config.poolOutputReserveChunks,
-                                            config.slotBytes)
-                                            .slots;
+                // The arena is the payload budget in slots (`S_max = floor(budget/slotBytes)`).
+                // `P + K*R*C` is the reservation that must fit inside it, not the allocation
+                // size: the first-fit range allocator needs slack beyond the exact worst case
+                // because a released fragment can leave the free list unable to serve the next
+                // full-`C` output range. `Config::validate()` checks the reservation.
+                config.slotArenaSlots = maxPayloadSlots(config.poolPayloadBudgetBytes, config.slotBytes);
             }
 
             config.validate();

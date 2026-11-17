@@ -74,6 +74,13 @@ TEST_CASE("slot arena payload storage round-trips payloads at the stored base", 
     CHECK(storage.base(third) == 2u);
     CHECK_NOTHROW(storage.verifyArena());
 
+    // The mapped host base table publishes the same rows the map owns.
+    CHECK(storage.baseTableHost().data()[first.index] == static_cast<std::uint32_t>(storage.base(first)));
+    CHECK(storage.baseTableHost().data()[second.index] == static_cast<std::uint32_t>(storage.base(second)));
+    CHECK(storage.baseTableHost().data()[third.index] == static_cast<std::uint32_t>(storage.base(third)));
+    CHECK(storage.fillTableHost().data()[first.index] == 1u);
+    CHECK(storage.fillTableHost().data()[third.index] == 2u);
+
     std::size_t const slots = static_cast<std::size_t>(storage.slotCount());
     std::vector<ArenaPayload> host(slots);
     for(std::size_t i = 0u; i < slots; ++i)
@@ -190,7 +197,11 @@ TEST_CASE("slot arena SoA storage round-trips records at the stored base", "[slo
     CHECK(storage.loadRecord(1u)[arenaValueTag] == 6u);
     CHECK_NOTHROW(storage.verifyArena());
 
+    CHECK(storage.baseTableHost().data()[handle.index] == 0u);
+    CHECK(storage.fillTableHost().data()[handle.index] == 2u);
     storage.release(handle);
+    CHECK(storage.baseTableHost().data()[handle.index] == 0xFFFF'FFFFu);
+    CHECK(storage.fillTableHost().data()[handle.index] == 0u);
     auto const reused = storage.acquire(2u);
     CHECK(storage.base(reused) == 0u);
     CHECK(storage.loadRecord(0u)[arenaIdTag] == 42u);
@@ -202,6 +213,12 @@ TEST_CASE("slot arena SoA storage round-trips records at the stored base", "[slo
     CHECK(fixedSoA.poolMode() == graphFlow::PoolMode::fixed);
     auto const fixedHandle = fixedSoA.acquire();
     CHECK(fixedSoA.base(fixedHandle) == static_cast<std::uint64_t>(fixedHandle.index) * 4u);
+    // The fixed layout publishes `index * chunkCapacity` rows so the kernels have one table path.
+    for(std::uint32_t index = 0u; index < fixedSoA.numChunks(); ++index)
+    {
+        CHECK(fixedSoA.baseTableHost().data()[index] == index * 4u);
+        CHECK(fixedSoA.fillTableHost().data()[index] == 4u);
+    }
     CHECK(fixedSoA.fill(fixedHandle) == 4u);
     CHECK(fixedSoA.slotIndex(fixedHandle, 3u) == fixedSoA.base(fixedHandle) + 3u);
     CHECK_THROWS_AS(fixedSoA.slotIndex(fixedHandle, 4u), std::invalid_argument);
@@ -250,16 +267,39 @@ TEST_CASE("slot arena budget helpers invert the fixed-pool reservation", "[slot]
     CHECK_THROWS_AS((ArenaStorage{device, 7u, 4u, derived}), std::invalid_argument);
 }
 
-TEST_CASE("config keeps the fixed pool mode and rejects the unwired arena mode", "[slot][arena][config]")
+TEST_CASE("config validates the slot-arena reservation and keeps the fixed default", "[slot][arena][config]")
 {
-    graphFlow::Config config;
+    using namespace graphFlow;
+
+    Config config;
     config.chunkCapacity = 4u;
     config.numChunks = 4u;
-    CHECK(config.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(config.poolMode == PoolMode::fixed);
+    CHECK_NOTHROW(config.validate());
+    CHECK(std::string{poolModeName(PoolMode::slotArena)} == "slotArena");
+    CHECK(std::string{poolModeName(PoolMode::fixed)} == "fixed");
+
+    // P=2, C=4, K*R=2: the reservation is 2 + 2*4 = 10 slots, not (2+2)*4 = 16.
+    config.poolMode = PoolMode::slotArena;
+    config.liveParticles = 2u;
+    config.poolOutputReserveChunks = 2u;
+    config.numChunks = 4u;
+    config.slotArenaSlots = requiredArenaSlots(2u, 4u, 2u);
+    config.poolPayloadBudgetBytes = requiredArenaBytes(2u, 4u, 2u);
+    CHECK(config.slotArenaSlots == 10u);
     CHECK_NOTHROW(config.validate());
 
-    config.poolMode = graphFlow::PoolMode::slotArena;
+    // One slot short of the P + K*R*C reservation is rejected.
+    config.slotArenaSlots = 9u;
     CHECK_THROWS_AS(config.validate(), std::invalid_argument);
-    CHECK(std::string{graphFlow::poolModeName(graphFlow::PoolMode::slotArena)} == "slotArena");
-    CHECK(std::string{graphFlow::poolModeName(graphFlow::PoolMode::fixed)} == "fixed");
+
+    // One byte short of the budget is rejected as well.
+    config.slotArenaSlots = 10u;
+    config.poolPayloadBudgetBytes = requiredArenaBytes(2u, 4u, 2u) - 1u;
+    CHECK_THROWS_AS(config.validate(), std::invalid_argument);
+
+    // More chunk indices than the arena has slots cannot be acquired one slot each.
+    config.poolPayloadBudgetBytes = requiredArenaBytes(2u, 4u, 2u);
+    config.numChunks = 11u;
+    CHECK_THROWS_AS(config.validate(), std::invalid_argument);
 }

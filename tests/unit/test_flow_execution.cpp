@@ -428,6 +428,75 @@ TEST_CASE("one partition batch issues one classify and one scatter launch", "[un
     storage.release(input.handle);
 }
 
+TEST_CASE(
+    "a stale base table is rejected instead of writing into another chunk",
+    "[unit][flow][execution][arena][injection]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    using Storage = graphFlow::PayloadSlotStorage<Pod, Device>;
+    constexpr std::uint32_t capacity = 32u;
+
+    graphFlow::SlotArenaOptions options;
+    options.arenaSlots = 128u;
+    Storage storage{device, 8u, capacity, options};
+
+    graphFlow::Config config;
+    config.chunkCapacity = capacity;
+    config.batchChunks = 1u;
+    config.tileSize = 4u;
+    config.frameCap = 1u;
+    config.liveParticles = 1u;
+    config.poolMode = graphFlow::PoolMode::slotArena;
+    config.debugStaleBaseTable = true;
+
+    using Stage = graphFlow::detail::PartitionStage<Device, Storage, Pod, ParityClassifier, AddOnOddBin>;
+    if constexpr(!graphFlow::debug::checksEnabled)
+    {
+        // The injection is validation-only; a release build refuses it instead of corrupting.
+        CHECK_THROWS_AS(Stage(device, storage, config, ParityClassifier{}, AddOnOddBin{}), std::invalid_argument);
+        return;
+    }
+    else
+    {
+        Stage stage{device, storage, config, ParityClassifier{}, AddOnOddBin{}};
+        using Runner = graphFlow::GraphRunner<Device, Storage>;
+        auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+        std::uint32_t allocated = 0u;
+
+        // Batch 1: chunk A owns slots [0, 10), chunk B owns [10, 30). The stage publishes the
+        // table once, so the device row of B is its base 10.
+        auto const a = storage.acquire(10u);
+        auto const b = storage.acquire(20u);
+        REQUIRE(storage.base(b) == 10u);
+        writeChunk(device, storage, b, std::vector<Pod>(20u, Pod{1u, 0u}));
+        Runner::Batch const first{{graphFlow::ChunkDescriptor{b, 20u, 0u}}, 0u};
+        stage.launch(queue, first);
+        drain(device, queue);
+        REQUIRE(stage.advance(queue, first, allocated));
+        drain(device, queue);
+        CHECK_FALSE(stage.advance(queue, first, allocated));
+
+        std::vector<graphFlow::ChunkDescriptor> outputs;
+        stage.finish(first, outputs);
+        for(graphFlow::ChunkDescriptor const& output : outputs)
+            storage.release(output.handle);
+        storage.release(a);
+        storage.release(b);
+
+        // Batch 2 re-acquires the same chunk index for a coalesced range at base 0, so batch 1's
+        // device row 10 is stale. The kernel-side comparison must reject the batch.
+        auto const reused = storage.acquire(20u);
+        REQUIRE(reused.index == b.index);
+        REQUIRE(storage.base(reused) == 0u);
+        writeChunk(device, storage, reused, std::vector<Pod>(20u, Pod{1u, 0u}));
+        Runner::Batch const second{{graphFlow::ChunkDescriptor{reused, 20u, 0u}}, 20u};
+        stage.launch(queue, second);
+        drain(device, queue);
+        CHECK_THROWS_AS(stage.advance(queue, second, allocated), graphFlow::BatchError);
+        storage.release(reused);
+    }
+}
+
 TEST_CASE("CPU scheduler stall snapshot is aggregate and topology free", "[stall][cpu][diagnostics-check]")
 {
     auto device = graphFlow::test::makeCpuDevice();
