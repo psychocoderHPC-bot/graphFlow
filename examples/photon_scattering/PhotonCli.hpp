@@ -178,7 +178,9 @@ namespace graphFlow::photon::cli
             else if(flag == "--frame-cap")
                 options.frameCap = parseU32(flag, nextValue(flag));
             else if(flag == "--occupancy-target")
-                options.occupancyTarget = parseU32(flag, nextValue(flag));
+                // Zero is a defined value: it disables the gate, matching `Config` and `Tuning`,
+                // so `--occupancy-target 0` is the explicit off switch.
+                options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             else if(flag == "--chunk-kernel-schedule")
                 options.chunkKernelSchedule = nextValue(flag);
             else if(flag == "--chunk-queue-depth")
