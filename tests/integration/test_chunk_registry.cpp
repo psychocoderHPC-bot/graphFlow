@@ -151,19 +151,20 @@ namespace
         return hooks;
     }
 
-    /** Chunk storage that swallows the first release notification.
+    /** Chunk storage that suppresses every release observation.
      *
-     * The pool still releases the slot; the registry misses the transition. This provokes a
-     * phase-mismatch fault on the next acquire of the reused index and proves that the run does
-     * not abort.
+     * The pool still releases the slots; the registry misses the transitions. The next acquire of
+     * a reused index hits a record that is not free, which records a sticky fault and proves that
+     * the run does not abort. Dropping only the first release is not enough: its index may never
+     * be acquired again in a short run.
      */
     template<typename TDevice>
-    class DropFirstReleaseStorage
+    class DropReleaseStorage
     {
     public:
         using handle_type = graphFlow::ChunkHandle;
 
-        DropFirstReleaseStorage(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
+        DropReleaseStorage(TDevice device, std::uint32_t numChunks, std::uint32_t chunkCapacity)
             : m_pool{device, numChunks, chunkCapacity}
         {
         }
@@ -245,33 +246,18 @@ namespace
 
         void setChunkObservers(
             std::function<void(graphFlow::ChunkHandle)> acquired,
-            std::function<void(graphFlow::ChunkHandle)> released)
+            [[maybe_unused]] std::function<void(graphFlow::ChunkHandle)> released)
         {
-            m_released = std::move(released);
-            m_pool.setChunkObservers(
-                std::move(acquired),
-                [this](graphFlow::ChunkHandle handle)
-                {
-                    if(!m_dropped)
-                    {
-                        m_dropped = true;
-                        return;
-                    }
-                    if(m_released)
-                        m_released(handle);
-                });
+            m_pool.setChunkObservers(std::move(acquired), [](graphFlow::ChunkHandle) {});
         }
 
         void clearChunkObservers()
         {
-            m_released = {};
             m_pool.clearChunkObservers();
         }
 
     private:
         graphFlow::ChunkPool<TDevice> m_pool;
-        std::function<void(graphFlow::ChunkHandle)> m_released;
-        bool m_dropped = false;
     };
 } // namespace
 
@@ -454,10 +440,28 @@ TEST_CASE("chunk registry rejects an impossible owner and destination pair", "[c
     pool.release(handle);
 }
 
+TEST_CASE("chunk registry routes a generation mismatch through the fault channel", "[chunk-registry][integration]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    graphFlow::ChunkPool<decltype(device)> pool{device, 1u, 8u};
+    graphFlow::ChunkRegistry registry{1u};
+    registry.seed(pool);
+
+    graphFlow::ChunkHandle const handle = pool.acquire();
+    registry.onAcquire(handle);
+    pool.release(handle); // No observer installed: the registry misses the generation bump.
+    REQUIRE(pool.generation(handle.index) == 1u);
+    REQUIRE(registry.records()[handle.index].handle.generation == 0u);
+
+    CHECK_THROWS_WITH(registry.validate(pool), ContainsSubstring("chunk registry fault"));
+    CHECK(registry.summary().faults == 1u);
+    CHECK_THAT(registry.faultDetail(), ContainsSubstring("generation"));
+}
+
 TEST_CASE("chunk registry phase mismatch does not abort a run", "[chunk-registry][integration]")
 {
     auto device = graphFlow::test::makeCpuDevice();
-    using Storage = DropFirstReleaseStorage<decltype(device)>;
+    using Storage = DropReleaseStorage<decltype(device)>;
     using Runner = graphFlow::GraphRunner<decltype(device), Storage>;
     Storage storage{device, 16u, 8u};
     Runner runner{device, storage};

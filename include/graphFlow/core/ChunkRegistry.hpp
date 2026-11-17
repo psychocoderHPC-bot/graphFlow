@@ -342,8 +342,11 @@ namespace graphFlow
             detail += m_fault.reason;
             if(m_fault.index != invalidChunkNode)
             {
-                detail += " (chunk " + std::to_string(m_fault.index) + ", phase " + chunkPhaseName(m_fault.actual)
-                          + ", expected " + chunkPhaseName(m_fault.expected) + ')';
+                detail += " (chunk " + std::to_string(m_fault.index);
+                if(m_fault.expected != m_fault.actual)
+                    detail += ", phase " + std::string{chunkPhaseName(m_fault.actual)} + ", expected "
+                              + chunkPhaseName(m_fault.expected);
+                detail += ')';
             }
             return detail;
         }
@@ -375,10 +378,14 @@ namespace graphFlow
                         "graphFlow: chunk registry record " + std::to_string(index) + " tracks handle index "
                         + std::to_string(record.handle.index)};
                 if(record.handle.generation != storage.generation(static_cast<std::uint32_t>(index)))
-                    throw std::logic_error{
-                        "graphFlow: chunk registry record " + std::to_string(index) + " generation "
-                        + std::to_string(record.handle.generation) + " does not match the pool generation "
-                        + std::to_string(storage.generation(static_cast<std::uint32_t>(index)))};
+                {
+                    noteFault(
+                        "record generation does not match the pool",
+                        static_cast<std::uint32_t>(index),
+                        record.phase,
+                        record.phase);
+                    throw std::logic_error{faultDetail()};
+                }
 
                 std::uint32_t const leases = storage.leaseCount(record.handle);
                 if(record.phase == ChunkPhase::free && leases != 0u)
@@ -485,7 +492,7 @@ namespace graphFlow
             return static_cast<std::size_t>(phase);
         }
 
-        void noteFault(char const* reason, std::uint32_t index, ChunkPhase expected, ChunkPhase actual) noexcept
+        void noteFault(char const* reason, std::uint32_t index, ChunkPhase expected, ChunkPhase actual) const noexcept
         {
             ++m_counters.faults;
             if(m_fault.set)
@@ -553,7 +560,7 @@ namespace graphFlow
         std::vector<ChunkRecord> m_records;
         std::uint32_t m_counts[5] = {};
         std::uint32_t m_peaks[5] = {};
-        ChunkRegistrySummary m_counters;
-        Fault m_fault;
+        mutable ChunkRegistrySummary m_counters;
+        mutable Fault m_fault;
     };
 } // namespace graphFlow
