@@ -79,6 +79,14 @@ namespace graphFlow
         ScatterMode scatterMode = ScatterMode::SharedStaging;
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
+        /** Slot count of the slot-arena payload array; zero derives it from the budget.
+         *
+         * `Flow::resolveConfig` fills this with the exact `P + K*R*C` geometry, so the arena is
+         * sized by the reservation rather than by the whole budget. A direct `Config` caller may
+         * leave it zero, in which case `validate()` derives the arena from
+         * `poolPayloadBudgetBytes / slotBytes`.
+         */
+        std::uint64_t slotArenaSlots = 0u;
         /** Chunk-slot layout of the storage. `fixed` is the default and the historical layout;
          * `slotArena` (phase 2) lets a chunk own exactly its committed fill but needs the kernel
          * base table, so `validate()` rejects it until stage S2 wires that table. Selecting it

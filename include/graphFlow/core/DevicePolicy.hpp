@@ -73,6 +73,15 @@ namespace graphFlow
         std::uint64_t acceleratorBudgetCapBytes = acceleratorMemoryBudgetCapBytes;
         /** Payload bytes of one storage slot; the particle SoA default keeps old budgets. */
         std::uint64_t slotBytes = payloadBytesPerSlot;
+        /** Chunk-slot layout the budget inversion is expressed in.
+         *
+         * `fixed` charges `P*C` live slots; `slotArena` charges `P` live slots plus
+         * `reserveChunks * C` output-credit slots, which is the reservation `PoolBudget`'s
+         * `requiredArenaSlots()` derives.
+         */
+        PoolMode poolMode = PoolMode::fixed;
+        /** Output-credit chunks (`K*R`) charged by the slot-arena reservation. */
+        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks;
     };
 
     /** Optional explicit overrides; an absent value is derived from the device.
@@ -102,6 +111,7 @@ namespace graphFlow
         std::uint64_t memoryBudgetBytes = 0u; // resolved payload budget
         std::string description; // short human-readable summary
         std::uint64_t slotBytes = payloadBytesPerSlot; // payload bytes per storage slot
+        PoolMode poolMode = PoolMode::fixed; // layout the budget inversion used
     };
 
     /** Coarse per-wave cost model of the per-chunk latency clamp.
@@ -166,18 +176,23 @@ namespace graphFlow
             return lhs * rhs;
         }
 
-        /** Whether `liveParticles * chunkCapacity * slotBytes` fits the budget.
+        /** Whether the live-particle working set fits the budget under one layout.
          *
-         * Both products are checked with division so no intermediate value can overflow.
+         * `fixed` charges `liveParticles * chunkCapacity * slotBytes`; `slotArena` charges one slot
+         * per live particle, because a fragmented chunk owns exactly its fill. Both products are
+         * checked with division so no intermediate value can overflow.
          */
         inline bool payloadFitsBudget(
             std::uint64_t liveParticles,
             std::uint64_t chunkCapacity,
             std::uint64_t budgetBytes,
-            std::uint64_t slotBytes = payloadBytesPerSlot)
+            std::uint64_t slotBytes = payloadBytesPerSlot,
+            PoolMode poolMode = PoolMode::fixed)
         {
             if(liveParticles == 0u || chunkCapacity == 0u)
                 return true;
+            if(poolMode == PoolMode::slotArena)
+                return liveParticles <= budgetBytes / slotBytes;
             if(liveParticles > budgetBytes / chunkCapacity)
                 return false;
             return liveParticles * chunkCapacity <= budgetBytes / slotBytes;
@@ -235,6 +250,37 @@ namespace graphFlow
             if(tileSize > 1u && maxLive >= tileSize)
                 maxLive = roundDownToMultiple(maxLive, tileSize);
             return maxLive;
+        }
+
+        /** Largest live-particle capacity under one layout, tile-rounded.
+         *
+         * `fixed` inverts `P*C*slotBytes`; `slotArena` inverts the arena reservation
+         * `P + reserveChunks*C` slots. The arena P clamp is the design's
+         * `floor(budget/slotBytes) - K*R*C`, so the output-credit term is charged before the live
+         * particles rather than being added afterwards, which is what keeps a derived arena
+         * configuration inside its budget. A zero result means not even one tile of live particles
+         * fits.
+         */
+        inline std::uint64_t maxLiveParticlesForBudget(
+            std::uint64_t chunkCapacity,
+            std::uint64_t budgetBytes,
+            std::uint64_t tileSize,
+            std::uint64_t slotBytes,
+            PoolMode poolMode,
+            std::uint64_t reserveChunks)
+        {
+            if(chunkCapacity == 0u)
+                return 0u;
+            if(poolMode == PoolMode::slotArena)
+            {
+                std::uint64_t const slots = budgetBytes / slotBytes;
+                std::uint64_t const credit = saturatedProduct(reserveChunks, chunkCapacity);
+                std::uint64_t maxLive = slots > credit ? slots - credit : 0u;
+                if(tileSize > 1u && maxLive >= tileSize)
+                    maxLive = roundDownToMultiple(maxLive, tileSize);
+                return maxLive;
+            }
+            return largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tileSize, slotBytes);
         }
 
         /** Payload budget: explicit, host profile, or a fraction of the device memory. */
@@ -399,16 +445,22 @@ namespace graphFlow
             if(overrides.liveParticles)
             {
                 // An explicit P is kept; shrink the derived C so that P*C fits the budget. The
-                // final P clamp below covers the explicit-C path.
-                std::uint64_t const liveBytes = detail::saturatedProduct(*overrides.liveParticles, config.slotBytes);
-                std::uint64_t const byBudget = budgetBytes / liveBytes;
-                if(byBudget < candidate)
+                // final P clamp below covers the explicit-C path. In the slot arena P does not
+                // multiply C, so C is not memory-shrunk here; the credit term is charged at the
+                // P clamp instead.
+                if(config.poolMode == PoolMode::fixed)
                 {
-                    candidate = byBudget;
-                    capacityCap = "memory";
+                    std::uint64_t const liveBytes
+                        = detail::saturatedProduct(*overrides.liveParticles, config.slotBytes);
+                    std::uint64_t const byBudget = budgetBytes / liveBytes;
+                    if(byBudget < candidate)
+                    {
+                        candidate = byBudget;
+                        capacityCap = "memory";
+                    }
                 }
             }
-            else
+            else if(config.poolMode == PoolMode::fixed)
             {
                 std::uint64_t const byBudget = detail::largestChunkForBudget(
                     numParticles,
@@ -451,21 +503,45 @@ namespace graphFlow
 
         if(liveParticles != 0u)
         {
-            std::uint64_t maxLive
-                = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile, config.slotBytes);
+            std::uint64_t maxLive = detail::maxLiveParticlesForBudget(
+                chunkCapacity,
+                budgetBytes,
+                tile,
+                config.slotBytes,
+                config.poolMode,
+                config.reserveChunks);
             if(maxLive == 0u && !overrides.chunkCapacity)
             {
                 // Last resort: the launch C cannot hold one particle. Reduce the derived C to
                 // the largest tile multiple that still does, then clamp again.
-                std::uint64_t const maxSlots = budgetBytes / config.slotBytes;
-                std::uint64_t const shrunk
-                    = detail::roundDownToMultiple(std::min<std::uint64_t>(chunkCapacity, maxSlots), tile);
+                std::uint64_t shrunk = 0u;
+                if(config.poolMode == PoolMode::slotArena)
+                {
+                    // The credit charge grows with C, so shrinking C frees slots for P. Keep at
+                    // least one tile of live particles after the credit.
+                    std::uint64_t const slots = budgetBytes / config.slotBytes;
+                    std::uint64_t const maxC = config.reserveChunks == 0u
+                                                   ? chunkCapacity
+                                                   : (slots > tile ? (slots - tile) / config.reserveChunks : 0u);
+                    shrunk = detail::roundDownToMultiple(std::min<std::uint64_t>(chunkCapacity, maxC), tile);
+                }
+                else
+                {
+                    std::uint64_t const maxSlots = budgetBytes / config.slotBytes;
+                    shrunk = detail::roundDownToMultiple(std::min<std::uint64_t>(chunkCapacity, maxSlots), tile);
+                }
                 if(shrunk < tile)
                     throw std::invalid_argument{
                         "graphFlow::DevicePolicy: the payload memory budget cannot hold one tile of the chunk"};
                 chunkCapacity = static_cast<std::uint32_t>(shrunk);
                 capacityCap = "memory";
-                maxLive = detail::largestLiveParticlesForBudget(chunkCapacity, budgetBytes, tile, config.slotBytes);
+                maxLive = detail::maxLiveParticlesForBudget(
+                    chunkCapacity,
+                    budgetBytes,
+                    tile,
+                    config.slotBytes,
+                    config.poolMode,
+                    config.reserveChunks);
             }
             if(maxLive == 0u)
                 throw std::invalid_argument{
@@ -473,12 +549,22 @@ namespace graphFlow
             if(liveParticlesExplicit)
             {
                 if(std::uint64_t{liveParticles} > maxLive)
+                {
+                    std::uint64_t const required
+                        = config.poolMode == PoolMode::slotArena
+                              ? requiredArenaBytes(
+                                    liveParticles,
+                                    chunkCapacity,
+                                    config.reserveChunks,
+                                    config.slotBytes)
+                              : requiredPayloadBytes(liveParticles, chunkCapacity, config.slotBytes);
                     throw std::invalid_argument{
                         "graphFlow::DevicePolicy: explicit liveParticles " + std::to_string(liveParticles)
                         + " with chunkCapacity " + std::to_string(chunkCapacity) + " requires "
-                        + std::to_string(requiredPayloadBytes(liveParticles, chunkCapacity, config.slotBytes))
-                        + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes)
-                        + " bytes; the largest feasible P is " + std::to_string(maxLive)};
+                        + std::to_string(required) + " bytes, exceeding the payload budget of "
+                        + std::to_string(budgetBytes) + " bytes; the largest feasible P is "
+                        + std::to_string(maxLive)};
+                }
             }
             else if(std::uint64_t{liveParticles} > maxLive)
             {
@@ -488,7 +574,7 @@ namespace graphFlow
             }
         }
 
-        if(!detail::payloadFitsBudget(liveParticles, chunkCapacity, budgetBytes, config.slotBytes))
+        if(!detail::payloadFitsBudget(liveParticles, chunkCapacity, budgetBytes, config.slotBytes, config.poolMode))
             throw std::invalid_argument{
                 "graphFlow::DevicePolicy: liveParticles and chunkCapacity exceed the payload memory budget"};
 
@@ -502,6 +588,7 @@ namespace graphFlow
         policy.multiprocessorCount = static_cast<std::uint32_t>(sms);
         policy.memoryBudgetBytes = budgetBytes;
         policy.slotBytes = config.slotBytes;
+        policy.poolMode = config.poolMode;
         policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P=" + std::to_string(liveParticles)
                              + " T=" + std::to_string(tile) + " waves=" + std::to_string(config.waves)
                              + " blocksPerSm=" + std::to_string(config.targetBlocksPerSm) + " budget="
@@ -521,15 +608,22 @@ namespace graphFlow
         policyConfig.liveParticlesPerChunk = config.policyLiveParticlesPerChunk;
         policyConfig.memoryBudgetBytes = config.policyMemoryBudgetBytes;
         policyConfig.slotBytes = config.slotBytes;
+        policyConfig.poolMode = config.poolMode;
+        policyConfig.reserveChunks = config.poolOutputReserveChunks;
         return policyConfig;
     }
 
-    /** Copy the chosen C, P, T and the augmented pool budget into a `Config`.
+    /** Copy the chosen C, P, T and the pool budget into a `Config`.
      *
-     * The policy memory budget covers the live working set `P*C`. The fixed-capacity pool also
-     * holds the `K*R` output-credit chunks, so `poolPayloadBudgetBytes` becomes the policy budget
-     * plus the payload of `Config::poolOutputReserveChunks` chunks. This keeps the documented
-     * default (`applyDevicePolicy`, then `derivePoolSize`, then `Config::validate`) consistent.
+     * For the fixed layout the policy memory budget covers the live working set `P*C`, and the
+     * pool also holds the `K*R` output-credit chunks, so `poolPayloadBudgetBytes` becomes the
+     * policy budget plus the payload of `Config::poolOutputReserveChunks` chunks.
+     *
+     * For the slot arena the policy budget is already the whole arena budget: `makeDevicePolicy`
+     * charged the `K*R*C` credit term when it clamped P, so adding the reserve again would
+     * double-count it. The pool budget therefore stays the policy budget, and
+     * `Config::slotArenaSlots` is derived by `Flow::resolveConfig` from the exact
+     * `P + K*R*C` geometry.
      */
     inline void applyDevicePolicy(Config& config, DevicePolicy const& policy)
     {
@@ -537,11 +631,14 @@ namespace graphFlow
         config.liveParticles = policy.liveParticles;
         config.tileSize = policy.tileSize;
         config.slotBytes = policy.slotBytes;
-        config.poolPayloadBudgetBytes = payloadBudgetWithReserve(
-            policy.memoryBudgetBytes,
-            policy.chunkCapacity,
-            config.poolOutputReserveChunks,
-            policy.slotBytes);
+        if(policy.poolMode == PoolMode::slotArena)
+            config.poolPayloadBudgetBytes = policy.memoryBudgetBytes;
+        else
+            config.poolPayloadBudgetBytes = payloadBudgetWithReserve(
+                policy.memoryBudgetBytes,
+                policy.chunkCapacity,
+                config.poolOutputReserveChunks,
+                policy.slotBytes);
     }
 
     /** Derive the launch-size policy of the per-chunk transform path.

@@ -168,6 +168,60 @@ namespace graphFlow
         return slots > credit ? slots - credit : 0u;
     }
 
+    /** Chunk-index and slot geometry of one slot-arena pool.
+     *
+     * The slot arena separates the two quantities the fixed layout couples: a chunk index (the
+     * handle the scheduler acquires and routes) and the slots that chunk owns. `chunkIndices` is
+     * the ledger size, `liveParticles + reserveChunks`, because full fragmentation turns every
+     * live particle into one chunk. `slots` is the arena size, `liveParticles + reserveChunks * C`,
+     * because a live input chunk owns exactly its fill while an output-credit chunk is charged at
+     * the full `C` its `j % C` addressing needs. `bytes` is `slots * slotBytes`.
+     *
+     * This is the single derivation the policy, `Flow::run` and `Config::validate` share, so the
+     * three cannot disagree about how much memory a slot-arena configuration needs.
+     */
+    struct SlotArenaGeometry
+    {
+        std::uint64_t liveParticles = 0u;
+        std::uint64_t reserveChunks = 0u;
+        std::uint64_t chunkIndices = 0u;
+        std::uint64_t slots = 0u;
+        std::uint64_t bytes = 0u;
+    };
+
+    /** Derive and validate the geometry of a slot-arena pool.
+     *
+     * Every derived quantity is checked: the chunk-index count must fit the 32-bit handle index,
+     * the slot count must fit the 32-bit kernel slot index, and the byte count must not overflow
+     * 64 bits. A geometry whose chunk indices do not fit its slots cannot satisfy the one-slot
+     * lower bound of an acquire and is rejected instead of failing later.
+     */
+    inline SlotArenaGeometry deriveSlotArenaGeometry(
+        std::uint64_t liveParticles,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
+    {
+        if(chunkCapacity == 0u)
+            throw std::invalid_argument{"graphFlow::deriveSlotArenaGeometry: chunkCapacity must be non-zero"};
+        if(slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::deriveSlotArenaGeometry: slotBytes must be non-zero"};
+        if(reserveChunks > std::numeric_limits<std::uint64_t>::max() - liveParticles)
+            throw std::overflow_error{"graphFlow::deriveSlotArenaGeometry: chunk-index count overflows 64 bits"};
+        std::uint64_t const chunkIndices = liveParticles + reserveChunks;
+        if(chunkIndices > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{"graphFlow::deriveSlotArenaGeometry: the chunk-index space exceeds 32 bits"};
+        std::uint64_t const slots = requiredArenaSlots(liveParticles, chunkCapacity, reserveChunks);
+        checkedArenaSlotCount(slots, "graphFlow::deriveSlotArenaGeometry");
+        if(chunkIndices > slots)
+            throw std::invalid_argument{
+                "graphFlow::deriveSlotArenaGeometry: " + std::to_string(chunkIndices)
+                + " chunk indices cannot be held by " + std::to_string(slots) + " slots"};
+        if(slotBytes > std::numeric_limits<std::uint64_t>::max() / slots)
+            throw std::overflow_error{"graphFlow::deriveSlotArenaGeometry: byte count overflows 64 bits"};
+        return SlotArenaGeometry{liveParticles, reserveChunks, chunkIndices, slots, slots * slotBytes};
+    }
+
     /** Reject a slot-arena reservation that does not fit `budgetBytes`. */
     inline void validateSlotArenaBudget(
         std::uint64_t liveParticles,

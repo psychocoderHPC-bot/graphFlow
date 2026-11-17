@@ -659,8 +659,16 @@ namespace graphFlow
             overrides.liveParticles = m_tuning.liveParticles;
             overrides.tileSize = m_tuning.tileSize;
 
-            DevicePolicy const policy
-                = makeDevicePolicy(m_device.getDeviceProperties(), itemCount, overrides, policyConfigOf(config));
+            DevicePolicyConfig policyConfig = policyConfigOf(config);
+            DevicePolicy policy = makeDevicePolicy(m_device.getDeviceProperties(), itemCount, overrides, policyConfig);
+            if(config.poolMode == PoolMode::slotArena)
+            {
+                // The arena credit term K*R*C depends on the resolved C, so the P clamp runs a
+                // second pass with this graph's exact reserve. The fixed layout does not charge
+                // the credit inside the policy and keeps its single pass unchanged.
+                policyConfig.reserveChunks = transformReserve(policy.chunkCapacity);
+                policy = makeDevicePolicy(m_device.getDeviceProperties(), itemCount, overrides, policyConfig);
+            }
             config.poolOutputReserveChunks = transformReserve(policy.chunkCapacity);
             applyDevicePolicy(config, policy);
             // Resolve the automatic default before validation and before the stage factory reads
@@ -677,6 +685,17 @@ namespace graphFlow
                     config.chunkCapacity,
                     itemCount,
                     config.poolOutputReserveChunks);
+            if(config.poolMode == PoolMode::slotArena)
+            {
+                // One `P + K*R*C` geometry shared with the policy and the validation: a chunk
+                // index per live particle, and a full `C`-slot range per output credit.
+                config.slotArenaSlots = deriveSlotArenaGeometry(
+                                            config.liveParticles,
+                                            config.chunkCapacity,
+                                            config.poolOutputReserveChunks,
+                                            config.slotBytes)
+                                            .slots;
+            }
 
             config.validate();
             return config;
