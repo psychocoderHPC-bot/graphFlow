@@ -33,6 +33,7 @@ namespace graphFlow::photon::cli
         std::optional<std::uint32_t> liveParticles; // P, absent means policy
         std::optional<std::uint32_t> tileSize; // T, absent means policy
         std::uint32_t batchChunks = 1u; // Q
+        std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
         std::string chunkKernelSchedule = "off"; // off|perChunk
         std::uint32_t chunkQueueDepth = 1u;
@@ -69,6 +70,7 @@ namespace graphFlow::photon::cli
                "                                      [--max-scatters M] [--seed S]\n"
                "                                      [--chunk-size C] [--live-particles P]\n"
                "                                      [--tile-size T] [--batch-chunks Q]\n"
+               "                                      [--occupancy-target D]\n"
                "                                      [--frame-cap F] [--pool-budget-bytes B]\n"
                "                                      [--chunk-kernel-schedule off|perChunk]\n"
                "                                      [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
@@ -175,6 +177,10 @@ namespace graphFlow::photon::cli
                 options.batchChunks = parseU32(flag, nextValue(flag));
             else if(flag == "--frame-cap")
                 options.frameCap = parseU32(flag, nextValue(flag));
+            else if(flag == "--occupancy-target")
+                // Zero is a defined value: it disables the gate, matching `Config` and `Tuning`,
+                // so `--occupancy-target 0` is the explicit off switch.
+                options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             else if(flag == "--chunk-kernel-schedule")
                 options.chunkKernelSchedule = nextValue(flag);
             else if(flag == "--chunk-queue-depth")
@@ -254,6 +260,9 @@ namespace graphFlow::photon::cli
 
         graphFlow::photon::validateParameters(resolved.parameters);
         resolved.tuning = graphFlow::photon::tuningOf(resolved.parameters);
+        // Opt-in occupancy target; absent keeps the default tuning and the output unchanged.
+        if(options.occupancyTarget)
+            resolved.tuning.occupancyTargetChunks = options.occupancyTarget;
         return resolved;
     }
 } // namespace graphFlow::photon::cli

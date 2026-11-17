@@ -236,8 +236,14 @@ per-chunk transform kernels, and `chunkLimit`, the clamp name
 launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A
 Phase 0 chunk registry adds `registryAcquisitions`, `registryRoutings`,
 `registryRetirements`, `registryFaults` and the phase peaks
-`peakRegistryReady`, `peakRegistryInflight`, `peakRegistryReserved`; these
-counters observe the pipeline and never feed a scheduling decision.
+`peakRegistryReady`, `peakRegistryInflight`, `peakRegistryReserved`; in phase 0
+these counters feed no scheduling decision, they are diagnostics only. Phase 1
+adds exactly one scheduling read, `liveWorkChunks()` (`reserved + ready +
+inflight`), which gates opt-in source admission, and no other scheduling
+decision reads a registry record. When an occupancy target is configured the
+stats also carry `occupancyTargetChunks`, `liveWorkChunks`,
+`peakLiveWorkChunks` and `refills`; those four keys are appended only in that
+case, so the default stats line stays byte-identical.
 
 A stall throws `SchedulerStallError`; `snapshot()` on the runner and on the error
 exposes the same aggregate state, including the current registry phase counts,

@@ -21,9 +21,11 @@ namespace graphFlow
 
     /** Host-visible pipeline state of one chunk incarnation.
      *
-     * The registry is observability only. `GraphRunner` updates it at the chunk transitions that
-     * already exist and never reads it to make a scheduling decision. Phase 1 of the chunk
-     * pipeline redesign is the first consumer that reads the live-chunk count from the registry.
+     * In phase 0 the registry is observability only: `GraphRunner` updates it at the chunk
+     * transitions that already exist and reads it for diagnostics, never for a scheduling
+     * decision. Phase 1 of the chunk pipeline redesign adds exactly one scheduling read,
+     * `liveWorkChunks()`, which gates opt-in source admission; no other scheduling decision reads
+     * a record.
      */
     enum class ChunkPhase : std::uint8_t
     {
@@ -322,6 +324,21 @@ namespace graphFlow
         [[nodiscard]] std::vector<ChunkRecord> const& records() const noexcept
         {
             return m_records;
+        }
+
+        /** Chunks that currently occupy the pipeline: `reserved + ready + inflight`.
+         *
+         * This is the Phase 1 admission quantity, a count of chunks and never of particles. It
+         * deliberately excludes the transient `retired` phase even though `summary().liveChunks`
+         * includes it: a retired chunk has already been consumed by a sink and only waits for the
+         * release that returns its slot to `free`. Counting it as live work would let the
+         * occupancy gate over-admit by the number of chunks a sink retires in one loop iteration.
+         * It also excludes `free`, so the value is bounded by the pool size minus the free list.
+         */
+        [[nodiscard]] std::uint32_t liveWorkChunks() const noexcept
+        {
+            return m_counts[phaseIndex(ChunkPhase::ready)] + m_counts[phaseIndex(ChunkPhase::inflight)]
+                   + m_counts[phaseIndex(ChunkPhase::reserved)];
         }
 
         [[nodiscard]] ChunkRegistrySummary summary() const noexcept

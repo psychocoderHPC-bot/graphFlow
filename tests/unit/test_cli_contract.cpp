@@ -145,6 +145,25 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK(parseArgs({"--help"}).help);
 }
 
+TEST_CASE("CLI accepts --occupancy-target 0 as the disabled default", "[cli][admission]")
+{
+    graphFlow::cli::ResolvedOptions const defaults = graphFlow::cli::resolveOptions(parseArgs({}), cpuProperties());
+    CHECK_FALSE(defaults.tuning.occupancyTargetChunks.has_value());
+
+    graphFlow::cli::ResolvedOptions const zero
+        = graphFlow::cli::resolveOptions(parseArgs({"--occupancy-target", "0"}), cpuProperties());
+    REQUIRE(zero.tuning.occupancyTargetChunks.has_value());
+    CHECK(*zero.tuning.occupancyTargetChunks == 0u);
+    // A present zero is accepted and means "disabled", the same spelling as `Config`.
+    CHECK_NOTHROW(zero.tuning.validate());
+
+    graphFlow::cli::ResolvedOptions const gated
+        = graphFlow::cli::resolveOptions(parseArgs({"--occupancy-target", "4"}), cpuProperties());
+    REQUIRE(gated.tuning.occupancyTargetChunks.has_value());
+    CHECK(*gated.tuning.occupancyTargetChunks == 4u);
+    CHECK_NOTHROW(gated.tuning.validate());
+}
+
 TEST_CASE("CLI rejects an unknown backend", "[cli]")
 {
     graphFlow::cli::Options const options = parseArgs({"--backend", "tpu"});

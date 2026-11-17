@@ -97,6 +97,38 @@ TEST_CASE("particle feedback matches the scalar oracle for the N matrix", "[inte
     }
 }
 
+TEST_CASE("occupancy target does not change particle feedback physics", "[integration][occupancy]")
+{
+    auto const device = makeNativeTestDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 4097u;
+    parameters.chunkSize = 128u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    // The feedback graph registers six nodes, so eight is a reachable target that still bounds a
+    // 33-chunk source stream and exercises the admission gate.
+    graphFlow::Tuning tuning = graphFlow::particle::tuningOf(parameters);
+    tuning.occupancyTargetChunks = 8u;
+
+    auto const baseline = graphFlow::particle::runParticleFeedback(device, parameters);
+    auto const gated = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
+
+    CHECK(gated.stats.occupancyTargetChunks == 8u);
+    CHECK(gated.stats.sourceSunk == parameters.numParticles);
+    CHECK(gated.stats.liveWorkChunks == 0u);
+    // The gate's engagement is asserted by the admission tests on their live-work record.
+    // `stats.refills` counts admissions taken while the refill flag happened to be pending, which
+    // depends on scheduler interleaving, so it stays a reported statistic rather than an
+    // assertion and this case keeps its focus on the physics comparison below.
+    // Scheduling changed, physics did not.
+    CHECK(gated.weights == baseline.weights);
+    CHECK(gated.histogram == baseline.histogram);
+    CHECK(gated.cappedParticles == baseline.cappedParticles);
+    checkAgainstReference(parameters, gated);
+}
+
 TEST_CASE("particle feedback matches the scalar oracle for the capacity matrix", "[integration]")
 {
     auto const device = graphFlow::test::makeCpuDevice();

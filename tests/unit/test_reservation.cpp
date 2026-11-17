@@ -160,6 +160,34 @@ TEST_CASE("config validation rejects degenerate values", "[config]")
     CHECK_NOTHROW(zeroParticles.validate());
 }
 
+TEST_CASE("config validation bounds the occupancy target by the pool and the reserve", "[config]")
+{
+    // The reachable occupancy is `numChunks - poolOutputReserveChunks`, so 16 chunks with a
+    // reserve of 4 reach exactly 12.
+    graphFlow::Config reachable;
+    reachable.numChunks = 16u;
+    reachable.poolOutputReserveChunks = 4u;
+    reachable.occupancyTargetChunks = 12u;
+    CHECK_NOTHROW(reachable.validate());
+
+    graphFlow::Config overReachable = reachable;
+    overReachable.occupancyTargetChunks = 13u;
+    CHECK_THROWS_AS(overReachable.validate(), std::invalid_argument);
+
+    // A reserve that consumes the whole pool leaves no reachable occupancy, so even one chunk is
+    // rejected rather than subtracting into an unsigned underflow.
+    graphFlow::Config reserveConsumesPool = reachable;
+    reserveConsumesPool.poolOutputReserveChunks = 16u;
+    reserveConsumesPool.occupancyTargetChunks = 1u;
+    CHECK_THROWS_AS(reserveConsumesPool.validate(), std::invalid_argument);
+
+    // Zero disables the gate, matching `Config::occupancyTargetChunks` and the CLI. It stays
+    // accepted even when `numChunks` is derived (zero) and the bound cannot be checked yet.
+    graphFlow::Config disabled;
+    disabled.occupancyTargetChunks = 0u;
+    CHECK_NOTHROW(disabled.validate());
+}
+
 TEST_CASE("config validation rejects unsupported bin-path combinations", "[config][hash]")
 {
     graphFlow::Config dense;
