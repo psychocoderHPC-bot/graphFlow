@@ -6,17 +6,17 @@
 This is the complete list of work still required to finish the plan in
 `/workspace/graph-async-chunk-scheduling-plan.md`. It is based on the current
 repository state at code main
-`3b90ffd8962084d59ebc672f7848b093f2d99582` (the AoS attribute storage, the
+`25c73f31c736b1c5f765003ff8815d2a24c25808` (the AoS attribute storage, the
 registration-site transform subsets, and the record-pipeline example), not on the
 intended final state.
 
 - Repository: `https://github.com/psychocoderHPC-bot/graphFlow` (public).
   Changes land through a feature branch and a PR targeting `main`; branch
   protection is pending operator action.
-- **Current validation:** CPU **270/270** (fwk394 Release, g++ 13.3), CUDA
-  **334/334** on `fwk394` RTX 2080 Ti `sm_75`, HIP **325/325** on `hal`
-  RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **342/342** on `hal` Arc A770
-  `spir64` (oneAPI 2026.2; 75 of the cases carry the `sycl` label, fp32 photons by
+- **Current validation:** CPU **323/323** (fwk394 Release, g++ 13.3), CUDA
+  **389/389** on `fwk394` RTX 2080 Ti `sm_75`, HIP **380/380** on `hal`
+  RX 7900 XTX `gfx1100` (ROCm 7.2), and SYCL **397/397** on `hal` Arc A770
+  `spir64` (oneAPI 2026.2; 77 of the cases carry the `sycl` label, fp32 photons by
   default, double in the opt-in case). No case is skipped or
   filtered; PR #63
   adds the public-Flow routed-axis and rejection cases, PR #65 adds the six
@@ -39,7 +39,7 @@ intended final state.
 - **TSAN:** the last full integrated TSAN CTest is 210/210 with 0 reports at
   `f3ef3552c60c0cfe0d202a73a08b808746ad11ce`; it predates the current suite,
   so no full TSAN result exists for
-  `3b90ffd8962084d59ebc672f7848b093f2d99582`. The hosted `tsan` job exists
+  `25c73f31c736b1c5f765003ff8815d2a24c25808`. The hosted `tsan` job exists
   since `2fefe54c6d32e9156be5c08ea497119d0bacc21e` (P10 commit
   `cf3bc8a72942b01c4a1ed32e4db7b260e22cb750`); its runtime was not observed.
   `hal` cannot run TSAN.
@@ -55,7 +55,7 @@ intended final state.
   T7 (pool payload budget), T13 (integrated benchmark), T14a (format/REUSE
   foundation), and the `Flow`/particle/photon examples are done.
 - HIP runs on `hal` with an AMD Radeon RX 7900 XTX (`gfx1100`) and ROCm 7.2:
-  **325/325** at `3b90ffd8962084d59ebc672f7848b093f2d99582`; the previous
+  **380/380** at `25c73f31c736b1c5f765003ff8815d2a24c25808`; the previous
   307/307 at `561b9a4c`, 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at
   `56c11ac`, the
   290/290 at `a610281`, the original 245/245 gate with 43 HIP cases at
@@ -63,7 +63,7 @@ intended final state.
   GitHub-hosted HIP remains compile-only; the `gfx90a` compile-only gate is
   historical.
 - CPU execution with the OpenMP backend works with passive spinning
-  (`GOMP_SPINCOUNT=0`) and no hangs; the current CPU suite is 270/270.
+  (`GOMP_SPINCOUNT=0`) and no hangs; the current CPU suite is 323/323.
 - H100: not used for any current validation; no final H100 claim is made. The
   JURECA `jrc0880.jureca` run is preliminary CUDA evidence only (unknown
   gateway sharing flag; external load while the client was stale) and stays
@@ -80,7 +80,7 @@ resource or decision is missing.
   one classify launch and one scatter launch per batch and the adaptive
   `outputChunkBound(sum(fill), C, B)` reserve; the integrated T13 run measured
   Q=1/2/8 with identical sorted histograms across Q. The current suites are
-  270/270 CPU, 334/334 CUDA on `fwk394` RTX 2080 Ti `sm_75`, and 325/325 HIP on `hal`
+  323/323 CPU, 389/389 CUDA on `fwk394` RTX 2080 Ti `sm_75`, and 380/380 HIP on `hal`
   RX 7900 XTX. The historical totals (249/249 CPU, 310/310 CUDA, 301/301 HIP
   at `ffe4074`; 247/247 CPU, 307/307 CUDA, 298/298 HIP
   at `88de14f`; 246/246 CPU, 306/306 CUDA, 297/297 HIP at `56c11ac`; 239/239,
@@ -169,7 +169,7 @@ resource or decision is missing.
   (`include/graphFlow/graph/ScatterKernel.hpp`), and the scatter stage
   verifies `next[bin] == total[bin]` for every bin after the batch scatter
    (`include/graphFlow/flow/Execution.hpp`), throwing on a mismatch. The
-  multi-chunk cases pass on CPU, CUDA, and HIP (270/270, 334/334, 325/325).
+  multi-chunk cases pass on CPU, CUDA, and HIP (323/323, 389/389, 380/380).
 - [ ] **P1: direct versus shared-staging scatter (GPU Direct open).** P03 at
   `ad7208f80fbb6a07d9a87767e947abc057c00e84` added the `Direct` dense-scatter
   alternative beside the shared-staging default and measured both on fwk394 CPU
@@ -212,8 +212,8 @@ resource or decision is missing.
    updater results, a full hash table, pool exhaustion, and an injected enqueue
   failure, and they fail rather than skip when no device is visible; the PR #69
   SYCL matrix adds the same failure paths on the Arc A770. The
-  current suites (270/270 CPU, 334/334 CUDA and 325/325 HIP at `3b90ffd`,
-  342/342 SYCL at `3b90ffd`, 75 sycl-labelled) include these
+  current suites (323/323 CPU, 389/389 CUDA and 380/380 HIP at `25c73f3`,
+  397/397 SYCL at `25c73f3`, 77 sycl-labelled) include these
   failure cases. The injection hook is test-only: no production path calls
   `GraphRunner::setFailureHook`, and the hook raises a host exception at a named
   scheduler point instead of injecting a driver fault. Missing artifact: real
@@ -253,7 +253,7 @@ resource or decision is missing.
    the production header. Fixed-seed particle and photon baselines changed once
    at this commit. The historical V100 CUDA `sm_70` total is 254/254 (Release)
    with the explicit concept-parameter workaround; the current CUDA suite is
-   334/334 on `fwk394` RTX 2080 Ti `sm_75`.
+   389/389 on `fwk394` RTX 2080 Ti `sm_75`.
 - [x] **P0: register the example CLI in CTest.** The real
   `graphFlow_particle_feedback` binary runs through `example_cli.cmake` for
   `N=0,1,17,127,128,4097` crossed with `C=1,31,127,128` (24 cases per backend)
@@ -277,7 +277,7 @@ resource or decision is missing.
   the CPU+HIP pair each ran the three Q cases 3/3 with the device output
    compared against the CPU reference (same seed/N/C/P/Q, sorted `weight,count`
    rows identical, count sum N for every backend). The current full device
-   suites are CUDA 334/334 on `fwk394` RTX 2080 Ti `sm_75` and HIP 325/325 on
+   suites are CUDA 389/389 on `fwk394` RTX 2080 Ti `sm_75` and HIP 380/380 on
    `hal` RX 7900 XTX `gfx1100` (ROCm 7.2); the `f3ef355` totals 264/264 and
   255/255 are historical.
 - [x] **P1: device-dependent default `C`/`P`.** Done (policy PR #11): the
@@ -304,7 +304,7 @@ resource or decision is missing.
   `graphFlow_particle_feedback` exit codes for help, usage errors, out-of-range
   devices, run-stage overflow, and the compiled/uncompiled backend split, and
    the `example_cli.cmake` matrix covers `N=0` header-only output and `C=0`
-   rejection. The cases run in the 270/270 CPU, 334/334 CUDA, and 325/325 HIP
+   rejection. The cases run in the 323/323 CPU, 389/389 CUDA, and 380/380 HIP
    suites.
 
 ## 4. CI, format, REUSE, and repository policy
@@ -365,8 +365,8 @@ resource or decision is missing.
    7900 XTX (`gfx1100`) and ROCm 7.2: 245/245 CTest with 43 HIP cases, plus
    particle and photon CLI/output cases, measured and recorded in
    `/home/agent/final-hip-b972eaa/ctest.log`. `rocprof` confirms the device
-    kernels. The current HIP suite is **325/325** at
-    `3b90ffd8962084d59ebc672f7848b093f2d99582`; the previous 307/307 at
+    kernels. The current HIP suite is **380/380** at
+    `25c73f31c736b1c5f765003ff8815d2a24c25808`; the previous 307/307 at
     `561b9a4c`, 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at `56c11ac` and the 290/290 at
     `a610281` are historical.
   Remaining HIP work: other AMD architectures, the HIP hash path, an AMD
@@ -443,7 +443,7 @@ resource or decision is missing.
   `f3ef3552c60c0cfe0d202a73a08b808746ad11ce`: full integrated TSAN CTest
   **210/210, 0 reports**, 202.83 s, non-PIE Debug with
   `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`. This is the last
-  full TSAN run; it predates the current 270-case suite, so the current tree
+  full TSAN run; it predates the current 323-case suite, so the current tree
   has no full TSAN result. With the default CpuOmpBlocks plus OpenMP the same
   suite fails 105/210 with reports inside the alpaka async CPU queue; those are
   upstream alpaka races, not graphFlow races, which is why the clean gate uses
@@ -466,7 +466,7 @@ resource or decision is missing.
    input cases; the failure-path cases (PR #48 at
    `10c1733770e16ebaecc74513034e6d327924503c`) cover pool
    exhaustion and abort during in-flight work. The cases pass on CPU, CUDA,
-   HIP, and SYCL (270/270, 334/334, 325/325, 342/342).
+   HIP, and SYCL (323/323, 389/389, 380/380, 397/397).
 - [ ] **P1: asynchronous failure propagation.** Enqueue-failure and abort paths
    are exercised by the host failure tests and by the CUDA/HIP failure cases
    added at `10c1733770e16ebaecc74513034e6d327924503c` (invalid classifier and
@@ -493,8 +493,8 @@ resource or decision is missing.
 ## 7. Blockers and decisions
 
 - **AMD hardware:** resolved for correctness. `hal` exposes an AMD Radeon RX
-  7900 XTX (`gfx1100`, ROCm 7.2) and the current HIP suite passes **325/325**
-  at `3b90ffd8962084d59ebc672f7848b093f2d99582`; the previous 307/307 at
+  7900 XTX (`gfx1100`, ROCm 7.2) and the current HIP suite passes **380/380**
+  at `25c73f31c736b1c5f765003ff8815d2a24c25808`; the previous 307/307 at
   `561b9a4c`, 301/301 at `ffe4074`, 298/298 at `88de14f`, 297/297 at
   `56c11ac` and the 290/290 at `a610281` are historical. The 245/245 gate at `b972eaa` and the
   255/255 and 307/307 suites at `f3ef355`/`561b9a4c` are historical. Other
@@ -509,10 +509,10 @@ resource or decision is missing.
   `2fefe54c6d32e9156be5c08ea497119d0bacc21e`) a hosted `tsan` job on
   `ubuntu-latest` runs the same configuration; the P10 fwk394 run is 235/235
   with 0 reports, the hosted job runtime was not observed, and no H100 was
-  used. The current 270-case suite has no full TSAN run; the hal kernel still
+  used. The current 323-case suite has no full TSAN run; the hal kernel still
   rejects the TSAN memory mapping and the fwk394 non-PIE subset (14/14) is
   historical context.
-- **CI status:** the hosted CPU jobs run the 270-case CPU suite (Release and
+- **CI status:** the hosted CPU jobs run the 323-case CPU suite (Release and
   Debug) and the `sanitizers` job runs ASAN+UBSAN over it plus a dedicated
   `leak` step, with no skip. A hosted `tsan` job runs the host scheduler under
   TSAN (non-PIE, OMP off, CpuOmpBlocks off). The historical 202-case final main
@@ -520,7 +520,7 @@ resource or decision is missing.
   `format` (clang-format 20.1.8, T14b) and `reuse lint` pass; the
   `sycl-compile` job builds the Intel-GPU-only SYCL target and, with
   `cuda-compile` and `hip-compile`, is compile-only; the SYCL device matrix
-  (342/342 at `3b90ffd`, 75 sycl-labelled, on `hal` Arc A770; the 72/72
+  (397/397 at `25c73f3`, 77 sycl-labelled, on `hal` Arc A770; the 72/72
   sycl-labelled run at `9ace795` and 71/71 at `9fb15f1` are historical) has no
   hosted runtime job, and there
   is no self-hosted runner or GitLab pipeline. The
@@ -545,7 +545,7 @@ resource or decision is missing.
   preliminary CUDA evidence only and no H100 performance claim is made.
 - **CPU OMP backend:** CPU execution with the OpenMP backend works on
   `rosi_v100` with passive spinning (`GOMP_SPINCOUNT=0`); the current CPU suite
-  is 270/270. The `rosi_v100` 210/210 and 202/202 totals are historical.
+  is 323/323. The `rosi_v100` 210/210 and 202/202 totals are historical.
 - **Pool memory:** the payload budget and chunk clamp are implemented, and the
   `ChunkLedger` generation/lease increment is now checked (PR #58). A
   slot-based pool remains an optional optimization.
@@ -586,8 +586,8 @@ closed.
   API, example CLI in CTest, cross-backend histogram equality, CUDA kernel
   test, HIP execution gate, GitHub Actions workflow, format, REUSE, the
   `N=1e8` acceptance run on `rosi_v100`, and TSAN validation).
-- [x] CPU, CUDA, and HIP build. The current suites are 270/270 CPU, 334/334
-  CUDA on `fwk394` RTX 2080 Ti `sm_75`, and 325/325 HIP on `hal` RX 7900 XTX
+- [x] CPU, CUDA, and HIP build. The current suites are 323/323 CPU, 389/389
+  CUDA on `fwk394` RTX 2080 Ti `sm_75`, and 380/380 HIP on `hal` RX 7900 XTX
   (ROCm 7.2). PR #63 adds the public-Flow routed-axis cases and PR #65 adds
   the six `[scheduler]` cases on top of the P07b 7/7, included above. The
   previous 249/249, 310/310 and 301/301 at `ffe4074`, 247/247, 307/307 and
@@ -616,7 +616,7 @@ closed.
    sorted histogram rows for `N=1e6` across every compiled backend with a
    fail-not-skip contract, measured historical CPU 210/210 at
      `751c8a8cbad9de1a2e71cef57b81147ff071dd51`; the current full device suites
-     are 334/334 CUDA on `fwk394` RTX 2080 Ti `sm_75` and 325/325 HIP on
+     are 389/389 CUDA on `fwk394` RTX 2080 Ti `sm_75` and 380/380 HIP on
      `hal` `gfx1100` (ROCm 7.2). The `561b9a4c` 316/316 and 307/307 totals and
      the `f3ef355` 264/264 and 255/255 totals are historical.
 - [ ] Throughput is measured on an exclusive allocation, frozen, and guarded.
@@ -629,7 +629,7 @@ closed.
    full integrated TSAN CTest passed 210/210 with 0 reports in 202.83 s at
    `f3ef3552c60c0cfe0d202a73a08b808746ad11ce` (non-PIE Debug with
    `alpaka_EXEC_CpuOmpBlocks=OFF` and `alpaka_DEP_OMP=OFF`); the current
-   270-case suite has no full TSAN run. Hosted CI runs ASAN+UBSAN over the
+   323-case suite has no full TSAN run. Hosted CI runs ASAN+UBSAN over the
    current CPU suite, a dedicated `leak` step, and a hosted `tsan` job in the
    same configuration. P10 fwk394 evidence at `cf3bc8a`: ASAN+UBSAN 236/236,
    leak 1/1, TSAN 235/235 with 0 reports; the hosted `tsan`/`leak` runtimes

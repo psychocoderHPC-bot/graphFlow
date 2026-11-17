@@ -110,7 +110,7 @@ ctest --test-dir build-cuda-sm75 --output-on-failure --no-tests=error
 ```
 
 The `sm_75` command is the documented RTX 2080 Ti target, and the current
-334/334 CUDA suite at `3b90ffd8962084d59ebc672f7848b093f2d99582` was measured
+389/389 CUDA suite at `25c73f31c736b1c5f765003ff8815d2a24c25808` was measured
 on `fwk394` with the RTX 2080 Ti. The performance record in
 `docs/benchmarks.md` was measured on the A30 and the V100.
 
@@ -120,7 +120,7 @@ The validated HIP runtime platform is `hal` with an AMD Radeon RX 7900 XTX
 (`gfx1100`) and ROCm 7.2.0. The build uses `amdclang++` (Clang 22.0.0) from
 ROCm under `/opt/rocm`. The HIP CTest run registers the typed Flow cases and
  the particle and photon CLI/output cases for the HIP backend. The HIP suite
- passes **325/325** on `hal` at `3b90ffd8962084d59ebc672f7848b093f2d99582`;
+ passes **380/380** on `hal` at `25c73f31c736b1c5f765003ff8815d2a24c25808`;
  the previous 307/307 at `561b9a4c`, 301/301 at `ffe4074`, 298/298 at
  `88de14f`, 297/297 at `56c11ac`, the 290/290 at `a610281` and the original
  245/245 run with 43 HIP cases at `b972eaa` are historical and recorded in
@@ -178,8 +178,8 @@ cross-backend exact-histogram cases: 33 in-process Catch2 cases plus the
 environment-scoped FP64 case, 24 particle CLI, 3 cross-backend, 10 photon CLI
 and 1 photon output case, 72 sycl-labelled cases at `9ace795` (historical).
 The validated device is `hal` with an Intel Arc A770
-(`spir64`, oneAPI 2026.2); the current full suite passes 342/342 at
-`3b90ffd8962084d59ebc672f7848b093f2d99582`, of which 75 carry the `sycl`
+(`spir64`, oneAPI 2026.2); the current full suite passes 397/397 at
+`25c73f31c736b1c5f765003ff8815d2a24c25808`, of which 77 carry the `sycl`
 label, and the AoS attribute matrix, the registration-site subset, and the
 record-pipeline cases are included in that run. The
 GitHub-hosted `sycl-compile` job compiles the same target but runs no CTest.
@@ -273,9 +273,9 @@ the hot path has no per-event state branch, and the Debug case exercises the
 compiled checks. The scheduler adds its conservation, fill-level and
 exactly-once delivery checks under the same flag; `[scheduler][debug]` covers
 each violation and `[scheduler][release]` proves the checks are compiled out.
-The recorded Release suite is **270/270 CPU**, **334/334 CUDA** on `fwk394`
-RTX 2080 Ti `sm_75`, **325/325 HIP**, and **342/342 SYCL** (75 sycl-labelled)
-at `3b90ffd8962084d59ebc672f7848b093f2d99582` (see `docs/acceptance.md`);
+The recorded Release suite is **323/323 CPU**, **389/389 CUDA** on `fwk394`
+RTX 2080 Ti `sm_75`, **380/380 HIP**, and **397/397 SYCL** (77 sycl-labelled)
+at `25c73f31c736b1c5f765003ff8815d2a24c25808` (see `docs/acceptance.md`);
 the six `[scheduler]` cases are included in those totals, the
 `[scheduler][release]` case among them. The AoS attribute matrix (3/3 per
 backend), the attribute helpers (6/6), the registration-site subset (1/1), and
@@ -371,17 +371,17 @@ CTest** on fwk394 Release and **101/101 CUDA CTest** on hal `sm_80` Release,
 both with `-Dalpaka_COMPILE_PEDANTIC=ON`; the counts were recorded at that
 revision, and this documentation commit does not claim a new build or test run.
  The HIP runtime CTest on `hal` (RX 7900 XTX `gfx1100`, ROCm 7.2) passes
- **325/325** at `3b90ffd8962084d59ebc672f7848b093f2d99582`; the previous
+ **380/380** at `25c73f31c736b1c5f765003ff8815d2a24c25808`; the previous
  **307/307** at `561b9a4c`, **301/301** at `ffe4074`, **298/298** at
  `88de14f`, **297/297** at `56c11ac`, the **290/290** at `a610281` and the
  earlier **245/245** with 43 HIP cases at `b972eaa` are historical. The SYCL
- runtime CTest on `hal` (Arc A770 `spir64`, oneAPI 2026.2) passes **342/342**
- (75 sycl-labelled) at `3b90ffd8962084d59ebc672f7848b093f2d99582`; the
+ runtime CTest on `hal` (Arc A770 `spir64`, oneAPI 2026.2) passes **397/397**
+ (77 sycl-labelled) at `25c73f31c736b1c5f765003ff8815d2a24c25808`; the
  previous 72/72 sycl-labelled run at
  `9ace795798c0e8db9f4e74885cc131ef05bc5163` is historical. The
  GitHub-hosted `sycl-compile` job compiles the target but
  runs no CTest and makes no SYCL runtime claim. The `sm_75` CUDA
-build now passes the full 334/334 suite on `fwk394`; the earlier CUDA 12.5
+build now passes the full 389/389 suite on `fwk394`; the earlier CUDA 12.5
 nvcc internal compiler error is historical
 (`docs/known-limitations.md`). Format and REUSE metadata are present; the
 hosted `reuse` job checks `reuse lint`, the
