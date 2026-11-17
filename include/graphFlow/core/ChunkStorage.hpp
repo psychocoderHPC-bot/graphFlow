@@ -22,6 +22,15 @@ namespace graphFlow
      * `numChunks()` is the physical chunk count the storage actually allocated. The concrete
      * storage clamps a larger request to its payload budget, so the scheduler always admits
      * against the memory that exists; it never sees a chunk that has no payload slot.
+     *
+     * `base(handle)` is the first slot of the chunk's own contiguous range, not necessarily
+     * `handle.index * chunkCapacity`. The fixed-layout storages derive it as `index * chunkCapacity`
+     * because every chunk owns a full row; a slot-arena storage stores a per-chunk start, because a
+     * chunk owns exactly the fill it committed. Both fulfil the same contract: while `handle`
+     * refers to a live chunk, its slots start at `base(handle)`, lie inside the storage's slot
+     * count and belong to no other chunk, and reader leases keep that mapping stable for the
+     * duration of a batch. A consumer must therefore never recompute the base from the chunk
+     * index; it reads it from the storage.
      */
     template<typename TStorage>
     concept ChunkStorage = requires(TStorage storage, ChunkHandle handle, std::uint32_t chunkIndex) {

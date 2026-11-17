@@ -286,4 +286,115 @@ namespace graphFlow
         std::vector<Range> m_free;
         std::map<std::uint64_t, std::uint64_t> m_live;
     };
+
+    /** Chunk-index to slot-range map of a slot-arena storage.
+     *
+     * The chunk-index free list, generations and reader leases stay in `detail::ChunkLedger`; this
+     * map adds the range that each index owns. `acquire()` stores the start and length of the range
+     * the `SlotArena` hands out, and `base(index)` returns the stored start instead of
+     * `index * chunkCapacity`. A released index keeps `SlotArena::noSlot`, so reading the base of a
+     * chunk that owns no range is a loud error rather than another chunk's memory.
+     */
+    class ArenaSlotMap
+    {
+    public:
+        ArenaSlotMap(std::uint32_t numChunks, std::uint64_t numSlots)
+            : m_arena{numSlots}
+            , m_bases(numChunks, SlotArena::noSlot)
+            , m_fills(numChunks, 0u)
+        {
+            if(numChunks == 0u)
+                throw std::invalid_argument{"graphFlow::ArenaSlotMap: numChunks must be non-zero"};
+            // Every chunk owns at least one slot, so a map with more chunks than slots could
+            // never satisfy an acquire.
+            if(static_cast<std::uint64_t>(numChunks) > numSlots)
+                throw std::invalid_argument{
+                    "graphFlow::ArenaSlotMap: " + std::to_string(numChunks) + " chunks cannot be held by "
+                    + std::to_string(numSlots) + " slots"};
+        }
+
+        /** Give `index` a contiguous range of exactly `fill` slots. */
+        void acquire(std::uint32_t index, std::uint32_t fill)
+        {
+            checkIndex(index);
+            if(fill == 0u)
+                throw std::invalid_argument{"graphFlow::ArenaSlotMap: fill must be non-zero"};
+            if(owns(index))
+                throw std::logic_error{"graphFlow::ArenaSlotMap: chunk index already owns a slot range"};
+            std::uint64_t const start = m_arena.allocate(fill);
+            m_bases[index] = start;
+            m_fills[index] = fill;
+        }
+
+        /** Return the range of `index` to the arena. */
+        void release(std::uint32_t index)
+        {
+            checkIndex(index);
+            if(!owns(index))
+                throw std::logic_error{"graphFlow::ArenaSlotMap: chunk index owns no slot range"};
+            m_arena.release(m_bases[index], m_fills[index]);
+            m_bases[index] = SlotArena::noSlot;
+            m_fills[index] = 0u;
+        }
+
+        [[nodiscard]] bool owns(std::uint32_t index) const
+        {
+            checkIndex(index);
+            return m_bases[index] != SlotArena::noSlot;
+        }
+
+        /** Stored start slot of a chunk that owns a range. */
+        [[nodiscard]] std::uint64_t base(std::uint32_t index) const
+        {
+            checkIndex(index);
+            if(!owns(index))
+                throw std::logic_error{"graphFlow::ArenaSlotMap: chunk index owns no slot range"};
+            return m_bases[index];
+        }
+
+        /** Committed fill, i.e. the length of the owned range. */
+        [[nodiscard]] std::uint32_t fill(std::uint32_t index) const
+        {
+            checkIndex(index);
+            if(!owns(index))
+                throw std::logic_error{"graphFlow::ArenaSlotMap: chunk index owns no slot range"};
+            return m_fills[index];
+        }
+
+        [[nodiscard]] std::uint64_t slotCount() const
+        {
+            return m_arena.numSlots();
+        }
+
+        [[nodiscard]] std::uint32_t liveRangeCount() const
+        {
+            return m_arena.liveRangeCount();
+        }
+
+        [[nodiscard]] SlotArena const& arena() const
+        {
+            return m_arena;
+        }
+
+        void verify() const
+        {
+            m_arena.verify();
+        }
+
+        void verifyReleased() const
+        {
+            m_arena.verifyReleased();
+        }
+
+    private:
+        void checkIndex(std::uint32_t index) const
+        {
+            if(static_cast<std::size_t>(index) >= m_bases.size())
+                throw std::invalid_argument{"graphFlow::ArenaSlotMap: chunk index out of range"};
+        }
+
+        SlotArena m_arena;
+        std::vector<std::uint64_t> m_bases;
+        std::vector<std::uint32_t> m_fills;
+    };
 } // namespace graphFlow

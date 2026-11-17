@@ -85,6 +85,126 @@ namespace graphFlow
         return payloadBudgetBytes / bytesPerChunk;
     }
 
+    /** Largest slot count whose payload fits `payloadBudgetBytes`.
+     *
+     * The slot arena sizes its single payload array from the budget instead of from
+     * `numChunks * chunkCapacity`, so the inversion of the payload cap is `budget / slotBytes`.
+     * Zero budget or slot size is invalid because it would silently disable the cap.
+     */
+    inline std::uint64_t maxPayloadSlots(
+        std::uint64_t payloadBudgetBytes,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
+    {
+        if(payloadBudgetBytes == 0u)
+            throw std::invalid_argument{"graphFlow::maxPayloadSlots: payload budget must be non-zero"};
+        if(slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::maxPayloadSlots: slotBytes must be non-zero"};
+        return payloadBudgetBytes / slotBytes;
+    }
+
+    /** Checked slot count of a slot arena, capped by the 32-bit kernel slot index. */
+    inline constexpr std::uint64_t checkedArenaSlotCount(std::uint64_t slots, std::string const& context)
+    {
+        if(slots == 0u)
+            throw std::invalid_argument{context + ": numSlots must be non-zero"};
+        if(slots > std::numeric_limits<std::uint32_t>::max())
+            throw std::overflow_error{context + ": the slot arena exceeds the 32-bit slot index"};
+        return slots;
+    }
+
+    /** Slots the worst-case slot-arena reservation needs.
+     *
+     * Live input chunks own exactly their committed fill, so the fragmented extreme costs one slot
+     * per live particle. The `reserveChunks` output-credit chunks (`K*R` for the reference graph)
+     * are charged at the full `chunkCapacity` because the scatter kernel addresses an output chunk
+     * at `j % chunkCapacity` across the bin's dense chunk sequence, so its range must be
+     * `chunkCapacity` wide. The result is `liveParticles + reserveChunks * chunkCapacity`; the fixed
+     * layout charges `(liveParticles + reserveChunks) * chunkCapacity` instead, which is the
+     * `C-1`-slots-per-fragment waste the arena removes from the input term.
+     */
+    inline std::uint64_t requiredArenaSlots(
+        std::uint64_t liveParticles,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks)
+    {
+        if(chunkCapacity == 0u)
+            throw std::invalid_argument{"graphFlow::requiredArenaSlots: chunkCapacity must be non-zero"};
+        std::uint64_t const credit = checkedProduct(reserveChunks, chunkCapacity, "graphFlow::requiredArenaSlots");
+        if(liveParticles > std::numeric_limits<std::uint64_t>::max() - credit)
+            throw std::overflow_error{"graphFlow::requiredArenaSlots: slot count overflows 64 bits"};
+        return liveParticles + credit;
+    }
+
+    /** Payload bytes of `requiredArenaSlots()`, checked for 64-bit overflow. */
+    inline std::uint64_t requiredArenaBytes(
+        std::uint64_t liveParticles,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
+    {
+        if(slotBytes == 0u)
+            throw std::invalid_argument{"graphFlow::requiredArenaBytes: slotBytes must be non-zero"};
+        std::uint64_t const slots = requiredArenaSlots(liveParticles, chunkCapacity, reserveChunks);
+        if(slots != 0u && slotBytes > std::numeric_limits<std::uint64_t>::max() / slots)
+            throw std::overflow_error{"graphFlow::requiredArenaBytes: byte count overflows 64 bits"};
+        return slots * slotBytes;
+    }
+
+    /** Live particles a slot-arena budget can hold after the output-credit charge.
+     *
+     * Inverts `requiredArenaSlots()`: `floor(budget / slotBytes) - reserveChunks * chunkCapacity`,
+     * floored at zero when the credit term alone consumes the whole arena. This is the arena
+     * counterpart of the fixed pool's `floor(budget / (C * slotBytes)) - reserveChunks`.
+     */
+    inline std::uint64_t maxLiveParticlesForArena(
+        std::uint64_t payloadBudgetBytes,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks = defaultPoolOutputReserveChunks,
+        std::uint64_t slotBytes = payloadBytesPerSlot)
+    {
+        std::uint64_t const slots = maxPayloadSlots(payloadBudgetBytes, slotBytes);
+        std::uint64_t const credit
+            = checkedProduct(reserveChunks, chunkCapacity, "graphFlow::maxLiveParticlesForArena");
+        return slots > credit ? slots - credit : 0u;
+    }
+
+    /** Reject a slot-arena reservation that does not fit `budgetBytes`. */
+    inline void validateSlotArenaBudget(
+        std::uint64_t liveParticles,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks,
+        std::uint64_t budgetBytes,
+        std::string const& context,
+        std::uint64_t slotBytes)
+    {
+        if(budgetBytes == 0u)
+            throw std::invalid_argument{context + ": payload budget must be non-zero"};
+        std::uint64_t const required = requiredArenaBytes(liveParticles, chunkCapacity, reserveChunks, slotBytes);
+        if(required > budgetBytes)
+            throw std::invalid_argument{
+                context + ": a slot arena of " + std::to_string(liveParticles) + " live particles plus "
+                + std::to_string(reserveChunks) + " x " + std::to_string(chunkCapacity) + " credit slots requires "
+                + std::to_string(required) + " bytes, exceeding the payload budget of " + std::to_string(budgetBytes)
+                + " bytes"};
+    }
+
+    /** Particle-budget overload; `slotBytes` defaults to the particle SoA slot size. */
+    inline void validateSlotArenaBudget(
+        std::uint64_t liveParticles,
+        std::uint64_t chunkCapacity,
+        std::uint64_t reserveChunks,
+        std::uint64_t budgetBytes,
+        std::string const& context = "graphFlow::validateSlotArenaBudget")
+    {
+        validateSlotArenaBudget(
+            liveParticles,
+            chunkCapacity,
+            reserveChunks,
+            budgetBytes,
+            context,
+            payloadBytesPerSlot);
+    }
+
     /** Checked `numChunks * chunkCapacity` slot count for kernels with 32-bit slot indices.
      *
      * The pool and the generic payload storage share this check so a large geometry cannot wrap

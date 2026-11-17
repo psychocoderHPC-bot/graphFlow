@@ -7,6 +7,7 @@
 #include "graphFlow/core/BinPath.hpp"
 #include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
+#include "graphFlow/core/PoolMode.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
 
 #include <cstdint>
@@ -78,6 +79,11 @@ namespace graphFlow
         ScatterMode scatterMode = ScatterMode::SharedStaging;
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
+        /** Chunk-slot layout of the storage. `fixed` is the default and the historical layout;
+         * `slotArena` (phase 2) lets a chunk own exactly its committed fill but needs the kernel
+         * base table, so `validate()` rejects it until stage S2 wires that table. Selecting it
+         * loudly is better than a run that silently keeps the fixed layout. */
+        PoolMode poolMode = PoolMode::fixed;
         /** Steady-state chunk occupancy target D; zero disables the gate and keeps the historical
          * particle-budget admission.
          *
@@ -182,6 +188,10 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: chunkCapacity must be non-zero"};
             if(poolPayloadBudgetBytes == 0u)
                 throw std::invalid_argument{"graphFlow::Config: poolPayloadBudgetBytes must be non-zero"};
+            if(poolMode != PoolMode::fixed)
+                throw std::invalid_argument{
+                    "graphFlow::Config: poolMode slotArena is not wired to the kernel base table yet (phase 2 stage "
+                    "S2); the fixed layout is the only runnable mode"};
             if(numChunks != 0u)
                 validatePayloadBudget(
                     numChunks,

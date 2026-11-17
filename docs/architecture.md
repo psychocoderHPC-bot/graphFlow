@@ -46,9 +46,13 @@ the whole record. The proxy narrows access, not the layout.
 
 `SoAStorage<TDevice, Fields...>` is the array-of-structs-over-SoA storage. It
 allocates one device column per attribute and one `uint32_t` bin-id column,
-each of `numChunks * chunkCapacity` elements. There is no contiguous record
-array: `base(handle)` is `handle.index * C` and `slotIndex(handle, row)` is
-`base + row`. `loadRecord`/`storeRecord` gather or scatter one record, and
+each of `numChunks * chunkCapacity` elements in the default fixed layout. There
+is no contiguous record array: `base(handle)` is `handle.index * C` and
+`slotIndex(handle, row)` is `base + row`. The opt-in slot-arena layout
+(`SlotArenaOptions`, `PoolMode::slotArena`) sizes every column with
+`arenaSlots` instead, stores a per-chunk range start, and computes the same
+`slotIndex` from that stored base; the row is then bounded by the chunk's
+committed fill rather than by `C`. `loadRecord`/`storeRecord` gather or scatter one record, and
 `proxy<Set>(slot)` returns a per-slot proxy. Chunk lifecycle, generations,
 reader leases, and the free list stay in the shared `detail::ChunkLedger`, so
 the scheduler sees the same `PayloadStorage`/`ChunkStorage` contract as for
