@@ -8,12 +8,17 @@
 #include "graphFlow/core/ChunkLedger.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/PayloadSlotStorage.hpp"
+#include "graphFlow/core/PoolMode.hpp"
+#include "graphFlow/core/SlotAllocator.hpp"
 #include "graphFlow/flow/Attributes.hpp"
 #include "graphFlow/flow/Payload.hpp"
 
 #include <concepts>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -287,6 +292,12 @@ namespace graphFlow
      * `proxy<Set<Tags...>>(slot)` returns a `RecordProxy` limited to the tags a node declares.
      * Copying that proxy to a `Record` copies every attribute, including attributes outside the
      * node's subset.
+     *
+     * The `SlotArenaOptions` constructor is the opt-in slot-arena layout (`PoolMode::slotArena`).
+     * The columns then hold `arenaSlots` elements and every chunk owns the contiguous range its
+     * committed fill asked for, so `base(handle)` is a stored start and `slotIndex(handle, row)`
+     * is `base + row` with `row < fill(handle)`. The fixed constructor keeps the historical row
+     * layout `handle.index * chunkCapacity`.
      */
     template<typename TDevice, typename... TAttrs>
     class SoAStorage
@@ -335,6 +346,22 @@ namespace graphFlow
         {
         }
 
+        /** Slot-arena construction: every column holds `options.arenaSlots` elements. */
+        SoAStorage(
+            TDevice device,
+            std::uint32_t numChunks,
+            std::uint32_t chunkCapacity,
+            SlotArenaOptions const& options)
+            : m_chunkCapacity{chunkCapacity}
+            , m_chunks{checkedArenaChunkCount(numChunks, chunkCapacity)}
+            , m_slots{checkedArenaSlots(m_chunks, options)}
+            , m_ledger{m_chunks}
+            , m_columns{allocateColumn<TAttrs>(device, m_slots)...}
+            , m_binIds{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
+            , m_arena{std::in_place, m_chunks, m_slots}
+        {
+        }
+
         [[nodiscard]] std::uint32_t numChunks() const
         {
             return m_ledger.numChunks();
@@ -363,11 +390,42 @@ namespace graphFlow
 
         [[nodiscard]] ChunkHandle acquire()
         {
-            return m_ledger.acquire();
+            return acquire(m_chunkCapacity);
+        }
+
+        /** Acquire a chunk index and, in slot-arena mode, a range of exactly `fill` slots. */
+        [[nodiscard]] ChunkHandle acquire(std::uint32_t fill)
+        {
+            if(fill == 0u)
+                throw std::invalid_argument{"graphFlow::SoAStorage: fill must be non-zero"};
+            if(fill > m_chunkCapacity)
+                throw std::invalid_argument{"graphFlow::SoAStorage: fill exceeds chunkCapacity"};
+            ChunkHandle const handle = m_ledger.acquire();
+            if(!m_arena)
+                return handle;
+            try
+            {
+                m_arena->acquire(handle.index, fill);
+            }
+            catch(...)
+            {
+                m_ledger.release(handle);
+                throw;
+            }
+            return handle;
         }
 
         void release(ChunkHandle handle)
         {
+            if(!m_arena)
+            {
+                m_ledger.release(handle);
+                return;
+            }
+            m_ledger.validateLive(handle);
+            if(m_ledger.leaseCount(handle) != 0u)
+                throw std::logic_error{"graphFlow::SoAStorage: release while a reader lease is outstanding"};
+            m_arena->release(handle.index);
             m_ledger.release(handle);
         }
 
@@ -416,17 +474,66 @@ namespace graphFlow
         {
             if(handle.index >= m_chunks)
                 throw std::invalid_argument{"graphFlow::SoAStorage: chunk index out of range"};
-            return static_cast<std::uint64_t>(handle.index) * m_chunkCapacity;
+            if(!m_arena)
+                return static_cast<std::uint64_t>(handle.index) * m_chunkCapacity;
+            m_ledger.validateLive(handle);
+            return m_arena->base(handle.index);
         }
 
-        /** Row-major slot index inside a chunk row. */
+        /** Row-major slot index inside a chunk row.
+         *
+         * The fixed layout bounds the row by `chunkCapacity`; the slot-arena layout bounds it by
+         * the fill the chunk committed, because the slots beyond it belong to another chunk.
+         */
         [[nodiscard]] std::uint64_t slotIndex(std::uint64_t chunkIndex, std::uint32_t row) const
         {
             if(chunkIndex >= m_chunks)
                 throw std::invalid_argument{"graphFlow::SoAStorage: chunk index out of range"};
-            if(row >= m_chunkCapacity)
+            if(!m_arena)
+            {
+                if(row >= m_chunkCapacity)
+                    throw std::invalid_argument{"graphFlow::SoAStorage: row index out of range"};
+                return chunkIndex * m_chunkCapacity + row;
+            }
+            auto const index = static_cast<std::uint32_t>(chunkIndex);
+            if(row >= m_arena->fill(index))
                 throw std::invalid_argument{"graphFlow::SoAStorage: row index out of range"};
-            return chunkIndex * m_chunkCapacity + row;
+            return m_arena->base(index) + row;
+        }
+
+        /** Slot count a chunk currently owns; `chunkCapacity` in the fixed layout. */
+        [[nodiscard]] std::uint32_t fill(ChunkHandle handle) const
+        {
+            if(handle.index >= m_chunks)
+                throw std::invalid_argument{"graphFlow::SoAStorage: chunk index out of range"};
+            if(!m_arena)
+                return m_chunkCapacity;
+            m_ledger.validateLive(handle);
+            return m_arena->fill(handle.index);
+        }
+
+        /** Layout this storage was built with. */
+        [[nodiscard]] PoolMode poolMode() const
+        {
+            return m_arena ? PoolMode::slotArena : PoolMode::fixed;
+        }
+
+        /** Debug/test check: the arena's free and live ranges tile the whole arena exactly once. */
+        void verifyArena() const
+        {
+            if(m_arena)
+                m_arena->verify();
+        }
+
+        /** Leak check: no chunk and no slot range may survive a run. */
+        void verifyArenaReleased() const
+        {
+            if(m_ledger.freeCount() != m_chunks)
+                throw std::logic_error{
+                    "graphFlow::SoAStorage: " + std::to_string(m_ledger.liveCount())
+                    + " chunk(s) are still live at teardown"};
+            if(m_arena)
+                m_arena->verifyReleased();
         }
 
         /** Row-major slot index of a live chunk row. */
@@ -558,6 +665,29 @@ namespace graphFlow
             return static_cast<std::uint32_t>(std::min<std::uint64_t>(numChunks, maxChunks));
         }
 
+        [[nodiscard]] static std::uint32_t checkedArenaChunkCount(std::uint32_t numChunks, std::uint32_t chunkCapacity)
+        {
+            if(numChunks == 0u)
+                throw std::invalid_argument{"graphFlow::SoAStorage: numChunks must be non-zero"};
+            if(chunkCapacity == 0u)
+                throw std::invalid_argument{"graphFlow::SoAStorage: chunkCapacity must be non-zero"};
+            return numChunks;
+        }
+
+        /** Arena size after the 32-bit cap and the one-slot-per-chunk lower bound. */
+        [[nodiscard]] static std::uint64_t checkedArenaSlots(std::uint32_t numChunks, SlotArenaOptions const& options)
+        {
+            std::uint64_t const slots = options.arenaSlots != 0u
+                                            ? options.arenaSlots
+                                            : maxPayloadSlots(options.payloadBudgetBytes, slotBytes);
+            checkedArenaSlotCount(slots, "graphFlow::SoAStorage slot arena");
+            if(static_cast<std::uint64_t>(numChunks) > slots)
+                throw std::invalid_argument{
+                    "graphFlow::SoAStorage: " + std::to_string(numChunks)
+                    + " chunks need at least one slot each but the arena holds " + std::to_string(slots)};
+            return slots;
+        }
+
         template<typename TAttr>
         [[nodiscard]] static ColumnType<TAttr> allocateColumn(TDevice const& device, std::uint64_t slots)
         {
@@ -588,6 +718,8 @@ namespace graphFlow
         detail::ChunkLedger m_ledger;
         std::tuple<ColumnType<TAttrs>...> m_columns;
         ScratchType m_binIds;
+        /** Absent in the fixed layout; the fixed base stays `index * chunkCapacity`. */
+        std::optional<ArenaSlotMap> m_arena;
     };
 
     namespace detail

@@ -286,6 +286,8 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/unit/test_chunk_registry.cpp
         tests/unit/test_payload_storage.cpp
         tests/unit/test_payload_slot_storage.cpp
+        tests/unit/test_slot_allocator.cpp
+        tests/unit/test_slot_arena_storage.cpp
         tests/unit/test_flow_builder.cpp
         tests/unit/test_flow_execution.cpp
         tests/unit/test_flow_failure.cpp

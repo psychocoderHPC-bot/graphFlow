@@ -93,12 +93,17 @@ stores the complete record, so attributes outside the set keep their values.
 `SoAStorage<TDevice, Fields...>` implements `PayloadStorage` and
 `ChunkStorage`. It allocates one `onHost::alloc<value_type>` column per
 attribute plus one `std::uint32_t` column; there is no contiguous record array.
-Chunk `k` owns row `k` of every column:
+Chunk `k` owns row `k` of every column in the default fixed layout:
 
 ```text
 base(handle)          = handle.index * chunkCapacity
 slotIndex(handle,row) = base(handle) + row
 ```
+
+A storage constructed with `SlotArenaOptions` (`PoolMode::slotArena`) instead
+stores a contiguous range per chunk and returns `base(handle)` from that stored
+start; `slotIndex(handle, row)` stays `base(handle) + row`. Consumers read the
+base from the storage and must not recompute `index * chunkCapacity`.
 
 `loadRecord(slot)` and `storeRecord(slot, record)` gather or scatter one
 logical record, `proxy<Set<Tags...>>(slot)` returns a per-slot `RecordProxy`,
