@@ -655,6 +655,9 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
     auto const gated = run(128u, 8u, 5u);
     CHECK(gated.stats.occupancyTargetChunks == 5u);
     CHECK(gated.stats.liveWorkChunks == 0u);
+    // A gated run that never refilled would also pass the physics comparison with the gate
+    // silently absent, so require the retirement-driven admission to have happened.
+    CHECK(gated.stats.refills > 0u);
 
     auto const compare = [&](graphFlow::photon::ScatteringResult const& expected)
     {

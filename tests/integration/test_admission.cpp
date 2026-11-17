@@ -305,6 +305,12 @@ namespace
 {
     /** Fragmentation case: one output chunk per particle grows the live work past the source target.
      *
+     * The stream has more source chunks than the target, so the later admissions happen while the
+     * fragment's one-particle outputs already occupy the pipeline. That is the moment the gate has
+     * to hold: `peakLiveWorkChunks > target` alone also passes with the gate removed, so the
+     * decisive check samples the live work the gate compares against the target at every
+     * admission.
+     *
      * The body is a function template so `GraphRunner<TDevice>` and its `Hooks` lambdas are
      * instantiated in a dependent context: cudafe++ (CUDA 12.5) crashes on the same lambdas
      * written directly in a non-template function.
@@ -314,9 +320,11 @@ namespace
     {
         using Runner = graphFlow::GraphRunner<TDevice>;
 
-        constexpr std::uint64_t particles = 16u;
+        // Eight eight-particle source chunks against a target of four: the first four admissions
+        // fit below the gate, the rest must wait for sink retirements.
+        constexpr std::uint64_t particles = 64u;
         constexpr std::uint32_t capacity = 8u;
-        constexpr std::uint32_t liveParticles = 16u;
+        constexpr std::uint32_t liveParticles = 64u;
         constexpr std::uint32_t numChunks = 32u;
         constexpr std::uint32_t target = 4u;
 
@@ -324,10 +332,21 @@ namespace
         std::vector<graphFlow::ChunkDescriptor> pending;
         std::uint64_t sunk = 0u;
         std::uint64_t admissions = 0u;
+        /** Registry live work the admission gate saw for each admitted source chunk. */
+        std::vector<std::uint32_t> liveWorkBeforeAdmission;
+        Runner* runnerPtr = nullptr;
 
         typename Runner::Hooks sourceHooks;
-        sourceHooks.launch
-            = [&admissions](typename Runner::Queue const&, typename Runner::Batch const&) { ++admissions; };
+        sourceHooks.launch = [&admissions,
+                              &liveWorkBeforeAdmission,
+                              &runnerPtr](typename Runner::Queue const&, typename Runner::Batch const&)
+        {
+            ++admissions;
+            // `launch` runs after the admission acquired the chunk and dispatched it, so the chunk
+            // already contributes one to `liveWorkChunks()`. Subtracting it recovers the value the
+            // gate compared against the target immediately before this admission.
+            liveWorkBeforeAdmission.push_back(runnerPtr->snapshot().liveWorkChunks - 1u);
+        };
         sourceHooks.advance
             = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
         {
@@ -372,6 +391,7 @@ namespace
         sinkHooks.abort = [] {};
 
         Runner runner{device, pool};
+        runnerPtr = &runner;
         auto const source = runner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, std::move(sourceHooks));
         std::vector<int> const fragmentRoutes(capacity, 2);
         runner.addNode("fragment", graphFlow::NodeRole::transform, capacity, fragmentRoutes, std::move(fragmentHooks));
@@ -385,14 +405,14 @@ namespace
         runner.validateChunkRegistry();
 
         CHECK(stats.occupancyTargetChunks == target);
-        CHECK(admissions == 2u); // two eight-particle source chunks
+        CHECK(admissions == 8u); // eight eight-particle source chunks
         CHECK(stats.sourceGenerated == particles);
         CHECK(stats.sourceSunk == particles);
         CHECK(sunk == particles);
         CHECK(stats.liveWorkChunks == 0u);
         CHECK(registry.faults == 0u);
         CHECK(registry.acquisitions == registry.releases);
-        CHECK(registry.retirements == 16u); // sixteen one-particle sink deliveries
+        CHECK(registry.retirements == 64u); // sixty-four one-particle sink deliveries
         CHECK(pool.freeCount() == pool.numChunks());
 
         // The gate constrains source admission, not the total: every source chunk admitted while
@@ -400,7 +420,13 @@ namespace
         // legitimately exceeds `D`. The reserve bounds the fragment's output credit, not live work.
         CHECK(stats.peakLiveWorkChunks >= target);
         CHECK(stats.peakLiveWorkChunks > target);
-        CHECK(registry.peakReservedChunks <= capacity);
+
+        // The decisive check: at every admission the live work the gate compared against `D` is
+        // strictly below the target. Later admissions only reach this point because fragmented
+        // outputs were retired first, so removing the gate makes this fail.
+        REQUIRE(liveWorkBeforeAdmission.size() == admissions);
+        for(std::uint32_t const liveWork : liveWorkBeforeAdmission)
+            CHECK(liveWork < target);
     }
 } // namespace
 
@@ -464,6 +490,71 @@ namespace
         runner.setOccupancyTarget(9u);
         CHECK_THROWS_WITH(runner.run(), ContainsSubstring("exceeds the reachable occupancy"));
         CHECK(launches == 0u);
+
+        // A graph with a transform node has a non-zero output-credit reserve, so the upper bound is
+        // `poolChunks - reserve`, not `poolChunks`. One transform with two routes at C=8 reserves
+        // `outputChunkBound(8, 8, 2) = 2` chunks, so 12 pool chunks reach only 10. A target of 11
+        // sits below `poolChunks` and is still rejected, which is exactly the subtraction the
+        // reserve-free graph above cannot test.
+        graphFlow::ChunkPool reservedPool{device, 12u, 8u};
+        std::uint32_t reservedLaunches = 0u;
+
+        typename Runner::Hooks reservedSourceHooks;
+        reservedSourceHooks.launch = [&reservedLaunches](typename Runner::Queue const&, typename Runner::Batch const&)
+        { ++reservedLaunches; };
+        reservedSourceHooks.advance
+            = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
+        {
+            allocated = 0u;
+            return false;
+        };
+        reservedSourceHooks.finish
+            = [](typename Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+        { outputs.push_back(batch.chunk()); };
+        reservedSourceHooks.abort = [] {};
+
+        typename Runner::Hooks reservedTransformHooks;
+        reservedTransformHooks.launch
+            = [&reservedLaunches](typename Runner::Queue const&, typename Runner::Batch const&)
+        { ++reservedLaunches; };
+        reservedTransformHooks.advance
+            = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
+        {
+            allocated = 0u;
+            return false;
+        };
+        reservedTransformHooks.finish = [](typename Runner::Batch const&, std::vector<graphFlow::ChunkDescriptor>&) {};
+        reservedTransformHooks.abort = [] {};
+
+        typename Runner::Hooks reservedSinkHooks;
+        reservedSinkHooks.launch = [&reservedLaunches](typename Runner::Queue const&, typename Runner::Batch const&)
+        { ++reservedLaunches; };
+        reservedSinkHooks.advance
+            = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
+        {
+            allocated = 0u;
+            return false;
+        };
+        reservedSinkHooks.finish = [](typename Runner::Batch const&, std::vector<graphFlow::ChunkDescriptor>&) {};
+        reservedSinkHooks.abort = [] {};
+
+        Runner reservedRunner{device, reservedPool};
+        auto const reservedSource
+            = reservedRunner.addNode("source", graphFlow::NodeRole::source, 1u, {1}, std::move(reservedSourceHooks));
+        std::vector<int> const transformRoutes(2u, 2);
+        reservedRunner.addNode(
+            "transform",
+            graphFlow::NodeRole::transform,
+            2u,
+            transformRoutes,
+            std::move(reservedTransformHooks));
+        reservedRunner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(reservedSinkHooks));
+        reservedRunner.setSource(reservedSource, 8u, 8u);
+        reservedRunner.setStallTimeout(std::chrono::milliseconds{10000});
+
+        reservedRunner.setOccupancyTarget(11u);
+        CHECK_THROWS_WITH(reservedRunner.run(), ContainsSubstring("(outputReserveChunks) = 10"));
+        CHECK(reservedLaunches == 0u);
     }
 } // namespace
 
