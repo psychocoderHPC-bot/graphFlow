@@ -1755,6 +1755,11 @@ namespace graphFlow::detail
                     m_pending.push_back(ChunkDescriptor{handle, fill, 0u});
                 }
 
+                // Mirror the batch-wide copies so both schedules leave identical device state,
+                // even though this path passes the per-launch values as kernel scalars.
+                alpaka::onHost::memcpy(queue, m_inBase, m_inBaseHost, alpaka::Vec{chunkCount});
+                alpaka::onHost::memcpy(queue, m_inCount, m_inCountHost, alpaka::Vec{chunkCount});
+                alpaka::onHost::memcpy(queue, m_outPosition, m_outPositionHost, alpaka::Vec{chunkCount});
                 alpaka::onHost::memcpy(
                     queue,
                     m_outChunks,

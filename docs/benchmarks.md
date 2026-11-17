@@ -314,8 +314,8 @@ which reports `sharing=unknown`, so they are baselines, not acceptance numbers.
   bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,
   dense/hash and the four distributions; the P03 CPU kernel timings remain the
   only isolated-kernel provenance.
- - No CI job runs these benchmarks. The frozen target is implemented in
-   `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.
+- No CI job runs these benchmarks. The frozen target is implemented in
+  `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.
 
 ## Per-chunk transform schedule (photon scattering)
 
