@@ -237,10 +237,11 @@ launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A
 Phase 0 chunk registry adds `registryAcquisitions`, `registryRoutings`,
 `registryRetirements`, `registryFaults` and the phase peaks
 `peakRegistryReady`, `peakRegistryInflight`, `peakRegistryReserved`; these
-counters observe the pipeline and never feed a scheduling decision. A stall throws
-`SchedulerStallError`; `snapshot()` on the runner and on the error exposes the
-same aggregate state, including the current registry phase counts, without
-topology. The low-level `GraphRunner` additionally exposes
+counters observe the pipeline and never feed a scheduling decision.
+
+A stall throws `SchedulerStallError`; `snapshot()` on the runner and on the error
+exposes the same aggregate state, including the current registry phase counts,
+without topology. The low-level `GraphRunner` additionally exposes
 `chunkRegistry()` (one record per pool slot), `chunkRegistrySummary()` and
 `validateChunkRegistry()`.
 
