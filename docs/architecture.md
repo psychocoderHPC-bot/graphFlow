@@ -125,7 +125,7 @@ node names, node ids, or routes. Per-node ready/in-flight detail is built only
 when `Tuning::diagnostics` is enabled and is delivered through an optional
 detail callback and `SchedulerStallError::detail()`.
 
-## Chunk registry (Phase 0)
+## Chunk registry (Phase 0 observability, Phase 1 admission input)
 
 `GraphRunner` owns a `ChunkRegistry` (`core/ChunkRegistry.hpp`) with one record
 per physical pool slot for its current incarnation: `{handle, producing node,
@@ -134,9 +134,12 @@ owner node, destination node, phase, fill, bin}`. The phases are `free`,
 transitions that already exist: acquire and release are reported by the storage
 (`ChunkPool`/`ChunkLedger` optional hooks), routing sets the destination from
 `node.route[bin]`, dispatch moves a chunk to its lane, and a sink arrival marks
-it retired before the release returns it to the free list. Nothing in the
-scheduler reads the registry in Phase 0, so the record can never change a
-decision. The constructor seeds every record from the pool's current
+it retired before the release returns it to the free list. Phase 0 records the
+transitions without reading them. Phase 1 reads exactly one quantity from the
+registry: `liveWorkChunks() = reserved + ready + inflight`, which gates opt-in
+source admission. That count excludes the transient `retired` phase, so a chunk
+the sink has already consumed cannot make the gate over-admit. No other
+scheduling decision reads a record. The constructor seeds every record from the pool's current
 generations, and the run-start reset re-seeds in place without allocating.
 Every mutator is `noexcept`: an invariant violation records a sticky fault and
 leaves the pool untouched, and the run continues. `validateChunkRegistry()`
@@ -203,6 +206,19 @@ particles. A tail chunk gets the remaining particles and a deliberately small
 `P` gets a smaller chunk. A one-particle chunk therefore occurs only when `P=1`
 or the tail has one particle. Consumer ready lists still dispatch partial chunks
 immediately, so the no-full-chunk rule applies to source generation only.
+
+The opt-in `Config::occupancyTargetChunks` (tuning field
+`Tuning::occupancyTargetChunks`, setter `GraphRunner::setOccupancyTarget`) adds
+a second admission constraint. When set to `D`, the source admits only while
+`liveWorkChunks() < D`. The particle bound, the per-chunk fill cap and the
+free-list precondition stay in force, so `D` can only reduce admission, never
+raise it. A sink retirement sets a refill flag that the next admission pass
+consumes; because the loop already revisits admission every iteration, the flag
+cannot widen the gate and cannot spin. The target is validated before the first
+launch: it must be at least the registered lane count and at most
+`numChunks - K*R`. `SchedulerStats` reports the target, the current and peak
+live work and the refill count. A target of zero leaves the historical particle
+admission and every output byte unchanged.
 
 A non-source input chunk carries a reader lease from launch until the
 completion event of the batch's last device stage has fired. `ChunkPool::release`

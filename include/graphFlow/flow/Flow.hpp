@@ -396,6 +396,11 @@ namespace graphFlow
             }
             runner->setSource(static_cast<std::uint32_t>(*m_sourceKey), itemCount, config.liveParticles);
             runner->setBatchChunks(config.batchChunks);
+            // The occupancy target is opt-in: without a configured value the runner keeps the
+            // historical admission path unchanged. The runner validates the value against the
+            // registered lanes and the pool before the first launch.
+            if(config.occupancyTargetChunks != 0u)
+                runner->setOccupancyTarget(config.occupancyTargetChunks);
             runner->setChunkSchedule(config.chunkKernelSchedule, config.chunkQueueDepth, std::move(chunkLimitName));
             if(m_tuning.stallTimeout.has_value())
                 runner->setStallTimeout(*m_tuning.stallTimeout);
@@ -634,6 +639,8 @@ namespace graphFlow
             config.chunkLatencyCapUs = m_tuning.chunkLatencyCapUs.value_or(config.chunkLatencyCapUs);
             config.chunkCapacity = m_tuning.chunkCapacity.value_or(config.chunkCapacity);
             config.liveParticles = m_tuning.liveParticles.value_or(config.liveParticles);
+            config.occupancyTargetChunks
+                = m_tuning.occupancyTargetChunks.value_or(config.occupancyTargetChunks);
             config.tileSize = m_tuning.tileSize.value_or(config.tileSize);
             config.numChunks = m_tuning.numChunks.value_or(config.numChunks);
             config.poolPayloadBudgetBytes = m_tuning.poolPayloadBudgetBytes.value_or(config.poolPayloadBudgetBytes);

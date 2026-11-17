@@ -324,6 +324,21 @@ namespace graphFlow
             return m_records;
         }
 
+        /** Chunks that currently occupy the pipeline: `reserved + ready + inflight`.
+         *
+         * This is the Phase 1 admission quantity, a count of chunks and never of particles. It
+         * deliberately excludes the transient `retired` phase even though `summary().liveChunks`
+         * includes it: a retired chunk has already been consumed by a sink and only waits for the
+         * release that returns its slot to `free`. Counting it as live work would let the
+         * occupancy gate over-admit by the number of chunks a sink retires in one loop iteration.
+         * It also excludes `free`, so the value is bounded by the pool size minus the free list.
+         */
+        [[nodiscard]] std::uint32_t liveWorkChunks() const noexcept
+        {
+            return m_counts[phaseIndex(ChunkPhase::ready)] + m_counts[phaseIndex(ChunkPhase::inflight)]
+                   + m_counts[phaseIndex(ChunkPhase::reserved)];
+        }
+
         [[nodiscard]] ChunkRegistrySummary summary() const noexcept
         {
             ChunkRegistrySummary result = m_counters;

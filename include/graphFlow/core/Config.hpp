@@ -78,6 +78,18 @@ namespace graphFlow
         ScatterMode scatterMode = ScatterMode::SharedStaging;
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
+        /** Steady-state chunk occupancy target D; zero disables the gate and keeps the historical
+         * particle-budget admission.
+         *
+         * When non-zero the source admits only while the number of chunks in the registry phases
+         * `reserved`, `ready` and `inflight` is below this target. D is a chunk count, not a
+         * particle count: multiplexing can grow the live chunk count beyond the admitted source
+         * chunks. The target adds a constraint to `liveParticles` and the free-list precondition;
+         * it never replaces them. `Config::validate()` checks the pool-size bound, and
+         * `GraphRunner::run()` checks the lane count and the output-credit reserve before the
+         * first launch, because only the registered graph knows both.
+         */
+        std::uint32_t occupancyTargetChunks = 0u; // D, zero disables the gate
 
         // Device-aware chunk policy knobs, see include/graphFlow/core/DevicePolicy.hpp.
         std::uint32_t policyWaves = 1u;
@@ -186,6 +198,19 @@ namespace graphFlow
                     "graphFlow::Config: chunkQueueDepth must be non-zero when chunkKernelSchedule is perChunk"};
             if(frameCap == 0u)
                 throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
+            // The reachable-occupancy bound is `numChunks - poolOutputReserveChunks`. The lane
+            // lower bound is graph-dependent and is validated by `GraphRunner::run()`.
+            if(occupancyTargetChunks != 0u && numChunks != 0u)
+            {
+                std::uint64_t const reserve = poolOutputReserveChunks;
+                std::uint64_t const chunks = numChunks;
+                if(reserve >= chunks || occupancyTargetChunks > chunks - reserve)
+                    throw std::invalid_argument{
+                        "graphFlow::Config: occupancyTargetChunks=" + std::to_string(occupancyTargetChunks)
+                        + " exceeds the reachable occupancy " + std::to_string(chunks) + " (numChunks) - "
+                        + std::to_string(reserve) + " (poolOutputReserveChunks) = "
+                        + std::to_string(reserve < chunks ? chunks - reserve : 0u)};
+            }
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};
             if(maxBins > maxSupportedBins)
