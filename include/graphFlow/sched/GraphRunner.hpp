@@ -7,6 +7,7 @@
 #include "graphFlow/core/Chunk.hpp"
 #include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
+#include "graphFlow/core/ChunkRegistry.hpp"
 #include "graphFlow/core/ChunkStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/flow/Debug.hpp"
@@ -130,6 +131,18 @@ namespace graphFlow
 
         using SchedulerDebugState
             = std::conditional_t<debug::checksEnabled, SchedulerDebugStateOn, SchedulerDebugStateOff>;
+
+        /** Storage adapters that expose the chunk-registry lifecycle hooks.
+         *
+         * The hooks are optional so the runner keeps working with a storage that predates them.
+         * Without them the registry still learns every chunk from the dispatch and route points;
+         * only the acquire/release transitions of an in-hook output allocation are inferred.
+         */
+        template<typename TStorage>
+        concept ChunkLifecycleObservable = requires(TStorage& storage, std::function<void(ChunkHandle)> callback) {
+            storage.setChunkObservers(callback, callback);
+            storage.clearChunkObservers();
+        };
     } // namespace detail
 
     /** Cheap aggregate scheduler counters and peaks of one `GraphRunner::run()`.
@@ -160,6 +173,14 @@ namespace graphFlow
         std::uint64_t chunkLaunches = 0u;
         /** Name of the clamp that set the per-chunk launch policy (`none` when the schedule is off). */
         std::string chunkLimitName = "none";
+        /** Chunk-registry transitions observed during the run (Phase 0 observability). */
+        std::uint64_t chunkRegistryAcquisitions = 0u;
+        std::uint64_t chunkRegistryRoutings = 0u;
+        std::uint64_t chunkRegistryRetirements = 0u;
+        std::uint64_t chunkRegistryFaults = 0u;
+        std::uint32_t peakRegistryReadyChunks = 0u;
+        std::uint32_t peakRegistryInflightChunks = 0u;
+        std::uint32_t peakRegistryReservedChunks = 0u;
     };
 
     /** One-line aggregate key=value rendering of `SchedulerStats`.
@@ -178,7 +199,14 @@ namespace graphFlow
                 << " peakEventSlotsInUse=" << stats.peakEventSlotsInUse << " sourceParticles=" << stats.sourceParticles
                 << " sourceGenerated=" << stats.sourceGenerated << " sourceSunk=" << stats.sourceSunk
                 << " sourceLiveParticles=" << stats.sourceLiveParticles << " chunkCapacity=" << stats.chunkCapacity
-                << " chunkLaunches=" << stats.chunkLaunches << " chunkLimit=" << stats.chunkLimitName;
+                << " chunkLaunches=" << stats.chunkLaunches << " chunkLimit=" << stats.chunkLimitName
+                << " registryAcquisitions=" << stats.chunkRegistryAcquisitions
+                << " registryRoutings=" << stats.chunkRegistryRoutings
+                << " registryRetirements=" << stats.chunkRegistryRetirements
+                << " registryFaults=" << stats.chunkRegistryFaults
+                << " peakRegistryReady=" << stats.peakRegistryReadyChunks
+                << " peakRegistryInflight=" << stats.peakRegistryInflightChunks
+                << " peakRegistryReserved=" << stats.peakRegistryReservedChunks;
         return message.str();
     }
 
@@ -199,6 +227,14 @@ namespace graphFlow
         std::uint32_t reservedChunks = 0u;
         std::uint32_t eventSlotsInUse = 0u;
         std::uint32_t freeChunks = 0u;
+
+        // Chunk-registry phase occupancy at capture time (aggregate only).
+        std::uint32_t registryLiveChunks = 0u;
+        std::uint32_t registryReadyChunks = 0u;
+        std::uint32_t registryInflightChunks = 0u;
+        std::uint32_t registryReservedChunks = 0u;
+        std::uint32_t registryRetiredChunks = 0u;
+        std::uint32_t registryFaults = 0u;
 
         // Peaks since the run started.
         std::uint32_t poolChunks = 0u;
@@ -253,7 +289,13 @@ namespace graphFlow
                     << ", peakReadyNodes=" << snapshot.peakReadyNodes << ", maxReadyDepth=" << snapshot.maxReadyDepth
                     << ", peakInflightBatches=" << snapshot.peakInflightBatches
                     << ", peakInflightChunks=" << snapshot.peakInflightChunks
-                    << ", peakEventSlotsInUse=" << snapshot.peakEventSlotsInUse << ')';
+                    << ", peakEventSlotsInUse=" << snapshot.peakEventSlotsInUse
+                    << ", registryLiveChunks=" << snapshot.registryLiveChunks
+                    << ", registryFaults=" << snapshot.registryFaults
+                    << ", registryReadyChunks=" << snapshot.registryReadyChunks
+                    << ", registryInflightChunks=" << snapshot.registryInflightChunks
+                    << ", registryReservedChunks=" << snapshot.registryReservedChunks
+                    << ", registryRetiredChunks=" << snapshot.registryRetiredChunks << ')';
             return message.str();
         }
     } // namespace detail
@@ -384,7 +426,20 @@ namespace graphFlow
 
         GraphRunner(TDevice device, TStorage& storage) : m_device{device}, m_storage{storage}
         {
+            m_registry.resize(storage.numChunks());
+            m_registry.seed(storage);
+            installRegistryObservers();
         }
+
+        ~GraphRunner()
+        {
+            clearRegistryObservers();
+        }
+
+        GraphRunner(GraphRunner const&) = delete;
+        GraphRunner& operator=(GraphRunner const&) = delete;
+        GraphRunner(GraphRunner&&) = delete;
+        GraphRunner& operator=(GraphRunner&&) = delete;
 
         /** Builds the hooks of one submitted-depth lane of a node. */
         using HooksFactory = std::function<Hooks(std::uint32_t)>;
@@ -564,6 +619,34 @@ namespace graphFlow
             return buildSnapshot();
         }
 
+        /** Per-chunk pipeline records of the current run. Observability only in Phase 0. */
+        [[nodiscard]] std::vector<ChunkRecord> const& chunkRegistry() const noexcept
+        {
+            return m_registry.records();
+        }
+
+        /** Aggregate registry occupancy, peaks and transition counters. */
+        [[nodiscard]] ChunkRegistrySummary chunkRegistrySummary() const noexcept
+        {
+            return m_registry.summary();
+        }
+
+        /** Detail of the first sticky registry fault; empty when the registry is consistent. */
+        [[nodiscard]] std::string chunkRegistryFaultDetail() const
+        {
+            return m_registry.faultDetail();
+        }
+
+        /** Strict registry consistency check, usable from tests and diagnostics.
+         *
+         * Throws `std::logic_error` on the first violated invariant. It reads the storage and the
+         * registry; no scheduling decision uses it.
+         */
+        void validateChunkRegistry() const
+        {
+            m_registry.validate(m_storage, m_sourceNode.value_or(invalidChunkNode));
+        }
+
         SchedulerStats run()
         {
             if(!m_sourceNode)
@@ -582,6 +665,7 @@ namespace graphFlow
             m_sunkParticles = 0u;
             m_reservedTotal = 0u;
             m_roundRobin = 0u;
+            m_registry.reset(m_storage);
             if constexpr(debug::checksEnabled)
             {
                 // The validation state is per run, like every other counter reset above, so a
@@ -671,6 +755,7 @@ namespace graphFlow
                                             if(m_nodes[static_cast<std::size_t>(dst)]->role == NodeRole::sink)
                                                 this->debugRecordSinkDelivery(output);
                                         }
+                                        m_registry.onRoute(output, node.id, dst);
                                         m_nodes[static_cast<std::size_t>(dst)]->ready.push_back(output);
                                     }
                                     catch(...)
@@ -702,7 +787,11 @@ namespace graphFlow
                                 }
 
                                 if(node.role == NodeRole::sink)
+                                {
+                                    for(ChunkDescriptor const& input : batch.chunks)
+                                        m_registry.onSinkArrival(input, node.id);
                                     sunkParticles += batch.particles();
+                                }
 
                                 // A source hands its chunk downstream; every other node retires
                                 // its input chunks only after the completion event of the last
@@ -768,6 +857,7 @@ namespace graphFlow
                         // still owned by the teardown path.
                         sourceLane->inflight = batch;
                         sourceLane->inputOwned = true;
+                        m_registry.onDispatch(chunk, source.id);
                         sourceLane->hooks.launch(source.queue, batch);
                         enqueueEvent(source, *sourceLane);
                         progress = true;
@@ -888,9 +978,13 @@ namespace graphFlow
                             throw;
                         }
                         for(std::size_t i = 0u; i < selected.size(); ++i)
+                            m_registry.onDispatch(selected[i], node.id);
+                        for(std::size_t i = 0u; i < selected.size(); ++i)
                             node.ready.pop_front();
                         lane->reserved = reserve;
                         reservedTotal += reserve;
+                        if(reserve != 0u)
+                            m_registry.onReserve(node.id, reserve);
                         if(reservedTotal > stats.peakReservedChunks)
                             stats.peakReservedChunks = reservedTotal;
                         return true;
@@ -1013,6 +1107,14 @@ namespace graphFlow
                 chunkLaunches += nodePtr->chunkLaunches;
             stats.chunkLaunches = chunkLaunches;
             stats.chunkLimitName = m_chunkLimitName;
+            ChunkRegistrySummary const registry = m_registry.summary();
+            stats.chunkRegistryAcquisitions = registry.acquisitions;
+            stats.chunkRegistryRoutings = registry.routings;
+            stats.chunkRegistryRetirements = registry.retirements;
+            stats.chunkRegistryFaults = registry.faults;
+            stats.peakRegistryReadyChunks = registry.peakReadyChunks;
+            stats.peakRegistryInflightChunks = registry.peakInflightChunks;
+            stats.peakRegistryReservedChunks = registry.peakReservedChunks;
             return stats;
         }
 
@@ -1255,6 +1357,13 @@ namespace graphFlow
 
             snapshot.reservedChunks = m_reservedTotal;
             snapshot.freeChunks = m_storage.freeCount();
+            ChunkRegistrySummary const registry = m_registry.summary();
+            snapshot.registryLiveChunks = registry.liveChunks;
+            snapshot.registryFaults = static_cast<std::uint32_t>(registry.faults);
+            snapshot.registryReadyChunks = registry.readyChunks;
+            snapshot.registryInflightChunks = registry.inflightChunks;
+            snapshot.registryReservedChunks = registry.reservedChunks;
+            snapshot.registryRetiredChunks = registry.retiredChunks;
             snapshot.poolChunks = m_storage.numChunks();
             snapshot.peakLiveChunks = m_storage.peakLive();
             snapshot.peakReservedChunks = m_stats.peakReservedChunks;
@@ -1292,6 +1401,14 @@ namespace graphFlow
                 message << "node '" << nodePtr->name << "' ready=" << nodePtr->ready.size()
                         << " inflight=" << laneInflight;
             }
+            ChunkRegistrySummary const registry = m_registry.summary();
+            if(!first)
+                message << "; ";
+            message << "registry live=" << registry.liveChunks << " ready=" << registry.readyChunks
+                    << " inflight=" << registry.inflightChunks << " reserved=" << registry.reservedChunks
+                    << " faults=" << registry.faults;
+            if(registry.faults != 0u)
+                message << " fault-detail='" << m_registry.faultDetail() << "'";
             return message.str();
         }
 
@@ -1380,6 +1497,25 @@ namespace graphFlow
             }
         }
 
+        /** Install the registry hooks into a storage that supports them. */
+        void installRegistryObservers()
+        {
+            if constexpr(detail::ChunkLifecycleObservable<TStorage>)
+            {
+                m_storage.setChunkObservers(
+                    [this](ChunkHandle handle) { m_registry.onAcquire(handle); },
+                    [this](ChunkHandle handle) { m_registry.onRelease(handle); });
+                m_registry.setObserverInstalled(true);
+            }
+        }
+
+        /** Remove the hooks so a storage that outlives the runner holds no dangling callback. */
+        void clearRegistryObservers()
+        {
+            if constexpr(detail::ChunkLifecycleObservable<TStorage>)
+                m_storage.clearChunkObservers();
+        }
+
         TDevice m_device;
         TStorage& m_storage;
         std::vector<std::unique_ptr<Node>> m_nodes;
@@ -1395,6 +1531,7 @@ namespace graphFlow
         std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
         std::function<void(std::string const&)> m_stallDetailCallback;
         std::chrono::milliseconds m_stallTimeout{120000};
+        ChunkRegistry m_registry;
         SchedulerStats m_stats;
         std::uint64_t m_generated = 0u;
         std::uint64_t m_sunkParticles = 0u;

@@ -233,8 +233,23 @@ hash path, or when a hash run requests a tile wider than
 `chunkCapacity`). The schedule adds `chunkLaunches`, the number of enqueued
 per-chunk transform kernels, and `chunkLimit`, the clamp name
 (`wave`, `maximum`, `grid`, `memory` or `latency`) that set the per-chunk
-launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A stall throws `SchedulerStallError`; `snapshot()` on the
-runner and on the error exposes the same aggregate state without topology.
+launch-size policy. The off path reports `chunkLaunches=0 chunkLimit=none`. A
+Phase 0 chunk registry adds `registryAcquisitions`, `registryRoutings`,
+`registryRetirements`, `registryFaults` and the phase peaks
+`peakRegistryReady`, `peakRegistryInflight`, `peakRegistryReserved`; these
+counters observe the pipeline and never feed a scheduling decision. A stall throws
+`SchedulerStallError`; `snapshot()` on the runner and on the error exposes the
+same aggregate state, including the current registry phase counts, without
+topology. The low-level `GraphRunner` additionally exposes
+`chunkRegistry()` (one record per pool slot), `chunkRegistrySummary()` and
+`validateChunkRegistry()`.
+
+`ChunkRegistrySummary::liveChunks` is `chunks - freeChunks`, which is exactly
+`reserved + ready + inflight + retired`; it includes transient `retired`
+chunks. The stall line prints `registryLiveChunks`, `registryReadyChunks`,
+`registryInflightChunks` and `registryReservedChunks` but omits
+`registryRetiredChunks`, so those printed numbers cannot be summed against
+`live`.
 
 ## Quickstart: `SoAFlow<Particle>`
 
@@ -579,9 +594,12 @@ measured runs in [benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-
 `--chunk-queue-depth D` (default 1) sets the queue pool of each per-chunk
 transform node, and `--chunk-latency-cap-us U` (default 0, no cap) clamps the
 capacity and waves that launch-size policy reports without touching the storage
-chunk capacity. With `perChunk` the scheduler line ends in
-`chunkLaunches=<count> chunkLimit=<name>`; the off path ends in
-`chunkLaunches=0 chunkLimit=none`.
+chunk capacity. With `perChunk` the scheduler line reports
+`chunkLaunches=<count> chunkLimit=<name>`; the off path reports
+`chunkLaunches=0 chunkLimit=none`. Both paths then append the Phase 0 chunk
+registry keys: `registryAcquisitions`, `registryRoutings`,
+`registryRetirements`, `registryFaults`, `peakRegistryReady`,
+`peakRegistryInflight` and `peakRegistryReserved`.
 
 `--output-dir` writes `metadata.csv`, `outcomes.csv`,
 `scatter_histogram.csv`, `exits.csv`, `traces.csv` and `trace_summary.csv`.

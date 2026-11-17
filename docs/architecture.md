@@ -125,6 +125,29 @@ node names, node ids, or routes. Per-node ready/in-flight detail is built only
 when `Tuning::diagnostics` is enabled and is delivered through an optional
 detail callback and `SchedulerStallError::detail()`.
 
+## Chunk registry (Phase 0)
+
+`GraphRunner` owns a `ChunkRegistry` (`core/ChunkRegistry.hpp`) with one record
+per physical pool slot for its current incarnation: `{handle, producing node,
+owner node, destination node, phase, fill, bin}`. The phases are `free`,
+`reserved`, `ready`, `inflight`, and `retired`. The registry is filled at
+transitions that already exist: acquire and release are reported by the storage
+(`ChunkPool`/`ChunkLedger` optional hooks), routing sets the destination from
+`node.route[bin]`, dispatch moves a chunk to its lane, and a sink arrival marks
+it retired before the release returns it to the free list. Nothing in the
+scheduler reads the registry in Phase 0, so the record can never change a
+decision. The constructor seeds every record from the pool's current
+generations, and the run-start reset re-seeds in place without allocating.
+Every mutator is `noexcept`: an invariant violation records a sticky fault and
+leaves the pool untouched, and the run continues. `validateChunkRegistry()`
+reports that fault first, then enforces exactly one phase per index, a live
+reader lease for every non-source inflight chunk, an empty free-list
+intersection with leases, generation agreement with the pool, phase/owner
+consistency, and the acquisition/release live-count balance. `SchedulerStats`
+exposes the aggregate transition counters, fault count and phase peaks;
+`snapshot()` exposes the current phase counts and live chunk count without node
+ids.
+
 ## Pool, batch reserve, and admission
 
 `ChunkPool` stores fixed-capacity SoA payload arrays. A chunk handle is

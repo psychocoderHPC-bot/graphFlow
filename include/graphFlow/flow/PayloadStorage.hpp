@@ -13,6 +13,7 @@
 
 #include <concepts>
 #include <cstdint>
+#include <functional>
 #include <type_traits>
 #include <utility>
 
@@ -108,6 +109,16 @@ namespace graphFlow
         void release(ChunkHandle handle)
         {
             m_pool.release(handle);
+        }
+
+        void setChunkObservers(std::function<void(ChunkHandle)> acquired, std::function<void(ChunkHandle)> released)
+        {
+            m_pool.setChunkObservers(std::move(acquired), std::move(released));
+        }
+
+        void clearChunkObservers()
+        {
+            m_pool.clearChunkObservers();
         }
 
         void acquireLease(ChunkHandle handle)
@@ -358,6 +369,16 @@ namespace graphFlow
         void release(ChunkHandle handle)
         {
             m_ledger.release(handle);
+        }
+
+        void setChunkObservers(std::function<void(ChunkHandle)> acquired, std::function<void(ChunkHandle)> released)
+        {
+            m_ledger.setChunkObservers(std::move(acquired), std::move(released));
+        }
+
+        void clearChunkObservers()
+        {
+            m_ledger.clearChunkObservers();
         }
 
         void acquireLease(ChunkHandle handle)

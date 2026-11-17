@@ -8,7 +8,9 @@
 #include "graphFlow/core/PoolBudget.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace graphFlow::detail
@@ -59,15 +61,49 @@ namespace graphFlow::detail
             return m_numChunks - freeCount();
         }
 
+        /** Optional observation hooks for the chunk registry.
+         *
+         * The hooks run after a successful acquire and after a successful release, on the thread
+         * that owns the ledger. They are empty by default; the scheduler installs them once per
+         * run. A hook must not change the lifecycle, so the ledger never reads its value.
+         */
+        void setChunkObservers(std::function<void(ChunkHandle)> acquired, std::function<void(ChunkHandle)> released)
+        {
+            m_acquiredObserver = std::move(acquired);
+            m_releasedObserver = std::move(released);
+        }
+
+        void clearChunkObservers()
+        {
+            m_acquiredObserver = {};
+            m_releasedObserver = {};
+        }
+
         /** Pop one chunk from the free list. Throws when the ledger is exhausted. */
         ChunkHandle acquire()
         {
             if(m_free.empty())
                 throw std::runtime_error{"graphFlow::ChunkLedger: pool exhausted"};
             std::uint32_t const index = m_free.back();
+            ChunkHandle const handle{index, m_generations[index]};
+            // Notify before removing the slot: an observer fault can never leak the slot. The
+            // observer is a diagnostic, so its failure must never abort the acquire.
+            if(m_acquiredObserver)
+            {
+                try
+                {
+                    m_acquiredObserver(handle);
+                }
+                catch(...)
+                {
+                    // Observer hooks are diagnostics and must not throw. This catch is
+                    // deliberate: a throwing hook must never abort the operation or leak a
+                    // slot. The failure is silent and is not counted.
+                }
+            }
             m_free.pop_back();
             m_peakLive = liveCount() > m_peakLive ? liveCount() : m_peakLive;
-            return ChunkHandle{index, m_generations[index]};
+            return handle;
         }
 
         /** Return a chunk and invalidate all outstanding handles. */
@@ -82,6 +118,19 @@ namespace graphFlow::detail
             m_generations[handle.index]
                 = checkedCounterIncrement(m_generations[handle.index], "graphFlow::ChunkLedger generation");
             m_free.push_back(handle.index);
+            if(m_releasedObserver)
+            {
+                try
+                {
+                    m_releasedObserver(ChunkHandle{handle.index, m_generations[handle.index]});
+                }
+                catch(...)
+                {
+                    // Observer hooks are diagnostics and must not throw. This catch is
+                    // deliberate: a throwing hook must never abort the operation or leak a
+                    // slot. The failure is silent and is not counted.
+                }
+            }
         }
 
         /** Register an asynchronous reader of a chunk. */
@@ -147,5 +196,7 @@ namespace graphFlow::detail
         std::vector<std::uint32_t> m_free;
         std::uint32_t m_peakLive = 0u;
         std::uint32_t m_peakLeases = 0u;
+        std::function<void(ChunkHandle)> m_acquiredObserver;
+        std::function<void(ChunkHandle)> m_releasedObserver;
     };
 } // namespace graphFlow::detail
