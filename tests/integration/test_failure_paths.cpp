@@ -21,8 +21,10 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -401,6 +403,173 @@ TEST_CASE("lease acquisition failure rolls back acquired leases", "[integration]
         CHECK(leases == 0u);
     for(std::uint32_t const value : outcome.values)
         CHECK(value == 0xDEAD'BEEFu);
+}
+
+namespace
+{
+    /** Result of a per-chunk failure run: the run-end leak counters of the scheduler. */
+    struct PerChunkFailureOutcome
+    {
+        bool threw = false;
+        std::string error;
+        std::uint32_t launches = 0u;
+        std::uint32_t sinkCompleted = 0u;
+        std::uint32_t numChunks = 0u;
+        std::uint32_t freeChunks = 0u;
+        std::vector<std::uint32_t> leases;
+    };
+
+    /** Run a 1:1 transform on the per-chunk schedule and inject a failure at the Nth chunk.
+     *
+     * The device type is a template parameter on purpose. nvcc's cudafe++ segfaults in 12.5 and 12.6
+     * when non-template code assigns a lambda to a `GraphRunner::Hooks` member whose `std::function`
+     * signature names `GraphRunner::Queue` or `Batch`; the `wrap*` helpers in HookAdapters.hpp work
+     * around the same frontend bug. Inside a template body the conversion is deferred.
+     *
+     * The hooks are deliberately small: a one-word memset per chunk gives the event real device
+     * work, `advance` acquires exactly one output chunk and `finish` publishes the batch's own
+     * fill. That makes every lane a complete per-chunk retirement slot (event, lease, input chunk,
+     * output credit) without dragging the typed stage into the failure path. The sink reads no
+     * payload, so the fake copy needs no device data movement.
+     */
+    template<typename TDevice>
+    PerChunkFailureOutcome runPerChunkLaunchFailure(TDevice const& device, std::uint32_t failAt)
+    {
+        using Device = std::decay_t<TDevice>;
+        using Runner = graphFlow::GraphRunner<Device>;
+
+        constexpr std::uint32_t capacity = 8u;
+        constexpr std::uint64_t particles = 64u;
+        constexpr std::uint32_t chunkQueues = 4u;
+        constexpr std::uint32_t chunks = static_cast<std::uint32_t>(particles / capacity);
+
+        graphFlow::ChunkPool<Device> pool{device, 6u * chunks, capacity};
+
+        graphFlow::particle::GenerateStage<Device> generate{device, pool, 0u, 128u};
+
+        PerChunkFailureOutcome outcome;
+        std::uint32_t launches = 0u;
+        auto chunkHooks = [&device, &pool, &launches](std::uint32_t)
+        {
+            // One status word per lane: the lanes run on different queues, so a shared word would
+            // be an actual concurrent write (TSAN catches it) as well as a false completion signal.
+            auto laneStatus = alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}});
+            auto pending = std::make_shared<std::optional<graphFlow::ChunkHandle>>();
+            typename Runner::Hooks hooks;
+            hooks.launch
+                = [laneStatus, &launches](typename Runner::Queue const& queue, typename Runner::Batch const&) mutable
+            {
+                alpaka::onHost::memset(queue, laneStatus, std::uint8_t{0});
+                ++launches;
+            };
+            hooks.advance
+                = [&pool,
+                   pending](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
+            {
+                *pending = pool.acquire();
+                allocated = 1u;
+                return false;
+            };
+            hooks.finish
+                = [pending](typename Runner::Batch const& batch, std::vector<graphFlow::ChunkDescriptor>& outputs)
+            {
+                if(*pending)
+                {
+                    outputs.push_back(graphFlow::ChunkDescriptor{**pending, batch.chunk().fill, 0u});
+                    *pending = std::nullopt;
+                }
+            };
+            hooks.abort = [&pool, pending]
+            {
+                if(*pending)
+                {
+                    pool.release(**pending);
+                    *pending = std::nullopt;
+                }
+            };
+            return hooks;
+        };
+
+        Runner runner{device, pool};
+        auto const source = runner.addNode(
+            "generate",
+            graphFlow::NodeRole::source,
+            1u,
+            {1},
+            graphFlow::particle::hooksOf<Device>(generate));
+        // Four lanes, four queues: each lane owns one chunk and retires it on its own completion.
+        runner
+            .addNode("copy", graphFlow::NodeRole::transform, 1u, {2}, std::move(chunkHooks), chunkQueues, chunkQueues);
+        typename Runner::Hooks sinkHooks;
+        sinkHooks.launch = [](typename Runner::Queue const&, typename Runner::Batch const&) {};
+        sinkHooks.advance = [](typename Runner::Queue const&, typename Runner::Batch const&, std::uint32_t& allocated)
+        {
+            allocated = 0u;
+            return false;
+        };
+        sinkHooks.finish = [](typename Runner::Batch const&, std::vector<graphFlow::ChunkDescriptor>&) {};
+        sinkHooks.abort = [] {};
+        auto const sinkNode = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(sinkHooks));
+        runner.setSource(source, particles);
+        runner.setBatchChunks(8u);
+        runner.setChunkSchedule(graphFlow::ChunkKernelSchedule::perChunk, chunkQueues, "maximum");
+        runner.setStallTimeout(std::chrono::milliseconds{5000});
+        runner.setFailureHook(
+            [failAt](graphFlow::FailurePoint point, [[maybe_unused]] std::uint32_t node, std::uint32_t item)
+            {
+                if(failAt != 0u && point == graphFlow::FailurePoint::chunkLaunch && item == failAt)
+                    throw std::runtime_error{"injected chunk launch failure"};
+            });
+
+        try
+        {
+            runner.run();
+        }
+        catch(std::exception const& error)
+        {
+            outcome.threw = true;
+            outcome.error = error.what();
+        }
+        outcome.launches = launches;
+        outcome.sinkCompleted = runner.nodeCompleted(sinkNode);
+        outcome.numChunks = pool.numChunks();
+        outcome.freeChunks = pool.freeCount();
+        outcome.leases.reserve(pool.numChunks());
+        for(std::uint32_t index = 0u; index < pool.numChunks(); ++index)
+            outcome.leases.push_back(pool.leaseCount(graphFlow::ChunkHandle{index, pool.generation(index)}));
+        return outcome;
+    }
+} // namespace
+
+TEST_CASE(
+    "per-chunk retirement releases every chunk without a double retire",
+    "[integration][failure][chunk-schedule]")
+{
+    // Control run: eight chunks over four queues. The run-end `freeCount == numChunks` check of
+    // the runner would already throw "chunk leak after the run" on a leaked slot.
+    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(graphFlow::test::makeCpuDevice(), 0u);
+    CHECK_FALSE(outcome.threw);
+    CHECK(outcome.launches == 8u);
+    CHECK(outcome.sinkCompleted == 8u);
+    CHECK(outcome.freeChunks == outcome.numChunks);
+    for(std::uint32_t const leases : outcome.leases)
+        CHECK(leases == 0u);
+}
+
+TEST_CASE(
+    "per-chunk failure at the fifth chunk leaves no lease or chunk behind",
+    "[integration][failure][chunk-schedule]")
+{
+    PerChunkFailureOutcome const outcome = runPerChunkLaunchFailure(graphFlow::test::makeCpuDevice(), 5u);
+    CHECK(outcome.threw);
+    // The injected error must be the one the runner reports: a pool invariant (double release,
+    // release with an outstanding lease) or a leak check would have replaced it.
+    CHECK(outcome.error.find("injected chunk launch failure") != std::string::npos);
+    // Four chunks were enqueued before the fifth attempt was rejected.
+    CHECK(outcome.launches == 4u);
+    CHECK(outcome.freeChunks == outcome.numChunks);
+    for(std::uint32_t const leases : outcome.leases)
+        CHECK(leases == 0u);
 }
 
 TEST_CASE("a later unroutable output still releases the batch input", "[integration][failure][routing]")

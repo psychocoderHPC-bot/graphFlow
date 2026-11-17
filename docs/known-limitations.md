@@ -140,12 +140,14 @@ startup with `FATAL: ThreadSanitizer: unexpected memory mapping`, including for
 a non-PIE binary, so hal is not a usable TSAN host; the fwk394 scheduler and
 pool subset (14/14 cases) is historical context.
 
-## CUDA 12.5 nvcc internal compiler error
+## CUDA 12.5 nvcc internal compiler error (resolved on `fwk394`)
 
-CUDA 12.5 nvcc hits an internal compiler error while compiling
-`HashScatterKernel.hpp`. CUDA 13.4 compiles the same tree and is the validated
-CUDA compiler. Do not pin CUDA 12.5 for this project until the compiler failure
-is resolved.
+A historical CUDA 12.5 nvcc run on `fwk394` hit an internal compiler error
+while compiling `HashScatterKernel.hpp` for `sm_75`. The claim does not hold at
+the current tree: at `c7ff8e21e509733c17c90968f8d6656dce03466c` a minimal probe
+compiles and runs for `sm_75` and `sm_70`, the full CUDA build succeeds, and
+335/335 tests pass on the RTX 2080 Ti. CUDA 13.4 remains the validated CUDA
+compiler for the A30 `sm_80` row.
 
 ## CUDA V100 `sm_70` ICE is worked around on `rosi_v100`
 

@@ -34,6 +34,9 @@ namespace graphFlow::photon::cli
         std::optional<std::uint32_t> tileSize; // T, absent means policy
         std::uint32_t batchChunks = 1u; // Q
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
+        std::string chunkKernelSchedule = "off"; // off|perChunk
+        std::uint32_t chunkQueueDepth = 1u;
+        std::uint32_t chunkLatencyCapUs = 0u; // zero means no cap
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
         std::optional<std::string> outputDirectory;
         std::uint32_t tracePhotons = 0u;
@@ -67,6 +70,8 @@ namespace graphFlow::photon::cli
                "                                      [--chunk-size C] [--live-particles P]\n"
                "                                      [--tile-size T] [--batch-chunks Q]\n"
                "                                      [--frame-cap F] [--pool-budget-bytes B]\n"
+               "                                      [--chunk-kernel-schedule off|perChunk]\n"
+               "                                      [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
                "                                      [--output-dir DIR] [--trace-photons M]\n"
                "                                      [--trace-vertices V]\n";
     }
@@ -115,6 +120,16 @@ namespace graphFlow::photon::cli
         }
     }
 
+    /** Parse the transform launch schedule of `--chunk-kernel-schedule`. */
+    inline graphFlow::ChunkKernelSchedule parseChunkKernelSchedule(std::string_view flag, std::string const& value)
+    {
+        if(value == "off")
+            return graphFlow::ChunkKernelSchedule::off;
+        if(value == "perChunk")
+            return graphFlow::ChunkKernelSchedule::perChunk;
+        throw std::invalid_argument{std::string{flag} + ": expected 'off' or 'perChunk', got '" + value + "'"};
+    }
+
     /** Parse the command line without touching a device. */
     inline Options parseOptions(int argc, char const* const* argv)
     {
@@ -160,6 +175,12 @@ namespace graphFlow::photon::cli
                 options.batchChunks = parseU32(flag, nextValue(flag));
             else if(flag == "--frame-cap")
                 options.frameCap = parseU32(flag, nextValue(flag));
+            else if(flag == "--chunk-kernel-schedule")
+                options.chunkKernelSchedule = nextValue(flag);
+            else if(flag == "--chunk-queue-depth")
+                options.chunkQueueDepth = parseU32(flag, nextValue(flag));
+            else if(flag == "--chunk-latency-cap-us")
+                options.chunkLatencyCapUs = parseU32(flag, nextValue(flag), true);
             else if(flag == "--pool-budget-bytes")
                 options.poolPayloadBudgetBytes = parseU64(flag, nextValue(flag));
             else if(flag == "--output-dir")
@@ -202,6 +223,10 @@ namespace graphFlow::photon::cli
         resolved.parameters.tileSize = resolved.policy.tileSize;
         resolved.parameters.batchChunks = options.batchChunks;
         resolved.parameters.frameCap = options.frameCap;
+        resolved.parameters.chunkKernelSchedule
+            = parseChunkKernelSchedule("--chunk-kernel-schedule", options.chunkKernelSchedule);
+        resolved.parameters.chunkQueueDepth = options.chunkQueueDepth;
+        resolved.parameters.chunkLatencyCapUs = options.chunkLatencyCapUs;
         resolved.parameters.seed = options.seed;
         resolved.parameters.thickness = options.thickness;
         resolved.parameters.sigmaS = options.sigmaS;

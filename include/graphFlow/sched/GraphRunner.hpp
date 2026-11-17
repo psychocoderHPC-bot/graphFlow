@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/Chunk.hpp"
+#include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/ChunkStorage.hpp"
 #include "graphFlow/core/Reservation.hpp"
@@ -42,11 +43,17 @@ namespace graphFlow
         sink
     };
 
-    /** Failure-injection points used by the failure-path tests. */
+    /** Failure-injection points used by the failure-path tests.
+     *
+     * `chunkLaunch` fires once per per-chunk transform submission, before the launch; `item` is
+     * the 1-based ordinal of that chunk within the node, so a test can fail the Nth chunk while
+     * the earlier chunks are still in flight.
+     */
     enum class FailurePoint
     {
         eventEnqueue,
-        leaseAcquire
+        leaseAcquire,
+        chunkLaunch
     };
 
     /** Batch error raised by a node hook, e.g. a device status word or a planning mismatch. */
@@ -149,6 +156,10 @@ namespace graphFlow
         std::uint64_t sourceSunk = 0u;
         std::uint64_t sourceLiveParticles = 0u;
         std::uint32_t chunkCapacity = 0u;
+        /** Enqueued per-chunk transform kernels; zero on the batch-wide schedule. */
+        std::uint64_t chunkLaunches = 0u;
+        /** Name of the clamp that set the per-chunk launch policy (`none` when the schedule is off). */
+        std::string chunkLimitName = "none";
     };
 
     /** One-line aggregate key=value rendering of `SchedulerStats`.
@@ -166,7 +177,8 @@ namespace graphFlow
                 << " peakInflightChunks=" << stats.peakInflightChunks
                 << " peakEventSlotsInUse=" << stats.peakEventSlotsInUse << " sourceParticles=" << stats.sourceParticles
                 << " sourceGenerated=" << stats.sourceGenerated << " sourceSunk=" << stats.sourceSunk
-                << " sourceLiveParticles=" << stats.sourceLiveParticles << " chunkCapacity=" << stats.chunkCapacity;
+                << " sourceLiveParticles=" << stats.sourceLiveParticles << " chunkCapacity=" << stats.chunkCapacity
+                << " chunkLaunches=" << stats.chunkLaunches << " chunkLimit=" << stats.chunkLimitName;
         return message.str();
     }
 
@@ -387,6 +399,10 @@ namespace graphFlow
          * preserves the historical one-batch-per-node scheduling. A depth above one replicates the
          * same hooks over every lane, so a caller that passes stateful hooks must use the factory
          * overload and supply one independent hook set per lane.
+         *
+         * `chunkQueueDepth` above zero gives the node a pool of that many non-blocking queues for
+         * the per-chunk transform schedule; lane `i` enqueues on queue `i % chunkQueueDepth`. Zero
+         * keeps the single node queue.
          */
         std::uint32_t addNode(
             std::string name,
@@ -394,7 +410,8 @@ namespace graphFlow
             std::uint32_t maxBins,
             std::vector<int> route,
             Hooks hooks,
-            std::uint32_t depth = 1u)
+            std::uint32_t depth = 1u,
+            std::uint32_t chunkQueueDepth = 0u)
         {
             return addNode(
                 std::move(name),
@@ -402,7 +419,8 @@ namespace graphFlow
                 maxBins,
                 std::move(route),
                 HooksFactory{[hooks = std::move(hooks)](std::uint32_t) { return hooks; }},
-                depth);
+                depth,
+                chunkQueueDepth);
         }
 
         /** Register a node and create one independent hook set per submitted-depth lane. */
@@ -412,7 +430,8 @@ namespace graphFlow
             std::uint32_t maxBins,
             std::vector<int> route,
             HooksFactory makeHooks,
-            std::uint32_t depth)
+            std::uint32_t depth,
+            std::uint32_t chunkQueueDepth = 0u)
         {
             if(role == NodeRole::sink)
             {
@@ -440,6 +459,12 @@ namespace graphFlow
                 laneHooks.push_back(makeHooks(lane));
                 laneEvents.push_back(m_device.makeEvent());
             }
+            // Per-chunk queue pool. Allocated only when the caller asks for it, so the off-path
+            // node owns exactly the one queue it always owned.
+            std::vector<Queue> chunkQueues;
+            chunkQueues.reserve(chunkQueueDepth);
+            for(std::uint32_t queue = 0u; queue < chunkQueueDepth; ++queue)
+                chunkQueues.push_back(m_device.makeQueue(alpaka::queueKind::nonBlocking));
             auto node = std::make_unique<Node>(
                 std::move(name),
                 role,
@@ -448,7 +473,8 @@ namespace graphFlow
                 std::move(laneHooks),
                 std::move(laneEvents),
                 m_device.makeQueue(alpaka::queueKind::nonBlocking),
-                static_cast<std::uint32_t>(m_nodes.size()));
+                static_cast<std::uint32_t>(m_nodes.size()),
+                std::move(chunkQueues));
             m_nodes.push_back(std::move(node));
             return static_cast<std::uint32_t>(m_nodes.size() - 1u);
         }
@@ -478,6 +504,30 @@ namespace graphFlow
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow: batchChunks must be non-zero"};
             m_batchChunks = batchChunks;
+        }
+
+        /** Select the transform launch schedule and validate the per-chunk queue width.
+         *
+         * The default `ChunkKernelSchedule::off` keeps the historical batch-wide dispatch and the
+         * single queue of every node. With `perChunk`, a transform node dispatches one ready chunk
+         * per lane on one of the queues that `addNode(..., chunkQueueDepth)` created for it, so
+         * chunks run and retire independently. `chunkQueueDepth` is re-validated here so a zero
+         * width fails at configuration time. `limitName` is the clamp reported by the per-chunk
+         * launch-size policy and is copied into `SchedulerStats::chunkLimitName`.
+         *
+         * The setting is scheduling-only: it never changes the storage chunk capacity, the pool
+         * size or the batch-wide path.
+         */
+        void setChunkSchedule(
+            ChunkKernelSchedule schedule,
+            std::uint32_t chunkQueueDepth = 1u,
+            std::string limitName = {})
+        {
+            if(chunkQueueDepth == 0u)
+                throw std::invalid_argument{"graphFlow: chunkQueueDepth must be non-zero"};
+            m_chunkSchedule = schedule;
+            m_chunkQueueDepth = chunkQueueDepth;
+            m_chunkLimitName = limitName.empty() ? std::string{"none"} : std::move(limitName);
         }
 
         /** Maximum quiet time before the scheduler reports a stall instead of spinning forever. */
@@ -571,7 +621,7 @@ namespace graphFlow
                             Batch const batch = *lane.inflight;
 
                             std::uint32_t allocated = 0u;
-                            bool const moreWork = lane.hooks.advance(node.queue, batch, allocated);
+                            bool const moreWork = lane.hooks.advance(laneQueue(node, lane), batch, allocated);
                             if(allocated != 0u)
                             {
                                 if(allocated > lane.reserved)
@@ -742,8 +792,16 @@ namespace graphFlow
                         // after the launch and the event enqueue succeeded, so a throwing hook
                         // cannot leave an un-armed batch in the slot or let the same chunk be owned
                         // by `ready` and `inflight` at the same time.
+                        //
+                        // On the per-chunk schedule a transform lane takes exactly one chunk: the
+                        // lane is the chunk's retirement slot and dispatches on its own queue, so
+                        // the reserve below is the credit of that single chunk.
                         bool const batchable = node.role == NodeRole::transform;
-                        std::size_t wanted = batchable ? std::min<std::size_t>(m_batchChunks, node.ready.size()) : 1u;
+                        bool const chunked = batchable && m_chunkSchedule == ChunkKernelSchedule::perChunk
+                                             && !node.chunkQueues.empty();
+                        std::size_t wanted
+                            = batchable ? (chunked ? 1u : std::min<std::size_t>(m_batchChunks, node.ready.size()))
+                                        : 1u;
                         std::uint32_t reserve = 0u;
                         if(batchable)
                         {
@@ -794,8 +852,12 @@ namespace graphFlow
                                 }
                                 lane->leaseHeld = true;
                             }
-                            lane->hooks.launch(node.queue, batch);
+                            if(chunked && m_failureHook)
+                                m_failureHook(FailurePoint::chunkLaunch, node.id, node.chunkLaunches + 1u);
+                            lane->hooks.launch(laneQueue(node, *lane), batch);
                             enqueueEvent(node, *lane);
+                            if(chunked)
+                                ++node.chunkLaunches;
                         }
                         catch(...)
                         {
@@ -804,7 +866,7 @@ namespace graphFlow
                             // in the middle of the loop cannot strand a lease.
                             try
                             {
-                                alpaka::onHost::wait(node.queue);
+                                alpaka::onHost::wait(laneQueue(node, *lane));
                             }
                             catch(...)
                             {
@@ -916,10 +978,20 @@ namespace graphFlow
                 for(Lane& lane : nodePtr->lanes)
                 {
                     if(lane.armed)
-                        nodePtr->queue.waitFor(lane.event);
+                        laneQueue(*nodePtr, lane).waitFor(lane.event);
                     lane.armed = false;
                 }
-                alpaka::onHost::wait(nodePtr->queue);
+                if(nodePtr->chunkQueues.empty())
+                {
+                    alpaka::onHost::wait(nodePtr->queue);
+                }
+                else
+                {
+                    // Every per-chunk queue is waited separately: a chunk event only orders the
+                    // queue it was enqueued on.
+                    for(Queue& queue : nodePtr->chunkQueues)
+                        alpaka::onHost::wait(queue);
+                }
             }
             if(m_storage.freeCount() != m_storage.numChunks())
                 throw std::logic_error{"graphFlow: chunk leak after the run"};
@@ -934,6 +1006,13 @@ namespace graphFlow
             stats.sourceSunk = sunkParticles;
             stats.sourceLiveParticles = generated - sunkParticles;
             stats.chunkCapacity = m_storage.chunkCapacity();
+            // Per-chunk kernels are counted at their dispatch; the off path leaves the counter at
+            // zero and keeps its aggregate line except for these two new keys.
+            std::uint64_t chunkLaunches = 0u;
+            for(auto const& nodePtr : m_nodes)
+                chunkLaunches += nodePtr->chunkLaunches;
+            stats.chunkLaunches = chunkLaunches;
+            stats.chunkLimitName = m_chunkLimitName;
             return stats;
         }
 
@@ -948,10 +1027,18 @@ namespace graphFlow
         }
 
     private:
-        /** One submitted-depth slot of a node: its own hooks, event and batch ownership. */
+        /** One submitted-depth slot of a node: its own hooks, event and batch ownership.
+         *
+         * On the per-chunk transform schedule one lane owns exactly one input chunk, so the lane is
+         * also the per-chunk retirement slot: its event, its lease, its output credit and its queue
+         * may be retired independently of every other chunk of the same batch.
+         */
         struct Lane
         {
-            Lane(Hooks laneHooks, Event laneEvent) : hooks{std::move(laneHooks)}, event{std::move(laneEvent)}
+            Lane(Hooks laneHooks, Event laneEvent, std::uint32_t laneQueueIndex = 0u)
+                : hooks{std::move(laneHooks)}
+                , event{std::move(laneEvent)}
+                , queueIndex{laneQueueIndex}
             {
             }
 
@@ -962,6 +1049,8 @@ namespace graphFlow
             bool leaseHeld = false;
             bool inputOwned = false;
             std::uint32_t reserved = 0u;
+            /** Index into `Node::chunkQueues`; ignored when the node has no queue pool. */
+            std::uint32_t queueIndex = 0u;
         };
 
         struct Node
@@ -974,19 +1063,25 @@ namespace graphFlow
                 std::vector<Hooks> nodeHooks,
                 std::vector<Event> nodeEvents,
                 Queue nodeQueue,
-                std::uint32_t nodeId)
+                std::uint32_t nodeId,
+                std::vector<Queue> nodeChunkQueues = {})
                 : name{std::move(nodeName)}
                 , role{nodeRole}
                 , maxBins{nodeBins}
                 , route{std::move(nodeRoute)}
                 , queue{std::move(nodeQueue)}
                 , id{nodeId}
+                , chunkQueues{std::move(nodeChunkQueues)}
             {
                 if(nodeHooks.empty() || nodeHooks.size() != nodeEvents.size())
                     throw std::logic_error{"graphFlow: invalid node depth"};
                 lanes.reserve(nodeHooks.size());
                 for(std::size_t i = 0u; i < nodeHooks.size(); ++i)
-                    lanes.push_back(Lane{std::move(nodeHooks[i]), std::move(nodeEvents[i])});
+                    lanes.push_back(
+                        Lane{
+                            std::move(nodeHooks[i]),
+                            std::move(nodeEvents[i]),
+                            chunkQueues.empty() ? 0u : static_cast<std::uint32_t>(i % chunkQueues.size())});
             }
 
             /** First lane that does not own a batch, or null when the depth is exhausted. */
@@ -1010,7 +1105,19 @@ namespace graphFlow
             std::vector<Lane> lanes;
             std::uint32_t completedChunks = 0u;
             std::uint32_t eventEnqueues = 0u;
+            /** Enqueued per-chunk transform kernels; zero on the batch-wide schedule. */
+            std::uint64_t chunkLaunches = 0u;
+            /** Per-chunk transform queues; empty keeps every lane on `queue`. */
+            std::vector<Queue> chunkQueues;
         };
+
+        /** Queue of a lane: its pool queue on the per-chunk schedule, else the node queue. */
+        [[nodiscard]] static Queue& laneQueue(Node& node, Lane& lane) noexcept
+        {
+            if(node.chunkQueues.empty())
+                return node.queue;
+            return node.chunkQueues[lane.queueIndex];
+        }
 
         /** Adaptive output-chunk reserve of a transform batch with `particles` input particles.
          *
@@ -1059,13 +1166,14 @@ namespace graphFlow
                     + std::to_string(published) + " of " + std::to_string(consumed) + " input particles"};
         }
 
-        /** Enqueue one lane's completion event, with an optional injected failure for tests. */
+        /** Enqueue one lane's completion event on the lane's queue, with an optional injected
+         * failure for tests. */
         void enqueueEvent(Node& node, Lane& lane)
         {
             ++node.eventEnqueues;
             if(m_failureHook)
                 m_failureHook(FailurePoint::eventEnqueue, node.id, node.eventEnqueues);
-            node.queue.enqueue(lane.event);
+            laneQueue(node, lane).enqueue(lane.event);
             lane.armed = true;
         }
 
@@ -1216,11 +1324,23 @@ namespace graphFlow
                 for(Lane& lane : node.lanes)
                 {
                     anyInflight = anyInflight || lane.inflight.has_value();
+                    // Each armed lane is waited on the queue that carries its event. With a
+                    // per-chunk queue pool that is the lane's own queue, never the node queue.
                     if(lane.inflight && lane.armed)
-                        node.queue.waitFor(lane.event);
+                        laneQueue(node, lane).waitFor(lane.event);
                 }
                 if(anyInflight)
-                    alpaka::onHost::wait(node.queue);
+                {
+                    if(node.chunkQueues.empty())
+                    {
+                        alpaka::onHost::wait(node.queue);
+                    }
+                    else
+                    {
+                        for(Queue& queue : node.chunkQueues)
+                            alpaka::onHost::wait(queue);
+                    }
+                }
                 for(Lane& lane : node.lanes)
                 {
                     if(!lane.inflight)
@@ -1268,6 +1388,10 @@ namespace graphFlow
         std::uint32_t m_sourceLiveParticles = 0u;
         std::size_t m_roundRobin = 0u;
         std::uint32_t m_batchChunks = 1u;
+        ChunkKernelSchedule m_chunkSchedule = ChunkKernelSchedule::off;
+        /** Configured width of the per-chunk pool; the per-node width is fixed in `addNode`. */
+        std::uint32_t m_chunkQueueDepth = 1u;
+        std::string m_chunkLimitName = "none";
         std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
         std::function<void(std::string const&)> m_stallDetailCallback;
         std::chrono::milliseconds m_stallTimeout{120000};

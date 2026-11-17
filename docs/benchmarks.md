@@ -215,9 +215,10 @@ CPU/CUDA histogram equality, `C=128`, `P=1024`, `Q=1`, seed 42:
 | 1,000,000 | 149.44 | 17.66 | 1,000,000 | yes |
 
 fwk394, CPU, `C=1024`, `P=512`, `Q=1`: `N=1,000,000` took 52.75 s
-(~1.90e4 particles/s), histogram sum 1,000,000. The fwk394 CUDA sm_75 build
-fails with an nvcc 12.5 internal compiler error, so no fwk394 CUDA run is
-claimed.
+(~1.90e4 particles/s), histogram sum 1,000,000. That CPU run predates the
+current CUDA suite on this host, so no wall-time comparison is claimed; the
+per-chunk transform schedule section below records the fwk394 RTX 2080 Ti
+`sm_75` measurements.
 
 Payload budget against the measured 3,171,090,432 B A30 budget:
 
@@ -313,5 +314,58 @@ which reports `sharing=unknown`, so they are baselines, not acceptance numbers.
   bandwidth. The P07b section adds end-to-end kernel-axis numbers for scatter,
   dense/hash and the four distributions; the P03 CPU kernel timings remain the
   only isolated-kernel provenance.
-- No CI job runs these benchmarks. The frozen target is implemented in
-  `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.
+ - No CI job runs these benchmarks. The frozen target is implemented in
+   `tools/bench_matrix.sh` and passes on the P07 run; wiring it into CI is open.
+
+## Per-chunk transform schedule (photon scattering)
+
+Provenance: code `c7ff8e21e509733c17c90968f8d6656dce03466c`
+(branch `issue-83-per-chunk-schedule`), one process per arm, interleaved
+repetitions, median across repetitions. Harness, identical for both arms and
+every card:
+
+```sh
+./graphFlow_photon_scattering --backend cuda --photons 4000000 --thickness 4 \
+  --sigma-s 0.5 --sigma-a 0.05 --mode isotropic --max-scatters 32 --seed 7 \
+  --batch-chunks 8 [--chunk-kernel-schedule perChunk --chunk-queue-depth 4]
+```
+
+N=4M photons, Q=8, seed 7, Release. The off arm is the default schedule; the
+perChunk arm uses queue depth 4. The physics output is byte-identical across
+arms: md5 `9cbb15ab113a85ff23f1fa406dc0eda8` in every accepted repetition on
+every card.
+
+| Card | off wall s | perChunk (depth 4) wall s | delta |
+| --- | ---: | ---: | ---: |
+| A30 `sm_80` | 1.745 | 1.655 | -4.61% |
+| RTX 2080 Ti `sm_75` | 1.5452 | 1.4072 | -8.90% |
+| Quadro GV100 `sm_70` | 1.2698 | 1.0910 | -13.67% |
+
+The off path against the unmodified binary in the same window is +0.37% on the
+A30, -0.62% on the RTX 2080 Ti and -0.31% on the GV100, so the off path shows
+no regression within noise.
+
+Mechanism, from a controlled constant-threads-per-block experiment on hal A30
+(code `c7ff8e21e509733c17c90968f8d6656dce03466c`, experiment-only override of
+the threads-per-block setting, otherwise identical harness and flags): the
+gain is the per-chunk dispatch itself. The batch-wide transform derives its
+grid from the particle count while assigning one block per chunk, so with two
+particles per chunk at most about 2 of up to 66 blocks do any work; a
+per-chunk launch spreads each chunk across up to 33 blocks. At constant 128
+threads per block, transform GPU time falls from 281.8 ms to 73.6 ms, and the
+paired decomposition of the same workload (12 interleaved accepted reps,
+storage C=4224 P=8448 T=128 in every run, physics md5
+`9cbb15ab113a85ff23f1fa406dc0eda8` in all 84 accepted runs) attributes
+-91.0 ms (-5.19%, bootstrap 95% CI [-5.85, -4.93]) to the dispatch alone and
+the shipped 512-thread default to only +12.0 ms (+0.73%, CI [0.00, +1.30],
+512 faster in 3 of 12 paired reps). Active-CTA-per-SM counters appear
+identical across variants, which is why that metric must not be used to judge
+this change. The per-chunk path multiplies the sink and partition launches,
+costing +19.3 ms and +14.4 ms on this card and workload, which returns 16-22%
+of the transform saving. The 512-thread per-chunk default was not tuned and
+128 threads per block measured about 0.7% faster, with the confidence
+interval touching zero, so the default was left unchanged.
+The whole-process wall time includes a 0.31-0.34 s start-up floor on fwk394,
+so the steady-phase improvement is larger than the wall percentage. The
+magnitudes are card-specific and must not be extrapolated, and the queue depth
+was not tuned. No H100 was used.

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "graphFlow/core/BinPath.hpp"
+#include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/PoolBudget.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
 
@@ -55,6 +56,17 @@ namespace graphFlow
         std::uint64_t numParticles = 0u; // N
         std::uint32_t batchChunks = 1u; // Q, ready chunks per transform batch
         std::uint32_t frameCap = 8u; // blocks per multiprocessor cap of the frame launch
+        /** Transform launch schedule; the default keeps the batch-wide transform launch.
+         *
+         * `perChunk` issues one kernel launch per input chunk and sizes the frames from that
+         * chunk's fill. It changes launch geometry only: `chunkCapacity`, the pool size and the
+         * output-position planning stay derived from the device policy.
+         */
+        ChunkKernelSchedule chunkKernelSchedule = ChunkKernelSchedule::off;
+        /** Chunk queues a per-chunk transform node owns; one keeps a single serial queue. */
+        std::uint32_t chunkQueueDepth = 1u;
+        /** Per-chunk latency cap in microseconds fed to the chunk-size policy; zero means no cap. */
+        std::uint32_t chunkLatencyCapUs = 0u;
         /** Bin-table implementation of every partition node in this run.
          *
          * `automatic` keeps the historical dense behaviour for widths up to `denseBinLimit` and
@@ -169,6 +181,9 @@ namespace graphFlow
                 throw std::invalid_argument{"graphFlow::Config: tileSize must be non-zero"};
             if(batchChunks == 0u)
                 throw std::invalid_argument{"graphFlow::Config: batchChunks must be non-zero"};
+            if(chunkKernelSchedule == ChunkKernelSchedule::perChunk && chunkQueueDepth == 0u)
+                throw std::invalid_argument{
+                    "graphFlow::Config: chunkQueueDepth must be non-zero when chunkKernelSchedule is perChunk"};
             if(frameCap == 0u)
                 throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
             if(maxBins == 0u)
