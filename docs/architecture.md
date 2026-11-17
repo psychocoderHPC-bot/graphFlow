@@ -139,8 +139,9 @@ transitions without reading them. Phase 1 reads exactly one quantity from the
 registry: `liveWorkChunks() = reserved + ready + inflight`, which gates opt-in
 source admission. That count excludes the transient `retired` phase, so a chunk
 the sink has already consumed cannot make the gate over-admit. No other
-scheduling decision reads a record. The constructor seeds every record from the pool's current
-generations, and the run-start reset re-seeds in place without allocating.
+scheduling decision reads a record. The constructor seeds every record
+from the pool's current generations, and the run-start reset re-seeds in
+place without allocating.
 Every mutator is `noexcept`: an invariant violation records a sticky fault and
 leaves the pool untouched, and the run continues. `validateChunkRegistry()`
 reports that fault first, then enforces exactly one phase per index, a live
