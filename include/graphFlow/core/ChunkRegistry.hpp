@@ -21,9 +21,11 @@ namespace graphFlow
 
     /** Host-visible pipeline state of one chunk incarnation.
      *
-     * The registry is observability only. `GraphRunner` updates it at the chunk transitions that
-     * already exist and never reads it to make a scheduling decision. Phase 1 of the chunk
-     * pipeline redesign is the first consumer that reads the live-chunk count from the registry.
+     * In phase 0 the registry is observability only: `GraphRunner` updates it at the chunk
+     * transitions that already exist and reads it for diagnostics, never for a scheduling
+     * decision. Phase 1 of the chunk pipeline redesign adds exactly one scheduling read,
+     * `liveWorkChunks()`, which gates opt-in source admission; no other scheduling decision reads
+     * a record.
      */
     enum class ChunkPhase : std::uint8_t
     {

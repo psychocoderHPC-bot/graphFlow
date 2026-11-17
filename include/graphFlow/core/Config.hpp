@@ -208,8 +208,8 @@ namespace graphFlow
                     throw std::invalid_argument{
                         "graphFlow::Config: occupancyTargetChunks=" + std::to_string(occupancyTargetChunks)
                         + " exceeds the reachable occupancy " + std::to_string(chunks) + " (numChunks) - "
-                        + std::to_string(reserve) + " (poolOutputReserveChunks) = "
-                        + std::to_string(reserve < chunks ? chunks - reserve : 0u)};
+                        + std::to_string(reserve)
+                        + " (poolOutputReserveChunks) = " + std::to_string(reserve < chunks ? chunks - reserve : 0u)};
             }
             if(maxBins == 0u)
                 throw std::invalid_argument{"graphFlow::Config: maxBins must be non-zero"};

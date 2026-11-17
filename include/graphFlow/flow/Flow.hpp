@@ -639,8 +639,7 @@ namespace graphFlow
             config.chunkLatencyCapUs = m_tuning.chunkLatencyCapUs.value_or(config.chunkLatencyCapUs);
             config.chunkCapacity = m_tuning.chunkCapacity.value_or(config.chunkCapacity);
             config.liveParticles = m_tuning.liveParticles.value_or(config.liveParticles);
-            config.occupancyTargetChunks
-                = m_tuning.occupancyTargetChunks.value_or(config.occupancyTargetChunks);
+            config.occupancyTargetChunks = m_tuning.occupancyTargetChunks.value_or(config.occupancyTargetChunks);
             config.tileSize = m_tuning.tileSize.value_or(config.tileSize);
             config.numChunks = m_tuning.numChunks.value_or(config.numChunks);
             config.poolPayloadBudgetBytes = m_tuning.poolPayloadBudgetBytes.value_or(config.poolPayloadBudgetBytes);
