@@ -264,14 +264,26 @@ TEST_CASE("occupancy target bounds live chunk work and the run completes", "[int
 
     CHECK(trace.stats.occupancyTargetChunks == target);
     CHECK(trace.stats.peakLiveWorkChunks <= target);
+    // The gate engaged, evidenced by the admission-time live-work record and not by the refill
+    // counter. Each sample is the registry live work right after that admission, so it is the
+    // value the gate compared against the target plus the chunk just admitted: inside the bound
+    // means `<= target` here. Eight chunks against a target of three cannot all be live at once,
+    // so the source had to wait for retirements, and a removed gate would admit past the bound and
+    // fail the loop below. Both facts are invariants of the admission policy and independent of
+    // build type and scheduler interleaving. `stats.refills` counts admissions taken while the
+    // refill flag happened to be pending, which depends on interleaving, so it is reported only.
     REQUIRE(trace.liveWorkAtAdmission.size() == trace.fills.size());
+    CHECK(
+        std::any_of(
+            trace.liveWorkAtAdmission.begin(),
+            trace.liveWorkAtAdmission.end(),
+            [](std::uint32_t const liveWork) { return liveWork < target; }));
     for(std::uint32_t const liveWork : trace.liveWorkAtAdmission)
         CHECK(liveWork <= target);
     // Scheduling changed but the admitted particle stream did not.
     CHECK(trace.fills == expectedFills(1024u, 128u, 1024u));
     CHECK(trace.stats.sourceSunk == 1024u);
     CHECK(trace.stats.liveWorkChunks == 0u);
-    CHECK(trace.stats.refills > 0u);
     CHECK(trace.registry.faults == 0u);
     CHECK(trace.registry.acquisitions == trace.registry.releases);
 }
@@ -287,7 +299,9 @@ TEST_CASE("occupancy target stalls the source until a sink retirement refills it
     CHECK(trace.admitsBeforeFirstRetirement == target);
     CHECK(trace.retirements > 0u);
     CHECK(trace.fills.size() > target); // the source resumed after the backpressure
-    CHECK(trace.stats.refills > 0u);
+    // Engagement is already proven by the counts above: exactly `target` admissions before the
+    // first retirement, more admissions afterwards. `stats.refills` is timing dependent and is
+    // deliberately not asserted.
     REQUIRE(trace.liveWorkAtAdmission.size() == trace.fills.size());
     for(std::uint32_t const liveWork : trace.liveWorkAtAdmission)
         CHECK(liveWork <= target);
