@@ -397,12 +397,18 @@ The CLI resolves the policy in `examples/particle_feedback/Cli.hpp`. An absent
 explicit value is passed through as an override. An explicit `P` is rejected
 when its payload exceeds the budget; only the auto-derived default `P` is
 clamped. The policy is unit-tested with CPU properties and accelerator-shaped
-public fields. The accelerator-shaped test pins `C=8192`, `P=16384`, `T=128` on
-a nominal 24 GiB device. A device with the ECC-reduced A30 usable memory
-(`3,171,090,432 B` at a 1/8 budget) selects `P=16128`: an explicit `C=8192`
-with auto P also selects `P=16128`, while the default path budget-caps `C` to
-`8064` with the same P. Explicit `P=16384` and `P=65536` are over budget and are
-rejected.
+public fields. A direct `makeDevicePolicy` call keeps the historical factor
+`2*C`, so the accelerator-shaped test pins `C=8192`, `P=16384`, `T=128` on a
+nominal 24 GiB device. The application path in `Flow` selects the measured
+accelerator ratio `8*C`; on the ECC-reduced A30 usable memory
+(`3,171,090,432 B` at a 1/8 budget) that derives `C=2048`, `P=16384`. A larger
+`C` would exceed the budget at the same ratio, so the policy rounds down to the
+tile boundary. The host keeps `2*C`. An explicit sub-tile chunk (for example
+`C=1`) also keeps `2*C`, because the deep ratio is only meaningful once a chunk
+spans a tile and it exposes a reservation-accounting edge case below that.
+Explicit `P` overrides are still exact and
+are rejected when over budget; an explicit `P=16384` with `C=8192` remains over
+the A30 budget.
 
 ## Current scheduler limits
 

@@ -518,6 +518,37 @@ it assumed the arena need only cover the credit bound, whereas the live
 output-range peak, measured between 129 and 214 depending on configuration,
 dominates. Credit bounds reserved ranges rather than live ranges.
 
+## Accelerator live-particle ratio (main `4700ccf`)
+
+Provenance: the A30 was measured on `hal`; the RTX 2080 Ti and Quadro GV100
+were measured on `fwk394`. Workload: `examples/photon_scattering`, CUDA,
+`N=4,000,000`, Q=8, seed 7, default batch-wide transform schedule, no
+`--output-dir`. Each arm had one warm-up and then 10 measured interleaved
+rounds with alternating order. The A30 and RTX arms use the same 88-byte photon
+slot; the GV100 binary is `sm_70`, the RTX and A30 binaries are `sm_75` and
+`sm_80`.
+
+The old default ratio `P=2*C` spends the payload budget on a larger `C` and
+admits only 4-5 chunks in flight. Holding the budget fixed and deriving
+`P=8*C` shrinks `C` to the next tile boundary and raises the in-flight chunk
+depth from 4-5 to 10-11.
+
+| Device | Old `C/P` | New `C/P` | Old median | New median | Delta | 95% CI |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| A30 | 4224 / 8448 | 2048 / 16384 | 1615.3 ms | 1272.8 ms | -21.10% | -345.6..-336.0 ms |
+| RTX 2080 Ti | 2816 / 5632 | 1408 / 11264 | 1594.5 ms | 1207.0 ms | -24.40% | -403.4..-381.2 ms |
+| Quadro GV100 | 4224 / 8448 | 2112 / 16896 | 1429.4 ms | 1118.6 ms | -21.72% | -325.1..-297.7 ms |
+
+The A30 result was confirmed by a tile-aligned control: `C=2176`, `P=16384`
+changed the median by 0.64% relative to `C=2112`, `P=16896`, and both use the
+same 17-block grid, so the gain comes from depth rather than a ragged last tile.
+The policy point `C=2048`, `P=16384` is 0.15% from the aligned arm, not
+significant, and uses 2.95 GB of the 3.17 GB budget. Physics is identical
+within each host: A30 md5 `9cbb15ab113a85ff23f1fa406dc0eda8`, fwk394 md5
+`0b5a71636665cc30d1cf954984463ff2`, `# inconsistent,0` in every run. The host
+backend keeps the historical ratio because its scheduler is not limited by
+device occupancy.
+
 ## Measurement method, chunk pipeline runs
 
 Provenance: measured on the exclusive 4x V100-SXM2-32GB node. These figures are

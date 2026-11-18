@@ -274,8 +274,8 @@ TEST_CASE("CLI selects policy defaults when overrides are absent", "[cli]")
 TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]")
 {
     // The A30 reports a 1/8 policy budget of 3,171,090,432 B after ECC instead of exactly
-    // 3 GiB. The documented default keeps P=2*C=16384 just out of reach; the default must clamp
-    // P and still build a valid pool.
+    // 3 GiB. The accelerator default P=8*C rounds C down to 3968 so that P=31744 fits the
+    // budget; a larger C at the same ratio would be rejected.
     alpaka::onHost::DeviceProperties properties = cpuProperties();
     properties.warpSize = 32u;
     properties.maxThreadsPerBlock = 1024u;
@@ -287,10 +287,9 @@ TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]"
     graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(options, properties);
 
     CHECK(resolved.policy.memoryBudgetBytes == 3'171'090'432ull);
-    CHECK(resolved.policy.chunkCapacity > 0u);
+    CHECK(resolved.policy.chunkCapacity == 3968u);
     CHECK(resolved.policy.chunkCapacity % resolved.policy.tileSize == 0u);
-    CHECK(resolved.policy.liveParticles < 16384u);
-    CHECK(resolved.policy.liveParticles == 16128u);
+    CHECK(resolved.policy.liveParticles == 31744u);
     CHECK_FALSE(resolved.policy.liveParticlesExplicit);
     CHECK_FALSE(resolved.liveParticlesExplicit);
     CHECK(

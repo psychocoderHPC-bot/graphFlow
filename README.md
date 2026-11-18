@@ -308,8 +308,12 @@ Generate -> Transform -> Sink pipeline used for the P07b kernel matrix; it adds
 on the default feedback workload. The kernel workload stores the chosen bin in
 the sink, so its `weight,count` histogram is the exact per-bin occupancy and
 the counts sum to `N`. The policy chooses `C` from the wave
-estimate, launch limits, and run size, then uses `P = min(N, 2*C)` before budget
-clamping. The auto-derived `P` is clamped to the budget, rounded down to a
+estimate, launch limits, and run size. On accelerators `Flow` uses
+`P = min(N, 8*C)` before budget clamping; the host keeps `P = min(N, 2*C)`.
+The ratio of eight raises the in-flight chunk depth without exceeding the
+payload budget and is 21-24% faster on the measured A30, RTX 2080 Ti and
+Quadro GV100. It applies to chunks at least one tile wide; an explicit sub-tile
+chunk keeps the historical `2*C` ratio. The auto-derived `P` is clamped to the budget, rounded down to a
 whole tile when possible; the default path also caps `C` to keep the fixed host
 budget small. An explicit `P` is kept exactly and rejected when `P*C` exceeds
 the payload budget. `N = 0` prints the header only. Rows are
@@ -539,7 +543,8 @@ not cross-queue overlap.
 ## Working set, budget, and ownership
 
 - `P` is the source-admission capacity. When the CLI derives it, the policy
-  uses `P = min(N, 2*C)` before budget clamping. A source chunk is admitted only
+  uses `P = min(N, 8*C)` on accelerators and `P = min(N, 2*C)` on the host
+  before budget clamping. A source chunk is admitted only
   while fewer than `P` particles are between source and sink, and its fill is
   capped at `P - live`.
 - `Flow` derives the pool as `P` data chunks plus one output bound per

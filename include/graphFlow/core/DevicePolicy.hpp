@@ -42,6 +42,16 @@ namespace graphFlow
      */
     inline constexpr std::uint64_t acceleratorMemoryBudgetCapBytes = 3ull * 1024ull * 1024ull * 1024ull;
 
+    /** Measured default P/C ratio on accelerators.
+     *
+     * The old default `P = 2*C` spends the payload budget on a larger C and admits only four or
+     * five chunks in flight. A ratio of eight keeps the same payload footprint after the budget
+     * derivation shrinks C and raises the in-flight chunk depth to ten or eleven. On the A30 this is 21.1% faster, on
+     * the RTX 2080 Ti 24.4% and on the Quadro GV100 21.7% for the 4M-photon workload, with identical physics. The host
+     * backend keeps the historical ratio because its scheduler is not limited by device occupancy.
+     */
+    inline constexpr std::uint32_t acceleratorLiveParticlesPerChunk = 8u;
+
     /** Bytes per entry of the per-tile shared-memory hash table.
      *
      * `{uint32 key, uint32 count, uint32 base, uint32 localRank}`; the default hash path sizes the
@@ -61,7 +71,11 @@ namespace graphFlow
         std::uint32_t logicalTileWidth = 128u;
         /** Configured upper bound for the chunk capacity C. */
         std::uint32_t maxChunkCapacity = 8192u;
-        /** Default P as a multiple of C (`P = min(numParticles, factor * C)` before clamping). */
+        /** Default P as a multiple of C (`P = min(numParticles, factor * C)` before clamping).
+         *
+         * Direct callers keep the historical factor of two. `Flow` selects
+         * `acceleratorLiveParticlesPerChunk` on accelerators and keeps this value on the host.
+         */
         std::uint32_t liveParticlesPerChunk = 2u;
         /** Explicit payload budget in bytes; zero derives it from the device properties. */
         std::uint64_t memoryBudgetBytes = 0u;
