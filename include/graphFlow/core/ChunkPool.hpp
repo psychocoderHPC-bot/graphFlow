@@ -46,6 +46,8 @@ namespace graphFlow
             alpaka::onHost::alloc<PoolIdValue>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
         using U32View = ALPAKA_TYPEOF(
             alpaka::onHost::alloc<PoolU32Value>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using BaseTableView = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
         ChunkPool(
             TDevice device,
@@ -60,6 +62,12 @@ namespace graphFlow
             , m_weights{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_visits{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
             , m_binIds{alpaka::onHost::alloc<PoolU32Value>(device, alpaka::Vec{m_slots})}
+            , m_baseTable{alpaka::onHost::allocMapped<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(m_numChunks)})}
+            , m_fillTable{alpaka::onHost::allocMapped<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(m_numChunks)})}
             , m_generations(m_numChunks, 0u)
             , m_leases(m_numChunks, 0u)
         {
@@ -67,6 +75,14 @@ namespace graphFlow
             // Deterministic free list order; the last entry is handed out first.
             for(std::uint32_t i = 0u; i < m_numChunks; ++i)
                 m_free.push_back(m_numChunks - 1u - i);
+            // The fixed pool publishes the closed-form rows the kernels index instead of
+            // recomputing `index * chunkCapacity`; nothing about the pool itself changes.
+            for(std::uint32_t index = 0u; index < m_numChunks; ++index)
+            {
+                m_baseTable.data()[index]
+                    = static_cast<std::uint32_t>(static_cast<std::uint64_t>(index) * m_chunkCapacity);
+                m_fillTable.data()[index] = m_chunkCapacity;
+            }
         }
 
         [[nodiscard]] std::uint32_t numChunks() const
@@ -83,6 +99,28 @@ namespace graphFlow
         [[nodiscard]] std::uint64_t payloadBytes() const
         {
             return m_slots * payloadBytesPerSlot;
+        }
+
+        /** Total payload slots (`numChunks * chunkCapacity`). */
+        [[nodiscard]] std::uint64_t slotCount() const
+        {
+            return m_slots;
+        }
+
+        /** Mapped host view of the per-chunk base table, indexed by chunk index.
+         *
+         * The fixed pool's rows are the immutable `index * chunkCapacity`, so the kernel base
+         * table has the same meaning it has for the slot-arena storages.
+         */
+        [[nodiscard]] BaseTableView const& baseTableHost() const
+        {
+            return m_baseTable;
+        }
+
+        /** Mapped host view of the per-chunk fill table; every fixed row is `chunkCapacity`. */
+        [[nodiscard]] BaseTableView const& fillTableHost() const
+        {
+            return m_fillTable;
         }
 
         [[nodiscard]] std::uint32_t freeCount() const
@@ -323,6 +361,10 @@ namespace graphFlow
         U32View m_weights;
         U32View m_visits;
         U32View m_binIds;
+        /** Mapped host base table; see `baseTableHost()`. */
+        BaseTableView m_baseTable;
+        /** Mapped host fill table; see `fillTableHost()`. */
+        BaseTableView m_fillTable;
         std::vector<std::uint32_t> m_generations;
         std::vector<std::uint32_t> m_leases;
         std::vector<std::uint32_t> m_free;

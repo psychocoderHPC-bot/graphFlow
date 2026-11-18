@@ -161,6 +161,24 @@ namespace graphFlow
             return m_pool.base(handle);
         }
 
+        /** Number of payload slots of the fixed layout. */
+        [[nodiscard]] std::uint64_t slotCount() const
+        {
+            return m_pool.slotCount();
+        }
+
+        /** Mapped host view of the fixed `index * chunkCapacity` base table. */
+        [[nodiscard]] typename Pool::BaseTableView const& baseTableHost() const
+        {
+            return m_pool.baseTableHost();
+        }
+
+        /** Mapped host view of the fixed `chunkCapacity` fill table. */
+        [[nodiscard]] typename Pool::BaseTableView const& fillTableHost() const
+        {
+            return m_pool.fillTableHost();
+        }
+
         [[nodiscard]] std::uint32_t generation(std::uint32_t index) const
         {
             return m_pool.generation(index);
@@ -318,6 +336,9 @@ namespace graphFlow
         using ScratchType = ALPAKA_TYPEOF(
             alpaka::onHost::alloc<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
 
+        using BaseTableView = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+
     public:
         using device_type = TDevice;
         using handle_type = ChunkHandle;
@@ -325,6 +346,8 @@ namespace graphFlow
         using attribute_set = typename AttributeTraits::attribute_set;
         using record_type = Record<TAttrs...>;
         using bin_ids_view_type = ScratchType;
+        /** Mapped host view of the per-chunk base table. */
+        using base_table_view_type = BaseTableView;
 
         /** Accounting bytes of one logical AoS record, including the bin-id scratch word. */
         static constexpr std::uint64_t slotBytes = AttributeTraits::slotBytes;
@@ -343,7 +366,10 @@ namespace graphFlow
             , m_ledger{m_chunks}
             , m_columns{allocateColumn<TAttrs>(device, m_slots)...}
             , m_binIds{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
+            , m_baseTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
+            , m_fillTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
         {
+            initialiseBaseTable();
         }
 
         /** Slot-arena construction: every column holds `options.arenaSlots` elements. */
@@ -358,8 +384,11 @@ namespace graphFlow
             , m_ledger{m_chunks}
             , m_columns{allocateColumn<TAttrs>(device, m_slots)...}
             , m_binIds{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{m_slots})}
+            , m_baseTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
+            , m_fillTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
             , m_arena{std::in_place, m_chunks, m_slots}
         {
+            initialiseBaseTable();
         }
 
         [[nodiscard]] std::uint32_t numChunks() const
@@ -406,6 +435,7 @@ namespace graphFlow
             try
             {
                 m_arena->acquire(handle.index, fill);
+                publishBaseRow(handle.index);
             }
             catch(...)
             {
@@ -426,6 +456,7 @@ namespace graphFlow
             if(m_ledger.leaseCount(handle) != 0u)
                 throw std::logic_error{"graphFlow::SoAStorage: release while a reader lease is outstanding"};
             m_arena->release(handle.index);
+            retractBaseRow(handle.index);
             m_ledger.release(handle);
         }
 
@@ -518,22 +549,31 @@ namespace graphFlow
             return m_arena ? PoolMode::slotArena : PoolMode::fixed;
         }
 
-        /** Debug/test check: the arena's free and live ranges tile the whole arena exactly once. */
+        /** Debug/test check: the arena ranges and the published base table agree.
+         *
+         * The free and live ranges must tile the whole arena exactly once, and every row of the
+         * mapped host base table must match the range the map owns. The second half is what a
+         * missed table update on acquire or release would break, and the kernels read that table.
+         */
         void verifyArena() const
         {
-            if(m_arena)
-                m_arena->verify();
+            if(!m_arena)
+                return;
+            m_arena->verify();
+            verifyBaseTable();
         }
 
-        /** Leak check: no chunk and no slot range may survive a run. */
+        /** Leak check: no chunk, no slot range and no published base row may survive a run. */
         void verifyArenaReleased() const
         {
             if(m_ledger.freeCount() != m_chunks)
                 throw std::logic_error{
                     "graphFlow::SoAStorage: " + std::to_string(m_ledger.liveCount())
                     + " chunk(s) are still live at teardown"};
-            if(m_arena)
-                m_arena->verifyReleased();
+            if(!m_arena)
+                return;
+            m_arena->verifyReleased();
+            verifyBaseTable();
         }
 
         /** Row-major slot index of a live chunk row. */
@@ -557,6 +597,30 @@ namespace graphFlow
         [[nodiscard]] std::uint64_t slotCount() const
         {
             return m_slots;
+        }
+
+        /** Mapped host view of the per-chunk base table, indexed by chunk index.
+         *
+         * The table is the host side of the kernel base table: row `k` is the first slot of chunk
+         * `k`, written when the chunk acquires its range and reset to `0xFFFFFFFF` when it is
+         * released. A stage copies the table to a device mirror on its own queue immediately
+         * before the classify/scatter/transform kernel that indexes it, so a kernel never
+         * recomputes a base from the chunk index. In the fixed layout the rows are the immutable
+         * `index * chunkCapacity`.
+         */
+        [[nodiscard]] BaseTableView const& baseTableHost() const
+        {
+            return m_baseTable;
+        }
+
+        /** Mapped host view of the per-chunk fill table, indexed by chunk index.
+         *
+         * Diagnostic counterpart of `baseTableHost()`: a live slot-arena chunk reports the fill it
+         * committed, a released row is zero and a fixed-layout row is `chunkCapacity`.
+         */
+        [[nodiscard]] BaseTableView const& fillTableHost() const
+        {
+            return m_fillTable;
         }
 
         /** Device column of an attribute. */
@@ -706,6 +770,59 @@ namespace graphFlow
             column<typename TAttr::tag_type>()[slot] = record.template get<typename TAttr::tag_type>();
         }
 
+        /** Fill every base row for the layout; the fixed rows never change afterwards. */
+        void initialiseBaseTable()
+        {
+            for(std::uint32_t index = 0u; index < m_chunks; ++index)
+            {
+                if(m_arena)
+                {
+                    m_baseTable.data()[index] = static_cast<std::uint32_t>(SlotArena::noSlot);
+                    m_fillTable.data()[index] = 0u;
+                }
+                else
+                {
+                    m_baseTable.data()[index]
+                        = static_cast<std::uint32_t>(static_cast<std::uint64_t>(index) * m_chunkCapacity);
+                    m_fillTable.data()[index] = m_chunkCapacity;
+                }
+            }
+        }
+
+        /** Publish the range a slot-arena acquire just stored. */
+        void publishBaseRow(std::uint32_t index)
+        {
+            m_baseTable.data()[index] = static_cast<std::uint32_t>(m_arena->base(index));
+            m_fillTable.data()[index] = m_arena->fill(index);
+        }
+
+        /** Retract a released row so a stale read is a loud sentinel, not another chunk's range. */
+        void retractBaseRow(std::uint32_t index)
+        {
+            m_baseTable.data()[index] = static_cast<std::uint32_t>(SlotArena::noSlot);
+            m_fillTable.data()[index] = 0u;
+        }
+
+        /** Cross-check the mapped host table against the authoritative slot map. */
+        void verifyBaseTable() const
+        {
+            std::uint32_t const noSlot = static_cast<std::uint32_t>(SlotArena::noSlot);
+            for(std::uint32_t index = 0u; index < m_chunks; ++index)
+            {
+                std::uint32_t const base = m_baseTable.data()[index];
+                std::uint32_t const fill = m_fillTable.data()[index];
+                if(m_arena->owns(index))
+                {
+                    if(base != static_cast<std::uint32_t>(m_arena->base(index)) || fill != m_arena->fill(index))
+                        throw std::logic_error{
+                            "graphFlow::SoAStorage: the base table row of a live chunk does not match its range"};
+                }
+                else if(base != noSlot || fill != 0u)
+                    throw std::logic_error{
+                        "graphFlow::SoAStorage: the base table row of a released chunk is not retracted"};
+            }
+        }
+
         void checkSlot(std::uint32_t slot) const
         {
             if(slot >= m_slots)
@@ -718,6 +835,10 @@ namespace graphFlow
         detail::ChunkLedger m_ledger;
         std::tuple<ColumnType<TAttrs>...> m_columns;
         ScratchType m_binIds;
+        /** Mapped host base table; see `baseTableHost()`. */
+        BaseTableView m_baseTable;
+        /** Mapped host fill table; see `fillTableHost()`. */
+        BaseTableView m_fillTable;
         /** Absent in the fixed layout; the fixed base stays `index * chunkCapacity`. */
         std::optional<ArenaSlotMap> m_arena;
     };

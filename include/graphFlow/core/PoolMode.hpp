@@ -18,10 +18,11 @@ namespace graphFlow
      * commits at acquisition, so a one-particle fragment owns one slot; the range start is stored
      * per chunk instead of being derived from the chunk index.
      *
-     * `slotArena` changes how a chunk's slots are found, so a storage built in that mode needs the
-     * kernel-side base table (phase 2 stage S2) before a run can use it. Until then the mode is
-     * reachable through the storage and its tests, and `Config` rejects it loudly rather than
-     * silently running the fixed layout.
+     * `slotArena` changes how a chunk's slots are found, so a storage built in that mode resolves
+     * the base through a per-chunk table. The partition and transform stages copy that table to a
+     * device mirror on the node queue immediately before the kernel that indexes it, so a kernel
+     * never recomputes `index * chunkCapacity`. `Config::validate()` checks the arena reservation
+     * `P + K*R*C` against the payload budget; the fixed layout keeps its closed-form base.
      */
     enum class PoolMode
     {

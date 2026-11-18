@@ -216,6 +216,185 @@ TEST_CASE("explicit P over the A30 budget is rejected", "[pool][budget][policy]"
     CHECK(requiredPayloadBytes(config.numChunks, config.chunkCapacity) <= config.poolPayloadBudgetBytes);
 }
 
+TEST_CASE("slot-arena geometry charges live particles and credits in slots", "[pool][budget][arena]")
+{
+    using namespace graphFlow;
+
+    // The documented C=4224, P=8448 reference point: 8448 one-particle fragments plus six
+    // full-width output credits, instead of the fixed layout's 8454 full chunks.
+    SlotArenaGeometry const reference = deriveSlotArenaGeometry(8448u, 4224u, 6u);
+    CHECK(reference.chunkIndices == 8454u);
+    CHECK(reference.slots == 8448u + 6u * 4224u);
+    CHECK(reference.bytes == reference.slots * payloadBytesPerSlot);
+    CHECK(reference.slots == requiredArenaSlots(8448u, 4224u, 6u));
+    std::uint64_t const fixedBytes = requiredPayloadBytes(8454u, 4224u);
+    CHECK(fixedBytes == 8454ull * 4224ull * payloadBytesPerSlot);
+    // The input term drops from P*C to P: the arena is more than 1000x smaller here.
+    CHECK(reference.bytes * 1000u < fixedBytes);
+    CHECK(fixedBytes > reference.bytes * 1000u);
+
+    // Fragmentation worst case: every live particle owns one slot, every output credit owns C.
+    for(std::uint64_t const live : {1ull, 7ull, 1000ull, 8448ull})
+    {
+        for(std::uint64_t const creditChunks : {0ull, 1ull, 6ull})
+        {
+            for(std::uint64_t const capacity : {1ull, 31ull, 128ull, 4224ull})
+            {
+                SlotArenaGeometry const fragmented = deriveSlotArenaGeometry(live, capacity, creditChunks);
+                INFO("P=" << live << " C=" << capacity << " K*R=" << creditChunks);
+                CHECK(fragmented.liveParticles == live);
+                CHECK(fragmented.reserveChunks == creditChunks);
+                CHECK(fragmented.chunkIndices == live + creditChunks);
+                CHECK(fragmented.slots == live + creditChunks * capacity);
+                CHECK(fragmented.slots < (live + creditChunks) * capacity + 1u);
+            }
+        }
+    }
+
+    CHECK_THROWS_AS(deriveSlotArenaGeometry(1u, 0u, 0u), std::invalid_argument);
+    CHECK_THROWS_AS(deriveSlotArenaGeometry(1u, 1u, 0u, 0u), std::invalid_argument);
+    // The chunk-index space and the slot space both stay inside 32 bits.
+    CHECK_THROWS_AS(deriveSlotArenaGeometry(std::numeric_limits<std::uint32_t>::max(), 1u, 1u), std::overflow_error);
+}
+
+TEST_CASE("slot-arena budget boundary is exactly consumed", "[pool][budget][arena]")
+{
+    using namespace graphFlow;
+
+    struct Case
+    {
+        std::uint64_t live;
+        std::uint64_t capacity;
+        std::uint64_t credits;
+    };
+
+    for(Case const testCase : {Case{8448u, 4224u, 6u}, Case{1u, 128u, 6u}, Case{1000u, 31u, 0u}})
+    {
+        std::uint64_t const budget = requiredArenaBytes(testCase.live, testCase.capacity, testCase.credits);
+        INFO("P=" << testCase.live << " C=" << testCase.capacity << " K*R=" << testCase.credits);
+        CHECK(budget == (testCase.live + testCase.credits * testCase.capacity) * payloadBytesPerSlot);
+        // The inversion returns the live count the reservation was built from ...
+        CHECK(maxLiveParticlesForArena(budget, testCase.capacity, testCase.credits) == testCase.live);
+        CHECK_NOTHROW(validateSlotArenaBudget(testCase.live, testCase.capacity, testCase.credits, budget, "test"));
+        // ... and one byte less can no longer hold it.
+        if(budget > 0u)
+        {
+            CHECK(maxLiveParticlesForArena(budget - 1u, testCase.capacity, testCase.credits) + 1u == testCase.live);
+            CHECK_THROWS_AS(
+                validateSlotArenaBudget(testCase.live, testCase.capacity, testCase.credits, budget - 1u, "test"),
+                std::invalid_argument);
+        }
+    }
+
+    // The credit term alone consuming the arena floors the live count at zero instead of wrapping.
+    std::uint64_t const tiny = payloadBytesPerSlot; // one slot
+    CHECK(maxLiveParticlesForArena(tiny, 128u, 6u) == 0u);
+    CHECK_THROWS_AS(validateSlotArenaBudget(0u, 128u, 6u, tiny, "test"), std::invalid_argument);
+}
+
+TEST_CASE("slot-arena policy derives P from the credit-charged slot budget", "[pool][budget][policy][arena]")
+{
+    using namespace graphFlow;
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
+    properties.multiProcessorCount = 56u;
+
+    struct Case
+    {
+        std::uint64_t budget;
+        std::uint32_t capacity;
+        std::uint64_t credits;
+    };
+
+    for(Case const testCase :
+        {Case{24ull * 1024ull * 1024ull, 1024u, 6u},
+         Case{96ull * 1024ull * 1024ull, 8192u, 6u},
+         Case{24ull * 1024ull * 1024ull, 4224u, 0u}})
+    {
+        std::uint64_t const slots = testCase.budget / payloadBytesPerSlot;
+        std::uint64_t const credit = testCase.credits * testCase.capacity;
+        CHECK(slots > credit);
+        std::uint64_t const raw = slots - credit;
+
+        // A huge `liveParticlesPerChunk` removes the `2*C` default from the comparison, so the
+        // budget clamp is the binding term and the derivation can be pinned exactly.
+        DevicePolicyConfig config;
+        config.memoryBudgetBytes = testCase.budget;
+        config.poolMode = PoolMode::slotArena;
+        config.reserveChunks = testCase.credits;
+        config.liveParticlesPerChunk = 1'000'000u;
+        DevicePolicyOverrides overrides;
+        overrides.chunkCapacity = testCase.capacity;
+        DevicePolicy const policy = makeDevicePolicy(properties, 1'000'000'000u, overrides, config);
+
+        std::uint64_t const tile = policy.tileSize;
+        std::uint64_t const expected = raw >= tile ? raw / tile * tile : raw;
+        INFO("budget=" << testCase.budget << " C=" << testCase.capacity << " K*R=" << testCase.credits);
+        CHECK(policy.chunkCapacity == testCase.capacity);
+        CHECK(policy.poolMode == PoolMode::slotArena);
+        CHECK(policy.liveParticles == expected);
+        CHECK(
+            policy.liveParticles
+            == maxLiveParticlesForArena(testCase.budget, testCase.capacity, testCase.credits) / tile * tile);
+        CHECK(requiredArenaBytes(policy.liveParticles, policy.chunkCapacity, testCase.credits) <= testCase.budget);
+
+        // The pool budget of the slot arena is the policy budget: the credit was already charged
+        // by the P clamp, so applyDevicePolicy must not add it a second time.
+        Config applied;
+        applied.poolOutputReserveChunks = testCase.credits;
+        applyDevicePolicy(applied, policy);
+        CHECK(applied.poolPayloadBudgetBytes == testCase.budget);
+        CHECK(applied.liveParticles == policy.liveParticles);
+
+        // The same budget under the fixed layout charges P*C slots per live particle, so it can
+        // admit at most roughly 1/C as many live particles.
+        DevicePolicyConfig fixedConfig = config;
+        fixedConfig.poolMode = PoolMode::fixed;
+        fixedConfig.reserveChunks = 0u;
+        DevicePolicy const fixedPolicy = makeDevicePolicy(properties, 1'000'000'000u, overrides, fixedConfig);
+        CHECK(fixedPolicy.liveParticles <= policy.liveParticles / testCase.capacity + tile);
+        CHECK(requiredPayloadBytes(fixedPolicy.liveParticles, testCase.capacity) <= testCase.budget);
+    }
+}
+
+TEST_CASE("slot-arena policy rejects an explicit P over the credit-charged budget", "[pool][budget][policy][arena]")
+{
+    using namespace graphFlow;
+
+    auto properties = test::makeCpuDevice().getDeviceProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
+    properties.multiProcessorCount = 56u;
+
+    std::uint64_t const budget = 2ull * 1024ull * 1024ull;
+    std::uint32_t const capacity = 1024u;
+    std::uint64_t const credits = 6u;
+    std::uint64_t const maxLive = maxLiveParticlesForArena(budget, capacity, credits);
+
+    DevicePolicyConfig config;
+    config.memoryBudgetBytes = budget;
+    config.poolMode = PoolMode::slotArena;
+    config.reserveChunks = credits;
+
+    DevicePolicyOverrides over;
+    over.chunkCapacity = capacity;
+    over.liveParticles = static_cast<std::uint32_t>(maxLive + 1u);
+    CHECK_THROWS_WITH(
+        makeDevicePolicy(properties, 1'000'000'000u, over, config),
+        Catch::Matchers::ContainsSubstring("explicit liveParticles")
+            && Catch::Matchers::ContainsSubstring("largest feasible P is"));
+
+    over.liveParticles = static_cast<std::uint32_t>(maxLive / 128u * 128u);
+    DevicePolicy const policy = makeDevicePolicy(properties, 1'000'000'000u, over, config);
+    CHECK(policy.liveParticlesExplicit);
+    CHECK(policy.liveParticles == over.liveParticles);
+    CHECK_NOTHROW(validateSlotArenaBudget(policy.liveParticles, capacity, credits, budget, "test"));
+}
+
 TEST_CASE("applyDevicePolicy budgets the K*R reserve for the default pool", "[pool][budget][policy]")
 {
     using namespace graphFlow;

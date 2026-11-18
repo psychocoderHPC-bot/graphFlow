@@ -24,6 +24,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -593,6 +594,69 @@ namespace graphFlow::detail
             std::index_sequence_for<TArgs...>{});
     }
 
+    /** Host staging for the chunk table an asynchronous copy publishes to the device.
+     *
+     * The storage's base table is live host state: every acquire and release rewrites a row on the
+     * scheduler thread, while several stages may have a queue copy of the same table in flight.
+     * A queue orders device work against device work only, so handing the live table to
+     * `alpaka::onHost::memcpy` lets the copy read memory the host rewrites. That is a data race and
+     * the copy may capture an inconsistent table.
+     *
+     * This type owns the staging blocks. Each publish snapshots the live table into a block with a
+     * synchronous host copy and enqueues the asynchronous copy from that block only. A block stays
+     * owned by its copy until the copy's event completes; with two blocks the common path needs no
+     * wait, and reusing an unfinished block waits for the queue that carries its event. The
+     * staging blocks are never shared between stages, and every stage owns one lane.
+     */
+    template<typename TDevice>
+    class BaseTableStaging
+    {
+        using Buffer = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using Event = ALPAKA_TYPEOF(std::declval<TDevice&>().makeEvent());
+
+        static constexpr std::size_t blockCount = 2u;
+
+    public:
+        BaseTableStaging(TDevice device, std::uint64_t rows)
+            : m_blocks{makeBlocks(device, rows)}
+            , m_events{device.makeEvent(), device.makeEvent()}
+        {
+        }
+
+        /** Snapshot `rows` entries of `source` and publish them to `destination` on `queue`.
+         *
+         * `source` is read on the calling host thread, which is the only writer of the live table.
+         * The asynchronous copy reads only the staging block this call owns.
+         */
+        template<typename TQueue, typename TDestination>
+        void publish(TQueue const& queue, TDestination& destination, std::uint32_t const* source, std::uint64_t rows)
+        {
+            std::size_t const block = m_next;
+            // The block was handed to a copy; its event is enqueued on the same queue directly
+            // after the copy, so waiting for the queue also retires that copy.
+            if(!m_events[block].isComplete())
+                alpaka::onHost::wait(queue);
+            std::copy_n(source, rows, m_blocks[block].data());
+            alpaka::onHost::memcpy(queue, destination, m_blocks[block], alpaka::Vec{rows});
+            queue.enqueue(m_events[block]);
+            m_next = (block + 1u) % blockCount;
+        }
+
+    private:
+        [[nodiscard]] static std::array<Buffer, blockCount> makeBlocks(TDevice const& device, std::uint64_t rows)
+        {
+            return {
+                alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{rows}),
+                alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{rows}),
+            };
+        }
+
+        std::array<Buffer, blockCount> m_blocks;
+        std::array<Event, blockCount> m_events;
+        std::size_t m_next = 0u;
+    };
+
     /** Source kernel: one launch materialises one admitted chunk. */
     template<typename TFunctor, typename TAccess, typename TViews = typename TAccess::Views>
     struct SourceKernel;
@@ -655,7 +719,9 @@ namespace graphFlow::detail
             alpaka::concepts::IMdSpan TInBase,
             alpaka::concepts::IMdSpan TInCount,
             alpaka::concepts::IMdSpan TOutPosition,
-            alpaka::concepts::IMdSpan TOutChunks>
+            alpaka::concepts::IMdSpan TOutChunks,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TInViews... in,
@@ -665,6 +731,8 @@ namespace graphFlow::detail
             TInCount inCount,
             TOutPosition outPosition,
             TOutChunks outChunks,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
             std::uint32_t chunkCapacity,
             std::uint32_t chunks) const
         {
@@ -683,7 +751,17 @@ namespace graphFlow::detail
                     std::uint32_t const global = position + offset;
                     std::uint32_t const outputChunk = global / chunkCapacity;
                     std::uint32_t const outputOffset = global % chunkCapacity;
-                    std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        // The output chunk index comes from the plan; its base comes from the
+                        // device table. A stale row would write into another chunk's slots.
+                        if(outBases[outChunks[outputChunk]] != expectedBases[outChunks[outputChunk]])
+                        {
+                            status.set(StatusCode::invalid);
+                            continue;
+                        }
+                    }
+                    std::uint32_t const outSlot = outBases[outChunks[outputChunk]] + outputOffset;
                     typename TAccess::Payload payload = access.load(inSlot + offset, in...);
                     rng::Engine engine
                         = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
@@ -724,13 +802,17 @@ namespace graphFlow::detail
         template<
             alpaka::onAcc::concepts::Acc TAcc,
             alpaka::concepts::IMdSpan TStatusView,
-            alpaka::concepts::IMdSpan TOutChunks>
+            alpaka::concepts::IMdSpan TOutChunks,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TInViews... in,
             TOutViews... out,
             TStatusView statusView,
             TOutChunks outChunks,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
             std::uint32_t statusSlot,
             std::uint32_t inBase,
             std::uint32_t position,
@@ -749,7 +831,15 @@ namespace graphFlow::detail
                 std::uint32_t const global = position + offset;
                 std::uint32_t const outputChunk = global / chunkCapacity;
                 std::uint32_t const outputOffset = global % chunkCapacity;
-                std::uint32_t const outSlot = outChunks[outputChunk] * chunkCapacity + outputOffset;
+                if constexpr(graphFlow::debug::checksEnabled)
+                {
+                    if(outBases[outChunks[outputChunk]] != expectedBases[outChunks[outputChunk]])
+                    {
+                        status.set(StatusCode::invalid);
+                        continue;
+                    }
+                }
+                std::uint32_t const outSlot = outBases[outChunks[outputChunk]] + outputOffset;
                 typename TAccess::Payload payload = access.load(inBase + offset, in...);
                 rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
                 if constexpr(std::is_void_v<TSet>)
@@ -778,15 +868,25 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
-        template<alpaka::onAcc::concepts::Acc TAcc>
+        // Explicit span parameters keep the abbreviated-parameter count below the nvcc 12.6
+        // name-hiding ICE threshold, like the scatter kernels.
+        template<
+            alpaka::onAcc::concepts::Acc TAcc,
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TBinIds,
+            alpaka::concepts::IMdSpan TCounts,
+            alpaka::concepts::IMdSpan TTiles,
+            alpaka::concepts::IMdSpan TTileBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TViews... views,
-            alpaka::concepts::IMdSpan auto statusView,
-            alpaka::concepts::IMdSpan auto binIds,
-            alpaka::concepts::IMdSpan auto counts,
-            alpaka::concepts::IMdSpan auto tiles,
-            std::uint32_t chunkCapacity) const
+            TStatusView statusView,
+            TBinIds binIds,
+            TCounts counts,
+            TTiles tiles,
+            TTileBases tileBases,
+            TExpectedBases expectedBases) const
         {
             using namespace alpaka;
             TAccess access;
@@ -799,7 +899,18 @@ namespace graphFlow::detail
             {
                 std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
                 TileDescriptor const tile = tiles[tileIndex];
-                std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                if constexpr(graphFlow::debug::checksEnabled)
+                {
+                    // A stale device table row writes into another chunk's slots. Compare the row
+                    // the kernel is about to use against the expected base this batch published.
+                    if(tileBases[tile.chunkIndex] != expectedBases[tile.chunkIndex])
+                    {
+                        status.set(StatusCode::invalid);
+                        counts[std::uint32_t{T_B}] = 1u;
+                        continue;
+                    }
+                }
+                std::uint32_t const base = tileBases[tile.chunkIndex] + tile.tileOffset;
                 std::uint32_t const count = tile.count;
 
                 for(auto [bin] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{std::uint32_t{T_B}}))
@@ -888,7 +999,10 @@ namespace graphFlow::detail
             alpaka::concepts::IMdSpan TTable,
             alpaka::concepts::IMdSpan TNext,
             alpaka::concepts::IMdSpan TCounts,
-            alpaka::concepts::IMdSpan TTiles>
+            alpaka::concepts::IMdSpan TTiles,
+            alpaka::concepts::IMdSpan TTileBases,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TInViews... in,
@@ -899,6 +1013,9 @@ namespace graphFlow::detail
             TNext next,
             TCounts counts,
             TTiles tiles,
+            TTileBases tileBases,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
             std::uint32_t chunkCapacity) const
         {
             using namespace alpaka;
@@ -915,7 +1032,20 @@ namespace graphFlow::detail
                 {
                     std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
                     TileDescriptor const tile = tiles[tileIndex];
-                    std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(tileBases[tile.chunkIndex] != expectedBases[tile.chunkIndex])
+                        {
+                            status.set(StatusCode::invalid);
+                            onAcc::atomicExch(
+                                acc,
+                                &counts[std::uint32_t{T_B}],
+                                std::uint32_t{1u},
+                                onAcc::scope::device);
+                            continue;
+                        }
+                    }
+                    std::uint32_t const inBase = tileBases[tile.chunkIndex] + tile.tileOffset;
                     std::uint32_t const count = tile.count;
 
                     for(auto [i] : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{count}))
@@ -926,6 +1056,19 @@ namespace graphFlow::detail
                             = onAcc::atomicAdd(acc, &next[bin], std::uint32_t{1u}, onAcc::scope::device);
                         std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                         std::uint32_t const outputOffset = j % chunkCapacity;
+                        if constexpr(graphFlow::debug::checksEnabled)
+                        {
+                            if(outBases[outputChunk] != expectedBases[outputChunk])
+                            {
+                                status.set(StatusCode::invalid);
+                                onAcc::atomicExch(
+                                    acc,
+                                    &counts[std::uint32_t{T_B}],
+                                    std::uint32_t{1u},
+                                    onAcc::scope::device);
+                                continue;
+                            }
+                        }
 
                         typename TAccess::Payload payload = access.load(slotIn, in...);
                         rng::Engine engine
@@ -939,7 +1082,7 @@ namespace graphFlow::detail
                         if(result != UpdateResult::success)
                             onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
 
-                        access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
+                        access.store(outBases[outputChunk] + outputOffset, payload, out...);
                     }
                 }
             }
@@ -956,7 +1099,20 @@ namespace graphFlow::detail
                 {
                     std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
                     TileDescriptor const tile = tiles[tileIndex];
-                    std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(tileBases[tile.chunkIndex] != expectedBases[tile.chunkIndex])
+                        {
+                            status.set(StatusCode::invalid);
+                            onAcc::atomicExch(
+                                acc,
+                                &counts[std::uint32_t{T_B}],
+                                std::uint32_t{1u},
+                                onAcc::scope::device);
+                            continue;
+                        }
+                    }
+                    std::uint32_t const inBase = tileBases[tile.chunkIndex] + tile.tileOffset;
                     std::uint32_t const count = tile.count;
 
                     for(auto [bin] :
@@ -992,6 +1148,19 @@ namespace graphFlow::detail
                         std::uint32_t const j = tileBase[bin] + rank;
                         std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                         std::uint32_t const outputOffset = j % chunkCapacity;
+                        if constexpr(graphFlow::debug::checksEnabled)
+                        {
+                            if(outBases[outputChunk] != expectedBases[outputChunk])
+                            {
+                                status.set(StatusCode::invalid);
+                                onAcc::atomicExch(
+                                    acc,
+                                    &counts[std::uint32_t{T_B}],
+                                    std::uint32_t{1u},
+                                    onAcc::scope::device);
+                                continue;
+                            }
+                        }
 
                         typename TAccess::Payload payload = access.load(slotIn, in...);
                         rng::Engine engine
@@ -1005,7 +1174,7 @@ namespace graphFlow::detail
                         if(result != UpdateResult::success)
                             onAcc::atomicExch(acc, &counts[T_B], std::uint32_t{1u}, onAcc::scope::device);
 
-                        access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
+                        access.store(outBases[outputChunk] + outputOffset, payload, out...);
                     }
                 }
             }
@@ -1038,15 +1207,23 @@ namespace graphFlow::detail
         std::uint64_t seed = 0u;
         std::uint32_t purpose = 0u;
 
-        template<alpaka::onAcc::concepts::Acc TAcc>
+        template<
+            alpaka::onAcc::concepts::Acc TAcc,
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TBinIds,
+            alpaka::concepts::IMdSpan TCounts,
+            alpaka::concepts::IMdSpan TTiles,
+            alpaka::concepts::IMdSpan TTileBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TViews... views,
-            alpaka::concepts::IMdSpan auto statusView,
-            alpaka::concepts::IMdSpan auto binIds,
-            alpaka::concepts::IMdSpan auto counts,
-            alpaka::concepts::IMdSpan auto tiles,
-            std::uint32_t chunkCapacity) const
+            TStatusView statusView,
+            TBinIds binIds,
+            TCounts counts,
+            TTiles tiles,
+            TTileBases tileBases,
+            TExpectedBases expectedBases) const
         {
             using namespace alpaka;
             TAccess access;
@@ -1062,7 +1239,15 @@ namespace graphFlow::detail
             {
                 std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
                 TileDescriptor const tile = tiles[tileIndex];
-                std::uint32_t const base = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                if constexpr(graphFlow::debug::checksEnabled)
+                {
+                    if(tileBases[tile.chunkIndex] != expectedBases[tile.chunkIndex])
+                    {
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        continue;
+                    }
+                }
+                std::uint32_t const base = tileBases[tile.chunkIndex] + tile.tileOffset;
                 std::uint32_t const count = tile.count;
 
                 for(auto [entry] :
@@ -1166,7 +1351,10 @@ namespace graphFlow::detail
             alpaka::concepts::IMdSpan TTable,
             alpaka::concepts::IMdSpan TNext,
             alpaka::concepts::IMdSpan TCounts,
-            alpaka::concepts::IMdSpan TTiles>
+            alpaka::concepts::IMdSpan TTiles,
+            alpaka::concepts::IMdSpan TTileBases,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
         ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
             TInViews... in,
@@ -1177,6 +1365,9 @@ namespace graphFlow::detail
             TNext next,
             TCounts counts,
             TTiles tiles,
+            TTileBases tileBases,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
             std::uint32_t chunkCapacity) const
         {
             using namespace alpaka;
@@ -1193,7 +1384,15 @@ namespace graphFlow::detail
             {
                 std::uint32_t const tileIndex = static_cast<std::uint32_t>(tileIndexVec.x());
                 TileDescriptor const tile = tiles[tileIndex];
-                std::uint32_t const inBase = tile.chunkIndex * chunkCapacity + tile.tileOffset;
+                if constexpr(graphFlow::debug::checksEnabled)
+                {
+                    if(tileBases[tile.chunkIndex] != expectedBases[tile.chunkIndex])
+                    {
+                        onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
+                        return;
+                    }
+                }
+                std::uint32_t const inBase = tileBases[tile.chunkIndex] + tile.tileOffset;
                 std::uint32_t const count = tile.count;
 
                 for(auto [entry] :
@@ -1263,6 +1462,19 @@ namespace graphFlow::detail
                     std::uint32_t const j = entry->base + rank;
                     std::uint32_t const outputChunk = table[std::uint32_t{T_B} + table[bin] + j / chunkCapacity];
                     std::uint32_t const outputOffset = j % chunkCapacity;
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        if(outBases[outputChunk] != expectedBases[outputChunk])
+                        {
+                            status.set(StatusCode::invalid);
+                            onAcc::atomicExch(
+                                acc,
+                                &counts[std::uint32_t{T_B}],
+                                std::uint32_t{1u},
+                                onAcc::scope::device);
+                            continue;
+                        }
+                    }
 
                     typename TAccess::Payload payload = access.load(slotIn, in...);
                     rng::Engine engine
@@ -1276,7 +1488,7 @@ namespace graphFlow::detail
                     if(result != UpdateResult::success)
                         onAcc::atomicExch(acc, &counts[std::uint32_t{T_B}], std::uint32_t{1u}, onAcc::scope::device);
 
-                    access.store(outputChunk * chunkCapacity + outputOffset, payload, out...);
+                    access.store(outBases[outputChunk] + outputOffset, payload, out...);
                 }
             }
         }
@@ -1530,11 +1742,25 @@ namespace graphFlow::detail
             , m_outChunksHost{alpaka::onHost::allocMapped<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(m_reserveBound)})}
+            , m_outBases{alpaka::onHost::alloc<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_outExpectedBases{alpaka::onHost::alloc<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_outExpectedBasesHost{alpaka::onHost::allocMapped<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_baseTableStaging{device, storage.numChunks()}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            m_staleBaseTable = config.debugStaleBaseTable;
+            if(m_staleBaseTable && !debug::checksEnabled)
+                throw std::invalid_argument{
+                    "graphFlow: debugStaleBaseTable is a validation-only injection and needs debug validation"};
             m_pending.reserve(m_reserveBound);
             if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
             {
@@ -1610,6 +1836,7 @@ namespace graphFlow::detail
                 {
                     ChunkHandle const handle = m_storage.acquire();
                     m_outChunksHost.data()[k] = handle.index;
+                    m_outExpectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                     std::uint64_t const remaining = particles - static_cast<std::uint64_t>(k) * m_capacity;
                     std::uint32_t const fill
                         = static_cast<std::uint32_t>(std::min<std::uint64_t>(remaining, m_capacity));
@@ -1625,6 +1852,7 @@ namespace graphFlow::detail
                     m_outChunks,
                     m_outChunksHost,
                     alpaka::Vec{static_cast<std::uint64_t>(outputChunks)});
+                publishBaseTables(queue, true);
 
                 LaunchPolicy const policy = launchPolicy(m_device, particles, m_tileSize, m_frameCap);
                 auto const views = Access::views(m_storage);
@@ -1639,6 +1867,8 @@ namespace graphFlow::detail
                     m_inCount,
                     m_outPosition,
                     m_outChunks,
+                    m_outBases,
+                    m_outExpectedBases,
                     m_capacity,
                     static_cast<std::uint32_t>(chunkCount));
                 alpaka::onHost::memcpy(queue, m_statusHost, m_status);
@@ -1749,6 +1979,7 @@ namespace graphFlow::detail
                 {
                     ChunkHandle const handle = m_storage.acquire();
                     m_outChunksHost.data()[k] = handle.index;
+                    m_outExpectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                     std::uint64_t const remaining = particles - static_cast<std::uint64_t>(k) * m_capacity;
                     std::uint32_t const fill
                         = static_cast<std::uint32_t>(std::min<std::uint64_t>(remaining, m_capacity));
@@ -1765,6 +1996,7 @@ namespace graphFlow::detail
                     m_outChunks,
                     m_outChunksHost,
                     alpaka::Vec{static_cast<std::uint64_t>(outputChunks)});
+                publishBaseTables(queue, true);
 
                 auto const views = Access::views(m_storage);
                 for(std::size_t i = 0u; i < chunkCount; ++i)
@@ -1786,6 +2018,8 @@ namespace graphFlow::detail
                         views,
                         *m_chunkStatus,
                         m_outChunks,
+                        m_outBases,
+                        m_outExpectedBases,
                         static_cast<std::uint32_t>(i),
                         m_inBaseHost.data()[i],
                         m_outPositionHost.data()[i],
@@ -1845,6 +2079,29 @@ namespace graphFlow::detail
             m_pending.clear();
         }
 
+        /** Copy the host base table to the device mirror on `queue` before the kernel.
+         *
+         * The copy and the kernel share one queue, so the kernel reads exactly the rows this
+         * batch published rather than whatever the previous batch left behind. Under the
+         * validation-only stale-table injection the first copy still runs (the device buffer must
+         * be defined) and later copies are skipped, which is the missing-enqueue failure mode.
+         */
+        void publishBaseTables(Queue const& queue, bool beginBatch)
+        {
+            if(beginBatch)
+            {
+                // The injection keeps the first batch correct and freezes its table afterwards,
+                // so the stale rows are valid ranges from the previous batch, never sentinels.
+                m_skipBasePublish = m_staleBaseTable && m_batchesPublished > 0u;
+                ++m_batchesPublished;
+            }
+            std::uint64_t const rows = m_storage.numChunks();
+            if(!m_skipBasePublish)
+                m_baseTableStaging.publish(queue, m_outBases, m_storage.baseTableHost().data(), rows);
+            if constexpr(debug::checksEnabled)
+                alpaka::onHost::memcpy(queue, m_outExpectedBases, m_outExpectedBasesHost, alpaka::Vec{rows});
+        }
+
         TDevice m_device;
         TStorage& m_storage;
         TFunctor m_functor;
@@ -1864,6 +2121,16 @@ namespace graphFlow::detail
         MappedU32View m_outPositionHost;
         U32View m_outChunks;
         MappedU32View m_outChunksHost;
+        /** Device mirror of the chunk-indexed base table the output write indexes. */
+        U32View m_outBases;
+        /** Expected bases read from the storage when the batch was planned (validation only). */
+        U32View m_outExpectedBases;
+        MappedU32View m_outExpectedBasesHost;
+        /** Owned host staging for the asynchronous base-table publishes. */
+        BaseTableStaging<TDevice> m_baseTableStaging;
+        bool m_staleBaseTable = false;
+        bool m_skipBasePublish = false;
+        std::uint32_t m_batchesPublished = 0u;
         U32View m_status;
         MappedU32View m_statusHost;
         // Per-chunk completion slots; allocated only when the schedule is on.
@@ -1956,14 +2223,27 @@ namespace graphFlow::detail
             , m_tilesHost{alpaka::onHost::allocMapped<TileDescriptor>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(m_tileCapacity)})}
-            , m_binIds{alpaka::onHost::alloc<std::uint32_t>(
+            , m_binIds{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{storage.slotCount()})}
+            // arena-sized: indexed by absolute slot
+            , m_bases{alpaka::onHost::alloc<std::uint32_t>(
                   device,
-                  alpaka::Vec{checkedSlotCount(storage.numChunks(), m_capacity)})}
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_expectedBases{alpaka::onHost::alloc<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_expectedBasesHost{alpaka::onHost::allocMapped<std::uint32_t>(
+                  device,
+                  alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_baseTableStaging{device, storage.numChunks()}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            m_staleBaseTable = config.debugStaleBaseTable;
+            if(m_staleBaseTable && !debug::checksEnabled)
+                throw std::invalid_argument{
+                    "graphFlow: debugStaleBaseTable is a validation-only injection and needs debug validation"};
             m_totals.assign(m_bins, 0u);
             m_pending.reserve(m_reserveBound);
         }
@@ -2001,11 +2281,17 @@ namespace graphFlow::detail
             alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
             if(m_numTiles != 0u)
             {
+                for(ChunkDescriptor const& chunk : batch.chunks)
+                    m_expectedBasesHost.data()[chunk.handle.index]
+                        = static_cast<std::uint32_t>(m_storage.base(chunk.handle));
                 alpaka::onHost::memcpy(
                     queue,
                     m_tiles,
                     m_tilesHost,
                     alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
+                // The base-table copy is enqueued after every acquire/release of this batch and
+                // immediately before the kernel that reads it, on the same queue.
+                publishBaseTables(queue, true);
                 auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
                 auto enqueueClassify = [&](auto kernel)
                 {
@@ -2018,7 +2304,8 @@ namespace graphFlow::detail
                         m_binIds,
                         m_counts,
                         tilesView,
-                        m_capacity);
+                        m_bases,
+                        m_expectedBases);
                 };
                 if constexpr(TBinTable::isHash)
                     enqueueClassify(HashClassifyKernel{m_classifier, m_seed, m_purpose});
@@ -2084,14 +2371,6 @@ namespace graphFlow::detail
         }
 
     private:
-        static std::uint64_t checkedSlotCount(std::uint32_t numChunks, std::uint32_t capacity)
-        {
-            std::uint64_t const slots = static_cast<std::uint64_t>(numChunks) * capacity;
-            if(slots > std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error{"graphFlow: partition slot count exceeds the 32-bit slot index"};
-            return slots;
-        }
-
         static std::uint32_t checkedTileCapacity(
             std::uint32_t capacity,
             std::uint32_t tileSize,
@@ -2159,8 +2438,11 @@ namespace graphFlow::detail
                     std::uint32_t const chunks = static_cast<std::uint32_t>(ceilDivChecked(m_totals[bin], m_capacity));
                     for(std::uint32_t k = 0u; k < chunks; ++k)
                     {
+                        // Output chunks are acquired at the full C: the scatter kernel addresses
+                        // every chunk of a bin's dense sequence at offset `j % C`.
                         ChunkHandle const handle = m_storage.acquire();
                         chunkIndices.push_back(handle.index);
+                        m_expectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                         std::uint32_t const fillIndex = plan.binBase[bin] + k;
                         m_pending.push_back(
                             ChunkDescriptor{handle, plan.fills[fillIndex], static_cast<std::uint32_t>(bin)});
@@ -2183,6 +2465,9 @@ namespace graphFlow::detail
                 if(m_numTiles != 0u)
                 {
                     auto const views = Access::views(m_storage);
+                    // The output acquires above changed the table; republish it immediately
+                    // before the scatter kernel that reads both the input and output rows.
+                    publishBaseTables(queue, false);
                     auto enqueueScatter = [&](auto kernel)
                     {
                         enqueueKernelWithInOutViews(
@@ -2197,6 +2482,9 @@ namespace graphFlow::detail
                             m_next,
                             m_counts,
                             tilesView,
+                            m_bases,
+                            m_bases,
+                            m_expectedBases,
                             m_capacity);
                     };
                     if constexpr(TBinTable::isHash)
@@ -2253,6 +2541,29 @@ namespace graphFlow::detail
             m_pending.clear();
         }
 
+        /** Copy the host base table to the device mirror on `queue` before the kernel.
+         *
+         * The copy is enqueued after every acquire/release of the batch and immediately before
+         * the kernel that indexes the table, on the same queue. Under the validation-only
+         * stale-table injection the first copy still runs so the device buffer is defined, and
+         * later copies are skipped, which is the missing-enqueue failure mode.
+         */
+        void publishBaseTables(Queue const& queue, bool beginBatch)
+        {
+            if(beginBatch)
+            {
+                // The injection keeps the first batch (classify and scatter) correct and freezes
+                // its table afterwards, so stale rows are valid ranges, never sentinels.
+                m_skipBasePublish = m_staleBaseTable && m_batchesPublished > 0u;
+                ++m_batchesPublished;
+            }
+            std::uint64_t const rows = m_storage.numChunks();
+            if(!m_skipBasePublish)
+                m_baseTableStaging.publish(queue, m_bases, m_storage.baseTableHost().data(), rows);
+            if constexpr(debug::checksEnabled)
+                alpaka::onHost::memcpy(queue, m_expectedBases, m_expectedBasesHost, alpaka::Vec{rows});
+        }
+
         void finalise()
         {
             checkStatus("partition scatter");
@@ -2287,6 +2598,16 @@ namespace graphFlow::detail
         TileView m_tiles;
         MappedTileView m_tilesHost;
         U32View m_binIds;
+        /** Device mirror of the chunk-indexed base table for classify and scatter. */
+        U32View m_bases;
+        /** Expected bases read from the storage when the batch was planned (validation only). */
+        U32View m_expectedBases;
+        MappedU32View m_expectedBasesHost;
+        /** Owned host staging for the asynchronous base-table publishes. */
+        BaseTableStaging<TDevice> m_baseTableStaging;
+        bool m_staleBaseTable = false;
+        bool m_skipBasePublish = false;
+        std::uint32_t m_batchesPublished = 0u;
         U32View m_status;
         MappedU32View m_statusHost;
         std::uint32_t m_stage = 0u;

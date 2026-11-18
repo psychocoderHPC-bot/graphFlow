@@ -6,6 +6,7 @@
 
 #include "graphFlow/core/BinPath.hpp"
 #include "graphFlow/core/ChunkKernelSchedule.hpp"
+#include "graphFlow/core/PoolMode.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
 
 #include <chrono>
@@ -59,6 +60,14 @@ namespace graphFlow
         std::optional<std::uint32_t> numChunks;
         std::optional<std::uint32_t> frameCap;
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
+        /** Chunk-slot layout; absence keeps `Config::poolMode` (the fixed layout).
+         *
+         * `slotArena` selects the phase-2 layout and its `P + K*R*C` reservation. The run is
+         * rejected when the arena does not fit `poolPayloadBudgetBytes`.
+         */
+        std::optional<PoolMode> poolMode;
+        /** Validation-only stale base-table injection; see `Config::debugStaleBaseTable`. */
+        bool debugStaleBaseTable = false;
 
         // Measured partition-path axes.
         /** Dense scatter strategy. Absence keeps `ScatterMode::SharedStaging`.

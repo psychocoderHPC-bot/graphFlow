@@ -43,6 +43,7 @@ namespace graphFlow::cli
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
+        graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
         // Opt-in kernel workload. The axis options stay absent so the resolver can reject an
         // axis on the default feedback workload instead of silently ignoring it.
         particle::Workload workload = particle::Workload::feedback;
@@ -70,12 +71,21 @@ namespace graphFlow::cli
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
-               "                                    [--occupancy-target D]\n"
+               "                                    [--occupancy-target D] [--pool-mode fixed|slotArena]\n"
                "                                    [--seed S] [--max-visits M]\n"
                "                                    [--workload feedback|kernel]\n"
                "       kernel workload only: [--scatter shared|direct]\n"
                "                             [--bin-path dense|hash] [--bins B]\n"
                "                             [--distribution balanced|one-hot|skewed|sparse]\n";
+    }
+
+    inline graphFlow::PoolMode parsePoolMode(std::string const& value)
+    {
+        if(value == graphFlow::poolModeName(graphFlow::PoolMode::fixed))
+            return graphFlow::PoolMode::fixed;
+        if(value == graphFlow::poolModeName(graphFlow::PoolMode::slotArena))
+            return graphFlow::PoolMode::slotArena;
+        throw std::invalid_argument{"--pool-mode: expected fixed or slotArena, got '" + value + "'"};
     }
 
     inline particle::Workload parseWorkload(std::string const& value)
@@ -207,6 +217,10 @@ namespace graphFlow::cli
                 // so `--occupancy-target 0` is the explicit off switch.
                 options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             }
+            else if(flag == "--pool-mode")
+            {
+                options.poolMode = parsePoolMode(nextValue(flag));
+            }
             else if(flag == "--seed")
             {
                 options.seed = parseU64(flag, nextValue(flag));
@@ -258,10 +272,15 @@ namespace graphFlow::cli
     inline ResolvedOptions resolveOptions(
         Options const& options,
         alpaka::onHost::DeviceProperties const& properties,
-        DevicePolicyConfig const& policyConfig = policyConfigOf(Config{}))
+        DevicePolicyConfig const& policyConfigIn = policyConfigOf(Config{}))
     {
         ResolvedOptions resolved;
         resolved.backend = requireBackend(options.backend);
+
+        // Mirror the layout in the CLI-side policy, so an explicit P is checked against the
+        // arena formula the run will use. `Flow` re-derives with the exact graph credit K*R*C.
+        DevicePolicyConfig policyConfig = policyConfigIn;
+        policyConfig.poolMode = options.poolMode;
 
         DevicePolicyOverrides overrides;
         overrides.chunkCapacity = options.chunkSize;
@@ -280,6 +299,7 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
+        resolved.parameters.poolMode = options.poolMode;
 
         resolved.workload = options.workload;
         if(options.workload == particle::Workload::feedback)
