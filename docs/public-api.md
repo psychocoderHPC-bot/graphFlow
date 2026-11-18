@@ -422,7 +422,9 @@ accelerator argument:
 | updater | `(acc, status, bin, payload)`, `(status, bin, payload)` |
 | sink | `(acc, status, payload)`, `(status, payload)` |
 
-`Status` carries one status word per batch. A functor calls
+`Status` carries one status word per batch; with `chunkKernelSchedule=perChunk`
+each dispatch owns one word per input chunk of that batch, so a fan-out never
+shares a word between kernels. A functor calls
 `status.set(graphFlow::StatusCode::invalid)` or
 `status.set(graphFlow::StatusCode::overflow)` when it rejects an item.
 `invalid` covers non-finite or impossible geometry, a vacuum ray with no

@@ -1767,12 +1767,10 @@ namespace graphFlow::detail
             if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
             {
                 // Per-chunk completion slots: one status word per input chunk of a batch, so a
-                // fan-out never has two kernels writing the same word. The buffers are allocated
-                // only for the opt-in schedule; the off path allocates exactly what it did before.
-                m_chunkStatus.emplace(
-                    alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
-                m_chunkStatusHost.emplace(
-                    alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_batchChunks}}));
+                // fan-out never has two kernels writing the same word. The stage is constructed
+                // before any batch exists, so the pair is allocated by the first dispatched batch
+                // and only grows; `ensureChunkStatusSlots` documents why it is not sized here.
+                // The off path keeps its single word and allocates nothing extra.
                 // The per-chunk launch-size policy is consumed here, once per stage: the kernel
                 // launch below uses its threads-per-block and the runner reports its clamp name.
                 // The storage chunk capacity is never derived from it.
@@ -1994,8 +1992,13 @@ namespace graphFlow::detail
             {
                 std::size_t const chunkCount = batch.chunks.size();
                 // One status word per input chunk: the memset and the readback bracket the whole
-                // fan-out on the same queue, and every launch writes a distinct slot.
-                alpaka::onHost::memset(queue, *m_chunkStatus, std::uint8_t{0});
+                // fan-out on the same queue, and every launch writes a distinct slot. Both cover
+                // exactly the dispatched slots, so the work is proportional to this batch.
+                ensureChunkStatusSlots(static_cast<std::uint32_t>(chunkCount));
+                m_chunkStatusSlots = static_cast<std::uint32_t>(chunkCount);
+                auto const statusExtent = alpaka::Vec{static_cast<std::uint64_t>(chunkCount)};
+                auto const statusView = m_chunkStatus->getSubView(statusExtent);
+                alpaka::onHost::memset(queue, *m_chunkStatus, std::uint8_t{0}, statusExtent);
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
                     // Output chunks need one contiguous full-capacity range because the
@@ -2046,7 +2049,7 @@ namespace graphFlow::detail
                         TransformPerChunkKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
                         views,
                         views,
-                        *m_chunkStatus,
+                        statusView,
                         m_outChunks,
                         m_outBases,
                         m_outExpectedBases,
@@ -2056,7 +2059,7 @@ namespace graphFlow::detail
                         chunk.fill,
                         m_capacity);
                 }
-                alpaka::onHost::memcpy(queue, *m_chunkStatusHost, *m_chunkStatus);
+                alpaka::onHost::memcpy(queue, *m_chunkStatusHost, *m_chunkStatus, statusExtent);
             }
             catch(...)
             {
@@ -2086,20 +2089,42 @@ namespace graphFlow::detail
             }
         }
 
-        /** First failing per-chunk status word, or `ok` when every slot is clean.
+        /** First failing per-chunk status word, or `ok` when every dispatched slot is clean.
          *
-         * Slots beyond the committed chunk count stay zero from the memset of every launch, so
-         * reading the whole batch-sized buffer is safe and needs no bookkeeping of the last batch.
+         * `m_chunkStatusSlots` is the number of input chunks of the batch being advanced, so the
+         * scan visits exactly the slots that batch could have written. Slots past it are neither
+         * memset nor read, and the count is the batch chunk count rather than the enqueued kernel
+         * count: a zero-fill chunk owns a slot index without a launch, so a kernel count would
+         * miss every slot after it.
          */
         StatusCode chunkSlotStatus() const
         {
-            for(std::uint32_t i = 0u; i < m_batchChunks; ++i)
+            for(std::uint32_t i = 0u; i < m_chunkStatusSlots; ++i)
             {
                 StatusCode const code = decodeStatus(m_chunkStatusHost->data()[i]);
                 if(code != StatusCode::ok)
                     return code;
             }
             return StatusCode::ok;
+        }
+
+        /** Grow the per-chunk status pair to hold `slots` words.
+         *
+         * The stage exists before any batch, so the constructor cannot size this to the dispatched
+         * chunk count. Sizing per launch would add a device allocation to every batch, which costs
+         * more than the scan it saves; instead the pair is allocated once at the first batch's
+         * count and only grows when a larger batch arrives, so its size is the largest dispatched
+         * count and the memset covers exactly the current one. Growing is safe because a stage
+         * holds at most one batch at a time.
+         */
+        void ensureChunkStatusSlots(std::uint32_t slots)
+        {
+            if(m_chunkStatusCapacity >= slots)
+                return;
+            m_chunkStatus.emplace(alpaka::onHost::alloc<std::uint32_t>(m_device, alpaka::Vec{std::uint64_t{slots}}));
+            m_chunkStatusHost.emplace(
+                alpaka::onHost::allocMapped<std::uint32_t>(m_device, alpaka::Vec{std::uint64_t{slots}}));
+            m_chunkStatusCapacity = slots;
         }
 
         void releasePending()
@@ -2184,9 +2209,13 @@ namespace graphFlow::detail
         std::uint32_t m_baseTablePublishes = 0u;
         U32View m_status;
         MappedU32View m_statusHost;
-        // Per-chunk completion slots; allocated only when the schedule is on.
+        // Per-chunk completion slots, one word per dispatched input chunk; allocated on the first
+        // perChunk batch because the batch size is not known when the stage is constructed.
         std::optional<U32View> m_chunkStatus;
         std::optional<MappedU32View> m_chunkStatusHost;
+        /** Slots of the batch being advanced, and the allocated word count (the largest batch). */
+        std::uint32_t m_chunkStatusSlots = 0u;
+        std::uint32_t m_chunkStatusCapacity = 0u;
         // Per-chunk launch-size policy; present only when the schedule is perChunk.
         std::optional<ChunkSchedulePolicy> m_chunkPolicy;
         std::vector<ChunkDescriptor> m_pending;

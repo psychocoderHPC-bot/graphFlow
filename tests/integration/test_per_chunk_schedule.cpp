@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
+#include <string>
 #include <vector>
 
 namespace
@@ -189,6 +190,130 @@ namespace
             CHECK(off.byPosition[i].id == on.byPosition[i].id);
             CHECK(off.byPosition[i].value == on.byPosition[i].value);
         }
+    }
+
+    /** Report `code` from every payload whose batch-global id is at or after `firstId`.
+     *
+     * The status word is per launch, so a functor that fails only inside one chunk pins the
+     * failure to that chunk's slot.
+     */
+    struct FailFromId
+    {
+        std::uint64_t firstId = 0u;
+        graphFlow::StatusCode code = graphFlow::StatusCode::overflow;
+
+        ALPAKA_FN_ACC void operator()(
+            [[maybe_unused]] auto const& accelerator,
+            graphFlow::Status& status,
+            Pod& payload) const
+        {
+            payload.value = expectedValue(payload.id);
+            if(payload.id >= firstId)
+                status.set(code);
+        }
+    };
+
+    /** What one per-chunk batch reported through `advance`. */
+    struct StatusRun
+    {
+        bool threw = false;
+        std::string message;
+        std::uint32_t allocated = 0u;
+        std::uint32_t launches = 0u;
+        /** Output payloads indexed by batch-global output position; empty when the batch failed. */
+        std::vector<Pod> byPosition;
+    };
+
+    /** Launch one per-chunk transform batch over explicit fills and record the status outcome. */
+    template<typename TFunctor>
+    StatusRun runStatusBatch(std::uint32_t capacity, std::vector<std::uint32_t> const& fills, TFunctor functor)
+    {
+        using Storage = graphFlow::PayloadSlotStorage<Pod, Device>;
+        using Runner = graphFlow::GraphRunner<Device, Storage>;
+        auto device = graphFlow::test::makeCpuDevice();
+        std::uint32_t const particles = std::accumulate(fills.begin(), fills.end(), 0u);
+        std::uint32_t const outputChunks = (particles + capacity - 1u) / capacity;
+        Storage storage{device, static_cast<std::uint32_t>(fills.size()) + outputChunks + 2u, capacity};
+
+        graphFlow::Config config;
+        config.chunkCapacity = capacity;
+        config.batchChunks = static_cast<std::uint32_t>(fills.size());
+        config.tileSize = 32u;
+        config.frameCap = 2u;
+        config.chunkKernelSchedule = graphFlow::ChunkKernelSchedule::perChunk;
+        config.chunkQueueDepth = 1u;
+
+        graphFlow::detail::TransformStage<Device, Storage, Pod, TFunctor> stage{device, storage, config, functor};
+
+        Runner::Batch batch;
+        batch.firstId = 0u;
+        std::uint64_t position = 0u;
+        for(std::uint32_t const fill : fills)
+        {
+            graphFlow::ChunkHandle const handle = storage.acquire();
+            std::vector<Pod> input(fill);
+            for(std::uint32_t i = 0u; i < fill; ++i)
+                input[i] = Pod{position + i, 0xFFFF'FFFFu};
+            writeChunk<Pod>(device, storage, handle, input);
+            batch.chunks.push_back(graphFlow::ChunkDescriptor{handle, fill, 0u});
+            position += fill;
+        }
+
+        auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+        stage.launch(queue, batch);
+        drain(device, queue);
+
+        StatusRun run;
+        run.launches = stage.launches();
+        bool advanced = false;
+        try
+        {
+            advanced = stage.advance(queue, batch, run.allocated);
+        }
+        catch(graphFlow::BatchError const& error)
+        {
+            run.threw = true;
+            run.message = error.what();
+        }
+        CHECK_FALSE(advanced);
+
+        std::vector<graphFlow::ChunkDescriptor> outputs;
+        if(run.threw)
+        {
+            // The failed batch owns its planned chunks: `abort` returns them once and `finish`
+            // then reports nothing, exactly like the batch-wide failure path.
+            stage.abort();
+        }
+        else
+        {
+            stage.finish(batch, outputs);
+            run.byPosition.resize(particles);
+            for(std::uint32_t k = 0u; k < outputChunks; ++k)
+            {
+                std::uint32_t const fill = outputs[k].fill;
+                std::vector<Pod> const read = readChunk<Pod>(device, storage, outputs[k].handle, fill);
+                std::uint64_t const start = static_cast<std::uint64_t>(k) * capacity;
+                for(std::uint32_t i = 0u; i < fill; ++i)
+                    run.byPosition[start + i] = read[i];
+            }
+        }
+        for(auto const& output : outputs)
+            storage.release(output.handle);
+        for(auto const& input : batch.chunks)
+            storage.release(input.handle);
+        return run;
+    }
+
+    /** Count positions whose payload differs from the expected transform result. */
+    std::size_t wrongPositionsOf(std::vector<Pod> const& byPosition)
+    {
+        std::size_t wrong = 0u;
+        for(std::size_t i = 0u; i < byPosition.size(); ++i)
+        {
+            if(byPosition[i].id != i || byPosition[i].value != expectedValue(i))
+                ++wrong;
+        }
+        return wrong;
     }
 } // namespace
 
@@ -443,4 +568,42 @@ TEST_CASE("per-chunk schedule runs with a multi-queue pool and credit pressure",
     // The smaller live budget changes the source chunking, not the per-chunk contract: every
     // dispatched chunk is still exactly one kernel.
     CHECK(pressured.stats.chunkLaunches >= chunks);
+}
+
+TEST_CASE("per-chunk status detects a failure that follows a zero-fill chunk", "[integration][chunk-schedule][status]")
+{
+    // The zero-fill middle chunk owns slot 1 without a launch, so the failing chunk owns slot 2
+    // while only two kernels ran. A scan bounded by the kernel count would stop at slot 1 and
+    // miss the failure; the scan must use the batch chunk count.
+    StatusRun const run = runStatusBatch(4u, {4u, 0u, 4u}, FailFromId{4u, graphFlow::StatusCode::overflow});
+    CHECK(run.launches == 2u);
+    CHECK(run.threw);
+    CHECK(run.message.find("overflow") != std::string::npos);
+    CHECK(run.allocated == 0u);
+}
+
+TEST_CASE("per-chunk status accepts a zero-fill tail chunk", "[integration][chunk-schedule][status]")
+{
+    // The last chunk is dispatched as a slot with fill zero: no kernel runs, the slot stays zero
+    // from the batch memset, and the scan must neither report it nor read past the batch slots.
+    StatusRun const run = runStatusBatch(4u, {4u, 4u, 0u}, FailFromId{1000u, graphFlow::StatusCode::overflow});
+    CHECK(run.launches == 2u);
+    CHECK_FALSE(run.threw);
+    CHECK(run.message.empty());
+    CHECK(run.allocated == 2u);
+    REQUIRE(run.byPosition.size() == 8u);
+    CHECK(wrongPositionsOf(run.byPosition) == 0u);
+}
+
+TEST_CASE(
+    "per-chunk status detects a failure in a partially filled final chunk",
+    "[integration][chunk-schedule][status]")
+{
+    // Only ids 8 and 9 fall into the tail chunk, so the reported code can only come from the last
+    // dispatched slot; a truncated scan would leave the batch clean.
+    StatusRun const run = runStatusBatch(4u, {4u, 4u, 2u}, FailFromId{8u, graphFlow::StatusCode::invalid});
+    CHECK(run.launches == 3u);
+    CHECK(run.threw);
+    CHECK(run.message.find("invalid") != std::string::npos);
+    CHECK(run.allocated == 0u);
 }
