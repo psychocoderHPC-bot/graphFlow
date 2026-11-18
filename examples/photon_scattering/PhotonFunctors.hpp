@@ -406,11 +406,22 @@ namespace graphFlow::photon
             proposal.valid = Simd::fill(T{0});
             where(valid, proposal.valid) = T{1};
 
-            for(std::uint32_t lane = 0u; lane < width; ++lane)
+            // Status is a diagnostic word, so it is reduced per lane. Release builds read the
+            // packed validity bit; debug builds rebuild the lane and run the scalar validator.
+            if constexpr(graphFlow::debug::checksEnabled)
             {
-                PhotonT<T> const one = graphFlow::SimdPayload<PhotonT<T>, width>::lane(proposal, lane);
-                if(!one[proposalTag].valid || !validateProposal(slab, one))
-                    status.set(StatusCode::invalid);
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                {
+                    PhotonT<T> const one = graphFlow::SimdPayload<PhotonT<T>, width>::lane(proposal, lane);
+                    if(!one[proposalTag].valid || !validateProposal(slab, one))
+                        status.set(StatusCode::invalid);
+                }
+            }
+            else
+            {
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                    if(proposal.valid[lane] == T{0})
+                        status.set(StatusCode::invalid);
             }
             return proposal;
         }
@@ -565,21 +576,34 @@ namespace graphFlow::photon
                 advance = advance && photonStateValid(scattered, slab);
             where(advance, scattered.scatterCount) = photon.scatterCount + T{1};
 
-            for(std::uint32_t lane = 0u; lane < width; ++lane)
+            if constexpr(graphFlow::debug::checksEnabled)
             {
-                if(!advancing[lane])
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
                 {
-                    status.set(StatusCode::invalid);
-                    continue;
+                    if(!advancing[lane])
+                    {
+                        status.set(StatusCode::invalid);
+                        continue;
+                    }
+                    PhotonT<T> const one = Traits::lane(scattered, lane);
+                    if(!validatePhoton(slab, one))
+                    {
+                        status.set(StatusCode::invalid);
+                        continue;
+                    }
+                    if(photon.scatterCount[lane] == static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
+                        status.set(StatusCode::overflow);
                 }
-                PhotonT<T> const one = Traits::lane(scattered, lane);
-                if(!validatePhoton(slab, one))
+            }
+            else
+            {
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
                 {
-                    status.set(StatusCode::invalid);
-                    continue;
+                    if(!advancing[lane])
+                        status.set(StatusCode::invalid);
+                    else if(photon.scatterCount[lane] == static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
+                        status.set(StatusCode::overflow);
                 }
-                if(photon.scatterCount[lane] == static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
-                    status.set(StatusCode::overflow);
             }
 
             if constexpr(!std::is_same_v<TTrace, NoTrace>)
