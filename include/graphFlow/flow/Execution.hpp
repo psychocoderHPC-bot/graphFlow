@@ -24,6 +24,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -592,6 +593,69 @@ namespace graphFlow::detail
             std::index_sequence_for<TOutViews...>{},
             std::index_sequence_for<TArgs...>{});
     }
+
+    /** Host staging for the chunk table an asynchronous copy publishes to the device.
+     *
+     * The storage's base table is live host state: every acquire and release rewrites a row on the
+     * scheduler thread, while several stages may have a queue copy of the same table in flight.
+     * A queue orders device work against device work only, so handing the live table to
+     * `alpaka::onHost::memcpy` lets the copy read memory the host rewrites. That is a data race and
+     * the copy may capture an inconsistent table.
+     *
+     * This type owns the staging blocks. Each publish snapshots the live table into a block with a
+     * synchronous host copy and enqueues the asynchronous copy from that block only. A block stays
+     * owned by its copy until the copy's event completes; with two blocks the common path needs no
+     * wait, and reusing an unfinished block waits for the queue that carries its event. The
+     * staging blocks are never shared between stages, and every stage owns one lane.
+     */
+    template<typename TDevice>
+    class BaseTableStaging
+    {
+        using Buffer = ALPAKA_TYPEOF(
+            alpaka::onHost::allocMapped<std::uint32_t>(std::declval<TDevice>(), alpaka::Vec{std::uint64_t{1u}}));
+        using Event = ALPAKA_TYPEOF(std::declval<TDevice&>().makeEvent());
+
+        static constexpr std::size_t blockCount = 2u;
+
+    public:
+        BaseTableStaging(TDevice device, std::uint64_t rows)
+            : m_blocks{makeBlocks(device, rows)}
+            , m_events{device.makeEvent(), device.makeEvent()}
+        {
+        }
+
+        /** Snapshot `rows` entries of `source` and publish them to `destination` on `queue`.
+         *
+         * `source` is read on the calling host thread, which is the only writer of the live table.
+         * The asynchronous copy reads only the staging block this call owns.
+         */
+        template<typename TQueue, typename TDestination>
+        void publish(TQueue const& queue, TDestination& destination, std::uint32_t const* source, std::uint64_t rows)
+        {
+            std::size_t const block = m_next;
+            // The block was handed to a copy; its event is enqueued on the same queue directly
+            // after the copy, so waiting for the queue also retires that copy.
+            if(!m_events[block].isComplete())
+                alpaka::onHost::wait(queue);
+            std::copy_n(source, rows, m_blocks[block].data());
+            alpaka::onHost::memcpy(queue, destination, m_blocks[block], alpaka::Vec{rows});
+            queue.enqueue(m_events[block]);
+            m_next = (block + 1u) % blockCount;
+        }
+
+    private:
+        [[nodiscard]] static std::array<Buffer, blockCount> makeBlocks(TDevice const& device, std::uint64_t rows)
+        {
+            return {
+                alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{rows}),
+                alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{rows}),
+            };
+        }
+
+        std::array<Buffer, blockCount> m_blocks;
+        std::array<Event, blockCount> m_events;
+        std::size_t m_next = 0u;
+    };
 
     /** Source kernel: one launch materialises one admitted chunk. */
     template<typename TFunctor, typename TAccess, typename TViews = typename TAccess::Views>
@@ -1687,6 +1751,7 @@ namespace graphFlow::detail
             , m_outExpectedBasesHost{alpaka::onHost::allocMapped<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_baseTableStaging{device, storage.numChunks()}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
@@ -2032,7 +2097,7 @@ namespace graphFlow::detail
             }
             std::uint64_t const rows = m_storage.numChunks();
             if(!m_skipBasePublish)
-                alpaka::onHost::memcpy(queue, m_outBases, m_storage.baseTableHost(), alpaka::Vec{rows});
+                m_baseTableStaging.publish(queue, m_outBases, m_storage.baseTableHost().data(), rows);
             if constexpr(debug::checksEnabled)
                 alpaka::onHost::memcpy(queue, m_outExpectedBases, m_outExpectedBasesHost, alpaka::Vec{rows});
         }
@@ -2061,6 +2126,8 @@ namespace graphFlow::detail
         /** Expected bases read from the storage when the batch was planned (validation only). */
         U32View m_outExpectedBases;
         MappedU32View m_outExpectedBasesHost;
+        /** Owned host staging for the asynchronous base-table publishes. */
+        BaseTableStaging<TDevice> m_baseTableStaging;
         bool m_staleBaseTable = false;
         bool m_skipBasePublish = false;
         std::uint32_t m_batchesPublished = 0u;
@@ -2167,6 +2234,7 @@ namespace graphFlow::detail
             , m_expectedBasesHost{alpaka::onHost::allocMapped<std::uint32_t>(
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
+            , m_baseTableStaging{device, storage.numChunks()}
             , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
@@ -2491,7 +2559,7 @@ namespace graphFlow::detail
             }
             std::uint64_t const rows = m_storage.numChunks();
             if(!m_skipBasePublish)
-                alpaka::onHost::memcpy(queue, m_bases, m_storage.baseTableHost(), alpaka::Vec{rows});
+                m_baseTableStaging.publish(queue, m_bases, m_storage.baseTableHost().data(), rows);
             if constexpr(debug::checksEnabled)
                 alpaka::onHost::memcpy(queue, m_expectedBases, m_expectedBasesHost, alpaka::Vec{rows});
         }
@@ -2535,6 +2603,8 @@ namespace graphFlow::detail
         /** Expected bases read from the storage when the batch was planned (validation only). */
         U32View m_expectedBases;
         MappedU32View m_expectedBasesHost;
+        /** Owned host staging for the asynchronous base-table publishes. */
+        BaseTableStaging<TDevice> m_baseTableStaging;
         bool m_staleBaseTable = false;
         bool m_skipBasePublish = false;
         std::uint32_t m_batchesPublished = 0u;
