@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -469,7 +470,9 @@ namespace
         std::uint32_t batchChunks,
         graphFlow::ChunkKernelSchedule schedule,
         std::uint32_t chunkQueueDepth = 1u,
-        std::uint32_t liveParticles = 0u)
+        std::uint32_t liveParticles = 0u,
+        std::uint32_t inflightBatches = 1u,
+        std::uint32_t occupancyTargetChunks = 0u)
     {
         auto device = graphFlow::test::makeCpuDevice();
         auto results
@@ -493,8 +496,11 @@ namespace
         tuning.frameCap = 2u;
         tuning.chunkKernelSchedule = schedule;
         tuning.chunkQueueDepth = chunkQueueDepth;
+        tuning.inflightBatches = inflightBatches;
         if(liveParticles != 0u)
             tuning.liveParticles = liveParticles;
+        if(occupancyTargetChunks != 0u)
+            tuning.occupancyTargetChunks = occupancyTargetChunks;
         flow.configure(tuning);
         graphFlow::SchedulerStats const stats = flow.run(source, particles);
 
@@ -606,4 +612,55 @@ TEST_CASE(
     CHECK(run.threw);
     CHECK(run.message.find("invalid") != std::string::npos);
     CHECK(run.allocated == 0u);
+}
+
+TEST_CASE("per-chunk schedule runs two submitted batches over a four-queue pool", "[integration][chunk-schedule]")
+{
+    using graphFlow::ChunkKernelSchedule;
+
+    // `inflightBatches = 2` with `chunkQueueDepth = 4` is the only configuration that builds
+    // `depth * chunkQueues = 8` transform lanes over a four-queue pool, so two lanes share one
+    // queue. Every other case runs at the default depth of one, where the lane count equals the
+    // queue count and the pairing never happens.
+    std::uint64_t const particles = 4097u;
+    std::uint32_t const capacity = 127u;
+    std::uint32_t const chunks = static_cast<std::uint32_t>((particles + capacity - 1u) / capacity);
+
+    FlowRun const off = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::off);
+    // One submitted batch over the same four-queue pool: the per-chunk reference the new
+    // two-batch configuration has to reproduce.
+    FlowRun const single = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u);
+    FlowRun const paired = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u, 0u, 2u);
+
+    // Physics: identical to the fixed schedule and to the single-batch per-chunk run.
+    REQUIRE(off.values.size() == paired.values.size());
+    CHECK(std::memcmp(off.values.data(), paired.values.data(), paired.values.size() * sizeof(std::uint32_t)) == 0);
+    REQUIRE(single.values.size() == paired.values.size());
+    CHECK(std::memcmp(single.values.data(), paired.values.data(), paired.values.size() * sizeof(std::uint32_t)) == 0);
+    // No per-lane status or credit corruption: every id keeps its payload and its exact result,
+    // which is the check the off/on matrix performs for one lane per queue.
+    for(std::size_t id = 0u; id < paired.values.size(); ++id)
+    {
+        CAPTURE(id);
+        REQUIRE(paired.values[id] == expectedValue(id) + static_cast<std::uint32_t>(id % 2u));
+    }
+
+    // Every chunk is accounted for at the run end: the runner's chunk-leak check would have thrown
+    // if the free list did not tile the whole pool again, and every admitted particle reached a
+    // sink. Admission may split the source into chunks smaller than C, so the kernel count is at
+    // least ceil(N/C).
+    CHECK(paired.stats.chunkLaunches >= chunks);
+    CHECK(paired.stats.sourceSunk == particles);
+    CHECK(paired.stats.sourceLiveParticles == 0u);
+
+    // The lane count itself is observable through the occupancy gate, which rejects a target below
+    // the registered lane count. This graph registers 2 source + 2 * 4 transform + 2 partition +
+    // 2 sink = 14 lanes, so a target of 13 has to be rejected and a target of 14 has to run and
+    // keep the physics. A lane count that drops one factor of `depth * chunkQueues` accepts 13.
+    CHECK_THROWS_AS(
+        runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u, 0u, 2u, 13u),
+        std::invalid_argument);
+    FlowRun const gated = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 4u, 0u, 2u, 14u);
+    REQUIRE(gated.values.size() == paired.values.size());
+    CHECK(std::memcmp(gated.values.data(), paired.values.data(), paired.values.size() * sizeof(std::uint32_t)) == 0);
 }
