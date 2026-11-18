@@ -2112,6 +2112,7 @@ namespace graphFlow::detail
             if(m_fixedBaseTable && m_baseTablePublished)
                 return;
             std::uint64_t const rows = m_storage.numChunks();
+            bool const firstPublish = !m_baseTablePublished;
             if(!m_skipBasePublish)
             {
                 m_baseTableStaging.publish(queue, m_outBases, m_storage.baseTableHost().data(), rows);
@@ -2119,7 +2120,15 @@ namespace graphFlow::detail
                 m_baseTablePublished = true;
             }
             if constexpr(debug::checksEnabled)
+            {
+                // The expected table is initialised row by row as batches plan chunks, so the
+                // first fixed-layout publish fills the unused rows from the storage. Without it
+                // a chunk first used by a later batch would compare its device row against an
+                // uninitialised expected row.
+                if(m_fixedBaseTable && firstPublish)
+                    std::copy_n(m_storage.baseTableHost().data(), rows, m_outExpectedBasesHost.data());
                 alpaka::onHost::memcpy(queue, m_outExpectedBases, m_outExpectedBasesHost, alpaka::Vec{rows});
+            }
         }
 
         TDevice m_device;
@@ -2598,6 +2607,7 @@ namespace graphFlow::detail
             if(m_fixedBaseTable && m_baseTablePublished)
                 return;
             std::uint64_t const rows = m_storage.numChunks();
+            bool const firstPublish = !m_baseTablePublished;
             if(!m_skipBasePublish)
             {
                 m_baseTableStaging.publish(queue, m_bases, m_storage.baseTableHost().data(), rows);
@@ -2605,7 +2615,15 @@ namespace graphFlow::detail
                 m_baseTablePublished = true;
             }
             if constexpr(debug::checksEnabled)
+            {
+                // The expected table is initialised row by row as batches plan chunks, so the
+                // first fixed-layout publish fills the unused rows from the storage. Without it
+                // a chunk first used by a later batch would compare its device row against an
+                // uninitialised expected row.
+                if(m_fixedBaseTable && firstPublish)
+                    std::copy_n(m_storage.baseTableHost().data(), rows, m_expectedBasesHost.data());
                 alpaka::onHost::memcpy(queue, m_expectedBases, m_expectedBasesHost, alpaka::Vec{rows});
+            }
         }
 
         void finalise()
