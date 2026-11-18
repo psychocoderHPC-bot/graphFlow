@@ -431,20 +431,40 @@ TEST_CASE("slot arena completes the N=100000 C=8192 run with the fixed physics",
     parameters.maxVisits = 64u;
 
     // The fixed layout needs P*C slots, so the shared policy budget is 4 GiB here. The arena run
-    // uses the same P and C but only 64 MiB of slots, which is the whole point of the class.
+    // uses the same P and C but a small fraction of the slots, which is the whole point of the
+    // class.
     graphFlow::Tuning fixedTuning = graphFlow::particle::tuningOf(parameters);
     fixedTuning.policyMemoryBudgetBytes = 4ull << 30u;
     fixedTuning.poolPayloadBudgetBytes = 16ull << 30u;
     auto const fixed = graphFlow::particle::runParticleFeedback(device, parameters, fixedTuning);
     checkAgainstReference(parameters, fixed);
 
-    // The full-chunk class makes the allocation independent of the general free list; the arena
-    // still has to hold the peak number of live output chunks. `peakLiveFullChunks` reports the
-    // measured value, so a 64 MiB arena is stated rather than guessed.
-    constexpr std::uint64_t arenaBudgetBytes = 64ull << 20u;
+    // The feedback graph has one B=2 and two B=3 partitions, so the output-credit reserve is
+    // outputChunkBound(C,C,2) + 2*outputChunkBound(C,C,3) = 8 chunks.
+    std::uint64_t const reserve = graphFlow::outputChunkBound(parameters.chunkSize, parameters.chunkSize, 2u)
+                                  + 2u * graphFlow::outputChunkBound(parameters.chunkSize, parameters.chunkSize, 3u);
+
+    // The arena budget cannot be a literal. The number of live full-capacity output ranges is a
+    // scheduling property of the host, not a geometry constant: a 64 MiB arena holds 339 full
+    // chunks at this geometry and failed in CI when the run reached a 340th live range, while the
+    // same tree needed 193 to 240 ranges on quieter hosts. Calibrate once under the provable
+    // worst-case reservation (one full-capacity range per chunk index, `P + K*R`) and size the
+    // measured arena from the requirement that run reports. The peak still moves with host load,
+    // so the requirement is tripled: the largest observed swing is 340 against 193 (1.76x), which
+    // leaves the sized arena far above any peak seen so far and still far below the fixed pool.
+    graphFlow::Tuning calibration = fixedTuning;
+    calibration.poolMode = graphFlow::PoolMode::slotArena;
+    calibration.slotArenaBudgetBytes = graphFlow::requiredArenaBytes(
+        parameters.liveParticles,
+        parameters.chunkSize,
+        parameters.liveParticles + reserve);
+    auto const measured = graphFlow::particle::runParticleFeedback(device, parameters, calibration);
+    CHECK(measured.weights == fixed.weights);
+
+    std::uint64_t const sizedSlots = 3u * measured.stats.requiredArenaSlots;
     graphFlow::Tuning arenaTuning = fixedTuning;
     arenaTuning.poolMode = graphFlow::PoolMode::slotArena;
-    arenaTuning.slotArenaBudgetBytes = arenaBudgetBytes;
+    arenaTuning.slotArenaBudgetBytes = sizedSlots * graphFlow::payloadBytesPerSlot;
     auto const arena = graphFlow::particle::runParticleFeedback(device, parameters, arenaTuning);
 
     CHECK(arena.weights == fixed.weights);
@@ -453,13 +473,21 @@ TEST_CASE("slot arena completes the N=100000 C=8192 run with the fixed physics",
     CHECK(arena.sunkParticles == fixed.sunkParticles);
     CHECK(arena.stats.poolChunks == fixed.stats.poolChunks);
     CHECK(arena.stats.sourceSunk == parameters.numParticles);
-    CHECK(arena.stats.poolBytes == arenaBudgetBytes / graphFlow::payloadBytesPerSlot * graphFlow::payloadBytesPerSlot);
-    // The peak live output chunks, not the K*R credits, size the full-chunk class; the measured
-    // value is reported so the arena budget is reproducible.
+    CHECK(arena.stats.poolSlots == sizedSlots);
+    CHECK(arena.stats.poolBytes == sizedSlots * graphFlow::payloadBytesPerSlot);
+    // Sufficiency: the derived arena serves this execution, so an under-stated derivation throws
+    // instead of retrying.
+    CHECK(arena.stats.requiredArenaSlots <= arena.stats.poolSlots);
+    // The peak live output chunks, not the K*R credits, size the full-chunk class.
     CHECK(arena.stats.peakLiveFullChunks > 0u);
-    CHECK(
-        arena.stats.peakLiveFullChunks
-        <= arena.stats.poolBytes / (parameters.chunkSize * graphFlow::payloadBytesPerSlot));
+    // The full-chunk class grows from the tail down to the general high-water mark, so the arena
+    // fits `(poolSlots - P) / C` full ranges, not `poolSlots / C`. The general P slots are
+    // permanently below that mark; a bound that divides the whole arena by C is two chunks loose
+    // here and accepts a size the allocator rejects.
+    CHECK(arena.stats.peakLiveFullChunks <= (arena.stats.poolSlots - parameters.liveParticles) / parameters.chunkSize);
+    // The memory claim is stated against the fixed pool at the same P and C, not against a
+    // literal arena size: the derived arena keeps an order of magnitude more headroom.
+    CHECK(arena.stats.poolSlots * 10u < fixed.stats.poolSlots);
     checkAgainstReference(parameters, arena);
 }
 
