@@ -91,6 +91,7 @@ namespace
                   << " tile-size=" << parameters.tileSize << " batch-chunks=" << parameters.batchChunks
                   << " frame-cap=" << parameters.frameCap << " chunk-kernel-schedule="
                   << (parameters.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk ? "perChunk" : "off")
+                  << " transform-kernel-mode=" << graphFlow::transformKernelModeName(parameters.transformKernelMode)
                   << " chunk-queue-depth=" << parameters.chunkQueueDepth
                   << " chunk-latency-cap-us=" << parameters.chunkLatencyCapUs << '\n';
         std::cout << "# units length=1 coefficient=1/length\n";

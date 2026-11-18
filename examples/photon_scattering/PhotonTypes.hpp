@@ -262,6 +262,8 @@ namespace graphFlow::photon
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
         /** Transform launch schedule; `off` keeps the batch-wide transform launch. */
         graphFlow::ChunkKernelSchedule chunkKernelSchedule = graphFlow::ChunkKernelSchedule::off;
+        /** Kernel mapping of the batch-wide transform; `batch` keeps the historical launch. */
+        graphFlow::TransformKernelMode transformKernelMode = graphFlow::TransformKernelMode::batch;
         /** Per-chunk transform queues; one keeps a single serial queue. */
         std::uint32_t chunkQueueDepth = 1u;
         /** Per-chunk latency cap in microseconds fed to the launch-size policy; zero means no cap. */
@@ -326,6 +328,10 @@ namespace graphFlow::photon
         if(parameters.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk
            && parameters.chunkQueueDepth == 0u)
             throw std::invalid_argument{"graphFlow::photon: chunkQueueDepth must be non-zero for perChunk"};
+        if(parameters.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk
+           && parameters.transformKernelMode != graphFlow::TransformKernelMode::batch)
+            throw std::invalid_argument{
+                "graphFlow::photon: transformKernelMode must be batch when chunkKernelSchedule is perChunk"};
         if(parameters.mode != ScatterMode::forward && parameters.mode != ScatterMode::isotropic)
             throw std::invalid_argument{"graphFlow::photon: unknown scattering mode"};
         if(parameters.trace.enabled)
@@ -349,6 +355,7 @@ namespace graphFlow::photon
         tuning.batchChunks = parameters.batchChunks;
         tuning.frameCap = parameters.frameCap;
         tuning.chunkKernelSchedule = parameters.chunkKernelSchedule;
+        tuning.transformKernelMode = parameters.transformKernelMode;
         tuning.chunkQueueDepth = parameters.chunkQueueDepth;
         tuning.chunkLatencyCapUs = parameters.chunkLatencyCapUs;
         if(parameters.poolPayloadBudgetBytes != 0u)

@@ -9,6 +9,7 @@
 #include "graphFlow/core/PoolBudget.hpp"
 #include "graphFlow/core/PoolMode.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
+#include "graphFlow/core/TransformKernelMode.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -78,6 +79,14 @@ namespace graphFlow
         ChunkKernelSchedule chunkKernelSchedule = ChunkKernelSchedule::off;
         /** Chunk queues a per-chunk transform node owns; one keeps a single serial queue. */
         std::uint32_t chunkQueueDepth = 1u;
+        /** Kernel mapping of the batch-wide transform stage.
+         *
+         * `batch` keeps the historical one-block-per-chunk launch. `simdBlocks` and `simdWarps`
+         * change the mapping inside the transform kernel (one chunk per block, respectively per
+         * warp) and process the storage columns through `onAcc::SimdAlgo::concurrent()`. They are
+         * mutually exclusive with the per-chunk schedule, which already fixes the launch geometry.
+         */
+        TransformKernelMode transformKernelMode = TransformKernelMode::batch;
         /** Per-chunk latency cap in microseconds fed to the chunk-size policy; zero means no cap. */
         std::uint32_t chunkLatencyCapUs = 0u;
         /** Bin-table implementation of every partition node in this run.
@@ -291,6 +300,10 @@ namespace graphFlow
             if(chunkKernelSchedule == ChunkKernelSchedule::perChunk && chunkQueueDepth == 0u)
                 throw std::invalid_argument{
                     "graphFlow::Config: chunkQueueDepth must be non-zero when chunkKernelSchedule is perChunk"};
+            if(chunkKernelSchedule == ChunkKernelSchedule::perChunk
+               && transformKernelMode != TransformKernelMode::batch)
+                throw std::invalid_argument{
+                    "graphFlow::Config: transformKernelMode must be batch when chunkKernelSchedule is perChunk"};
             if(frameCap == 0u)
                 throw std::invalid_argument{"graphFlow::Config: frameCap must be non-zero"};
             // The reachable-occupancy bound is `numChunks - poolOutputReserveChunks`. The lane

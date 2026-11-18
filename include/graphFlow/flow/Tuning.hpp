@@ -8,6 +8,7 @@
 #include "graphFlow/core/ChunkKernelSchedule.hpp"
 #include "graphFlow/core/PoolMode.hpp"
 #include "graphFlow/core/ScatterMode.hpp"
+#include "graphFlow/core/TransformKernelMode.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -47,6 +48,15 @@ namespace graphFlow
         std::optional<std::uint32_t> chunkQueueDepth;
         /** Per-chunk latency cap in microseconds; zero means "no cap" and is a valid value. */
         std::optional<std::uint32_t> chunkLatencyCapUs;
+        /** Kernel mapping of the batch-wide transform stage.
+         *
+         * Absence keeps `Config::transformKernelMode` (`batch`). `simdBlocks` assigns one chunk
+         * per block and `simdWarps` one chunk per warp, both walking the batch chunk list with an
+         * index map and processing the payloads through `onAcc::SimdAlgo::concurrent()`. The
+         * mapping changes launch geometry only; output positions, tails and RNG streams stay the
+         * batch semantics. The SIMD mappings require a SoA payload storage.
+         */
+        std::optional<TransformKernelMode> transformKernelMode;
 
         // Storage and pool limits.
         std::optional<std::uint32_t> chunkCapacity;

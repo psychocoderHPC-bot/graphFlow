@@ -36,6 +36,7 @@ namespace graphFlow::photon::cli
         std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
         std::string chunkKernelSchedule = "off"; // off|perChunk
+        std::string transformKernelMode = "batch"; // batch|simdBlocks|simdWarps
         std::uint32_t chunkQueueDepth = 1u;
         std::uint32_t chunkLatencyCapUs = 0u; // zero means no cap
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
@@ -77,6 +78,7 @@ namespace graphFlow::photon::cli
                "                                      [--pool-mode fixed|slotArena]\n"
                "                                      [--slot-arena-budget BYTES]\n"
                "                                      [--chunk-kernel-schedule off|perChunk]\n"
+               "                                      [--transform-kernel-mode batch|simdBlocks|simdWarps]\n"
                "                                      [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
                "                                      [--output-dir DIR] [--trace-photons M]\n"
                "                                      [--trace-vertices V]\n";
@@ -134,6 +136,19 @@ namespace graphFlow::photon::cli
         if(value == "perChunk")
             return graphFlow::ChunkKernelSchedule::perChunk;
         throw std::invalid_argument{std::string{flag} + ": expected 'off' or 'perChunk', got '" + value + "'"};
+    }
+
+    /** Parse the transform kernel mapping of `--transform-kernel-mode`. */
+    inline graphFlow::TransformKernelMode parseTransformKernelMode(std::string_view flag, std::string const& value)
+    {
+        if(value == graphFlow::transformKernelModeName(graphFlow::TransformKernelMode::batch))
+            return graphFlow::TransformKernelMode::batch;
+        if(value == graphFlow::transformKernelModeName(graphFlow::TransformKernelMode::simdBlocks))
+            return graphFlow::TransformKernelMode::simdBlocks;
+        if(value == graphFlow::transformKernelModeName(graphFlow::TransformKernelMode::simdWarps))
+            return graphFlow::TransformKernelMode::simdWarps;
+        throw std::invalid_argument{
+            std::string{flag} + ": expected 'batch', 'simdBlocks' or 'simdWarps', got '" + value + "'"};
     }
 
     /** Parse the chunk-slot layout of `--pool-mode`. */
@@ -197,6 +212,8 @@ namespace graphFlow::photon::cli
                 options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             else if(flag == "--chunk-kernel-schedule")
                 options.chunkKernelSchedule = nextValue(flag);
+            else if(flag == "--transform-kernel-mode")
+                options.transformKernelMode = nextValue(flag);
             else if(flag == "--chunk-queue-depth")
                 options.chunkQueueDepth = parseU32(flag, nextValue(flag));
             else if(flag == "--chunk-latency-cap-us")
@@ -254,6 +271,8 @@ namespace graphFlow::photon::cli
         resolved.parameters.frameCap = options.frameCap;
         resolved.parameters.chunkKernelSchedule
             = parseChunkKernelSchedule("--chunk-kernel-schedule", options.chunkKernelSchedule);
+        resolved.parameters.transformKernelMode
+            = parseTransformKernelMode("--transform-kernel-mode", options.transformKernelMode);
         resolved.parameters.chunkQueueDepth = options.chunkQueueDepth;
         resolved.parameters.chunkLatencyCapUs = options.chunkLatencyCapUs;
         resolved.parameters.seed = options.seed;

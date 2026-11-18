@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -261,6 +262,13 @@ namespace graphFlow::detail
 
         static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
         static_assert(arity == 4u, "graphFlow: AoS payload access must expose four views");
+        /** The SIMD transform needs one independently loadable column per payload field.
+         *
+         * The AoS layout stores the whole payload in one view, so a lane-wise payload cannot be
+         * assembled from SIMD packs of independent columns. The SIMD kernel mappings reject this
+         * layout instead of silently falling back to the scalar kernel.
+         */
+        static constexpr bool supportsSimdLane = false;
 
         [[nodiscard]] static View0 view0(TStorage const& storage)
         {
@@ -333,6 +341,9 @@ namespace graphFlow::detail
 
         static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
         static_assert(arity == 4u, "graphFlow: particle payload access must expose four views");
+        /** The fixed particle layout is not a `Record` over attribute columns; the SIMD lane
+         * assembly is only defined for the generic SoA payload storage. */
+        static constexpr bool supportsSimdLane = false;
 
         [[nodiscard]] static View0 view0(ParticleStorage<TDevice> const& storage)
         {
@@ -444,6 +455,20 @@ namespace graphFlow::detail
         static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
         static_assert(arity == sizeof...(TAttrs), "graphFlow: SoA access must expose one view per attribute");
 
+        /** One SIMD pack per attribute column can be assembled back into one payload lane. */
+        static constexpr bool supportsSimdLane = true;
+
+        /** Assemble the payload of one SIMD lane from the per-column packs.
+         *
+         * `packs` is the tuple returned by loading one `SimdPtr` per attribute column. Every pack
+         * has the width `SimdAlgo` selected, so `lane` addresses the same element in all columns.
+         */
+        template<typename... TPacks>
+        ALPAKA_FN_ACC static Payload assembleLane(std::uint32_t lane, std::tuple<TPacks...> const& packs)
+        {
+            return assembleLaneImpl(lane, packs, std::index_sequence_for<TAttrs...>{});
+        }
+
         [[nodiscard]] static Views views(Storage& storage)
         {
             return Views{alpaka::makeView(storage.template column<typename TAttrs::tag_type>())...};
@@ -470,6 +495,15 @@ namespace graphFlow::detail
         ALPAKA_FN_ACC static Payload loadImpl(std::uint32_t slot, TColumns const& columns, std::index_sequence<Is...>)
         {
             return Payload{columns.template get<Is>()[slot]...};
+        }
+
+        template<typename... TPacks, std::size_t... Is>
+        ALPAKA_FN_ACC static Payload assembleLaneImpl(
+            std::uint32_t lane,
+            std::tuple<TPacks...> const& packs,
+            std::index_sequence<Is...>)
+        {
+            return Payload{std::get<Is>(packs)[lane]...};
         }
 
         template<typename TColumns, std::size_t... Is>
@@ -771,6 +805,264 @@ namespace graphFlow::detail
                         payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
                     access.store(outSlot, payload, out...);
                 }
+            }
+        }
+    };
+
+    /** Store one transformed payload at its batch-global output position.
+     *
+     * This is the per-element body of the scalar batch kernel, shared by the SIMD mappings. The
+     * output-chunk arithmetic, the validation-only base check and the per-payload RNG engine are
+     * the batch semantics; keeping them in one place is what makes the SIMD mappings byte
+     * identical rather than merely similar.
+     */
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TSet,
+        typename TAcc,
+        typename TStatus,
+        typename TOutChunks,
+        typename TOutBases,
+        typename TExpectedBases,
+        typename... TOutViews>
+    ALPAKA_FN_ACC void transformAndStore(
+        TFunctor const& functor,
+        TAcc const& acc,
+        std::uint64_t seed,
+        std::uint32_t purpose,
+        TStatus& status,
+        typename TAccess::Payload payload,
+        std::uint32_t offset,
+        std::uint32_t position,
+        std::uint32_t chunkCapacity,
+        TOutChunks const& outChunks,
+        TOutBases const& outBases,
+        TExpectedBases const& expectedBases,
+        TOutViews&... out)
+    {
+        std::uint32_t const global = position + offset;
+        std::uint32_t const outputChunk = global / chunkCapacity;
+        std::uint32_t const outputOffset = global % chunkCapacity;
+        if constexpr(graphFlow::debug::checksEnabled)
+        {
+            if(outBases[outChunks[outputChunk]] != expectedBases[outChunks[outputChunk]])
+            {
+                status.set(StatusCode::invalid);
+                return;
+            }
+        }
+        std::uint32_t const outSlot = outBases[outChunks[outputChunk]] + outputOffset;
+        rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
+        if constexpr(std::is_void_v<TSet>)
+            payload = applyTransform(functor, acc, engine, status, std::move(payload));
+        else
+            payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
+        TAccess{}.store(outSlot, payload, out...);
+    }
+
+    /** Offset every payload column to the slot range of one chunk.
+     *
+     * `SimdAlgo` walks a data source from index zero, so the data sources of a chunk must start at
+     * the chunk's slot in the storage. The extent is the chunk's `fill`, so a partial tail never
+     * covers an unfilled slot. The sub-view is created on the device from the column pointer; it
+     * keeps the column's value type and its contiguous row layout.
+     */
+    template<typename... TViews>
+    ALPAKA_FN_ACC auto chunkColumnViews(std::uint32_t offset, std::uint32_t fill, TViews&... views)
+    {
+        return std::tuple{alpaka::makeMdSpan(views.data() + offset, alpaka::Vec{fill})...};
+    }
+
+    /** Out-of-place transform kernel with one chunk per block and a SIMD payload walk.
+     *
+     * Each block strides over the batch chunk list through `makeIdxMap(blocksInGrid)`, so the
+     * mapping does not assume one block equals one chunk index. Inside the block,
+     * `onAcc::SimdAlgo::concurrent()` distributes the chunk's `fill` payloads over the block
+     * threads. Every thread loads one SIMD pack per payload column, assembles the payload lanes
+     * and hands each lane to the same functor the batch kernel calls. The output position and the
+     * RNG engine are computed per lane by `transformAndStore`.
+     */
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TSet = void,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct TransformSimdBlocksKernel;
+
+    template<typename TFunctor, typename TAccess, typename TSet, typename... TInViews, typename... TOutViews>
+    struct TransformSimdBlocksKernel<TFunctor, TAccess, TSet, std::tuple<TInViews...>, std::tuple<TOutViews...>>
+    {
+        static_assert(
+            TAccess::supportsSimdLane,
+            "graphFlow: the SIMD transform needs one independently loadable column per payload field");
+
+        TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
+
+        template<
+            alpaka::onAcc::concepts::Acc TAcc,
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TInBase,
+            alpaka::concepts::IMdSpan TInCount,
+            alpaka::concepts::IMdSpan TOutPosition,
+            alpaka::concepts::IMdSpan TOutChunks,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
+        ALPAKA_FN_ACC void operator()(
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
+            TStatusView statusView,
+            TInBase inBase,
+            TInCount inCount,
+            TOutPosition outPosition,
+            TOutChunks outChunks,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
+            std::uint32_t chunkCapacity,
+            std::uint32_t chunks) const
+        {
+            using namespace alpaka;
+            Status status{&statusView[0u]};
+            auto const simdAlgo = onAcc::SimdAlgo{onAcc::worker::linearThreadsInBlock};
+            for(auto [chunkIndex] : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{chunks}))
+            {
+                std::uint32_t const chunk = static_cast<std::uint32_t>(chunkIndex);
+                std::uint32_t const inSlot = inBase[chunk];
+                std::uint32_t const count = inCount[chunk];
+                std::uint32_t const position = outPosition[chunk];
+                auto chunkIn = chunkColumnViews(inSlot, count, in...);
+                std::apply(
+                    [&](auto&... columns)
+                    {
+                        simdAlgo.concurrent(
+                            acc,
+                            alpaka::Vec{count},
+                            [&](auto const& elementAcc, auto const& firstPtr, auto const&... restPtrs)
+                            {
+                                auto packs = std::tuple{firstPtr.load(), restPtrs.load()...};
+                                std::uint32_t const base = static_cast<std::uint32_t>(firstPtr.getIdx().x());
+                                constexpr std::uint32_t width = ALPAKA_TYPEOF(std::get<0>(packs))::width();
+                                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                                {
+                                    transformAndStore<TFunctor, TAccess, TSet>(
+                                        functor,
+                                        elementAcc,
+                                        seed,
+                                        purpose,
+                                        status,
+                                        TAccess::assembleLane(lane, packs),
+                                        base + lane,
+                                        position,
+                                        chunkCapacity,
+                                        outChunks,
+                                        outBases,
+                                        expectedBases,
+                                        out...);
+                                }
+                            },
+                            columns...);
+                    },
+                    chunkIn);
+            }
+        }
+    };
+
+    /** Out-of-place transform kernel with one chunk per warp.
+     *
+     * The work group is `linearWarpsInGrid`, whose flat index is
+     * `linearBlockIdx * warpsPerBlock + warpIdxInBlock`; every lane of a warp therefore receives
+     * the same chunk index and the chunk list is walked by warps rather than by blocks. Inside a
+     * warp, `SimdAlgo` is scoped to `linearThreadsInWarp`, so the SIMD walk and the element range
+     * never leave the warp.
+     */
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TSet = void,
+        typename TInViews = typename TAccess::Views,
+        typename TOutViews = typename TAccess::Views>
+    struct TransformSimdWarpsKernel;
+
+    template<typename TFunctor, typename TAccess, typename TSet, typename... TInViews, typename... TOutViews>
+    struct TransformSimdWarpsKernel<TFunctor, TAccess, TSet, std::tuple<TInViews...>, std::tuple<TOutViews...>>
+    {
+        static_assert(
+            TAccess::supportsSimdLane,
+            "graphFlow: the SIMD transform needs one independently loadable column per payload field");
+
+        TFunctor functor;
+        std::uint64_t seed = 0u;
+        std::uint32_t purpose = 0u;
+
+        template<
+            alpaka::onAcc::concepts::Acc TAcc,
+            alpaka::concepts::IMdSpan TStatusView,
+            alpaka::concepts::IMdSpan TInBase,
+            alpaka::concepts::IMdSpan TInCount,
+            alpaka::concepts::IMdSpan TOutPosition,
+            alpaka::concepts::IMdSpan TOutChunks,
+            alpaka::concepts::IMdSpan TOutBases,
+            alpaka::concepts::IMdSpan TExpectedBases>
+        ALPAKA_FN_ACC void operator()(
+            TAcc const& acc,
+            TInViews... in,
+            TOutViews... out,
+            TStatusView statusView,
+            TInBase inBase,
+            TInCount inCount,
+            TOutPosition outPosition,
+            TOutChunks outChunks,
+            TOutBases outBases,
+            TExpectedBases expectedBases,
+            std::uint32_t chunkCapacity,
+            std::uint32_t chunks) const
+        {
+            using namespace alpaka;
+            Status status{&statusView[0u]};
+            auto const simdAlgo = onAcc::SimdAlgo{onAcc::worker::linearThreadsInWarp};
+            for(auto [chunkIndex] : onAcc::makeIdxMap(acc, onAcc::worker::linearWarpsInGrid, IdxRange{chunks}))
+            {
+                std::uint32_t const chunk = static_cast<std::uint32_t>(chunkIndex);
+                std::uint32_t const inSlot = inBase[chunk];
+                std::uint32_t const count = inCount[chunk];
+                std::uint32_t const position = outPosition[chunk];
+                auto chunkIn = chunkColumnViews(inSlot, count, in...);
+                std::apply(
+                    [&](auto&... columns)
+                    {
+                        simdAlgo.concurrent(
+                            acc,
+                            alpaka::Vec{count},
+                            [&](auto const& elementAcc, auto const& firstPtr, auto const&... restPtrs)
+                            {
+                                auto packs = std::tuple{firstPtr.load(), restPtrs.load()...};
+                                std::uint32_t const base = static_cast<std::uint32_t>(firstPtr.getIdx().x());
+                                constexpr std::uint32_t width = ALPAKA_TYPEOF(std::get<0>(packs))::width();
+                                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                                {
+                                    transformAndStore<TFunctor, TAccess, TSet>(
+                                        functor,
+                                        elementAcc,
+                                        seed,
+                                        purpose,
+                                        status,
+                                        TAccess::assembleLane(lane, packs),
+                                        base + lane,
+                                        position,
+                                        chunkCapacity,
+                                        outChunks,
+                                        outBases,
+                                        expectedBases,
+                                        out...);
+                                }
+                            },
+                            columns...);
+                    },
+                    chunkIn);
             }
         }
     };
@@ -1717,6 +2009,7 @@ namespace graphFlow::detail
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
             , m_chunkSchedule{config.chunkKernelSchedule}
+            , m_kernelMode{config.transformKernelMode}
             , m_reserveBound{checkedReserveBound(m_capacity, config.batchChunks)}
             , m_inBase{alpaka::onHost::alloc<std::uint32_t>(
                   device,
@@ -1764,6 +2057,12 @@ namespace graphFlow::detail
             if constexpr(requires { m_storage.poolMode(); })
                 m_fixedBaseTable = m_storage.poolMode() == PoolMode::fixed;
             m_pending.reserve(m_reserveBound);
+            if constexpr(!Access::supportsSimdLane)
+            {
+                if(m_kernelMode != TransformKernelMode::batch)
+                    throw std::invalid_argument{
+                        "graphFlow: transformKernelMode simdBlocks/simdWarps needs a SoA payload storage"};
+            }
             if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
             {
                 // Per-chunk completion slots: one status word per input chunk of a batch, so a
@@ -1793,6 +2092,35 @@ namespace graphFlow::detail
         [[nodiscard]] std::string chunkScheduleLimitName() const override
         {
             return m_chunkPolicy ? m_chunkPolicy->limitName : std::string{};
+        }
+
+        /** Frame launch of the warp mapping.
+         *
+         * One frame has to provide at least one warp per chunk the batch dispatches; the block
+         * extent stays the configured tile size so a warp is a real warp on the accelerator. The
+         * frame count keeps the frame cap and the grid limit of the batch launch. The host backend
+         * runs one real thread per frame, so its frames equal the chunk count and the SIMD width
+         * inside `SimdAlgo` provides the parallelism.
+         */
+        [[nodiscard]] LaunchPolicy simdWarpLaunch(std::uint32_t chunks) const
+        {
+            auto const properties = m_device.getDeviceProperties();
+            std::uint64_t const sms = properties.multiProcessorCount == 0u ? 1u : properties.multiProcessorCount;
+            std::uint64_t warpsPerBlock = 1u;
+            if constexpr(!std::same_as<ALPAKA_TYPEOF(m_device.getApi()), alpaka::api::Host>)
+            {
+                std::uint64_t const warpSize = properties.warpSize == 0u ? 1u : properties.warpSize;
+                warpsPerBlock = std::max<std::uint64_t>(static_cast<std::uint64_t>(m_tileSize) / warpSize, 1u);
+            }
+            std::uint64_t frames = (static_cast<std::uint64_t>(chunks) + warpsPerBlock - 1u) / warpsPerBlock;
+            frames = std::max<std::uint64_t>(frames, 1u);
+            std::uint64_t const gridLimit
+                = properties.maxBlocksPerGrid == 0u ? 1u : static_cast<std::uint64_t>(properties.maxBlocksPerGrid);
+            frames = std::min<std::uint64_t>({frames, gridLimit, static_cast<std::uint64_t>(m_frameCap) * sms});
+            if constexpr(std::same_as<ALPAKA_TYPEOF(m_device.getApi()), alpaka::api::Host>)
+                return LaunchPolicy{static_cast<std::uint32_t>(frames), 1u, m_tileSize};
+            else
+                return LaunchPolicy{static_cast<std::uint32_t>(frames), m_tileSize, m_tileSize};
         }
 
         void launch(Queue const& queue, Batch const& batch) override
@@ -1865,21 +2193,68 @@ namespace graphFlow::detail
 
                 LaunchPolicy const policy = launchPolicy(m_device, particles, m_tileSize, m_frameCap);
                 auto const views = Access::views(m_storage);
-                enqueueKernelWithInOutViews(
-                    queue,
-                    policy.frameSpec(),
-                    TransformKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
-                    views,
-                    views,
-                    m_status,
-                    m_inBase,
-                    m_inCount,
-                    m_outPosition,
-                    m_outChunks,
-                    m_outBases,
-                    m_outExpectedBases,
-                    m_capacity,
-                    static_cast<std::uint32_t>(chunkCount));
+                auto const enqueueBatch = [&]
+                {
+                    enqueueKernelWithInOutViews(
+                        queue,
+                        policy.frameSpec(),
+                        TransformKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
+                        views,
+                        views,
+                        m_status,
+                        m_inBase,
+                        m_inCount,
+                        m_outPosition,
+                        m_outChunks,
+                        m_outBases,
+                        m_outExpectedBases,
+                        m_capacity,
+                        static_cast<std::uint32_t>(chunkCount));
+                };
+                if constexpr(Access::supportsSimdLane)
+                {
+                    if(m_kernelMode == TransformKernelMode::simdBlocks)
+                    {
+                        enqueueKernelWithInOutViews(
+                            queue,
+                            policy.frameSpec(),
+                            TransformSimdBlocksKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
+                            views,
+                            views,
+                            m_status,
+                            m_inBase,
+                            m_inCount,
+                            m_outPosition,
+                            m_outChunks,
+                            m_outBases,
+                            m_outExpectedBases,
+                            m_capacity,
+                            static_cast<std::uint32_t>(chunkCount));
+                    }
+                    else if(m_kernelMode == TransformKernelMode::simdWarps)
+                    {
+                        LaunchPolicy const warpPolicy = simdWarpLaunch(static_cast<std::uint32_t>(chunkCount));
+                        enqueueKernelWithInOutViews(
+                            queue,
+                            warpPolicy.frameSpec(),
+                            TransformSimdWarpsKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
+                            views,
+                            views,
+                            m_status,
+                            m_inBase,
+                            m_inCount,
+                            m_outPosition,
+                            m_outChunks,
+                            m_outBases,
+                            m_outExpectedBases,
+                            m_capacity,
+                            static_cast<std::uint32_t>(chunkCount));
+                    }
+                    else
+                        enqueueBatch();
+                }
+                else
+                    enqueueBatch();
                 alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             }
             catch(...)
@@ -2184,6 +2559,8 @@ namespace graphFlow::detail
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
         ChunkKernelSchedule m_chunkSchedule = ChunkKernelSchedule::off;
+        /** Kernel mapping of the batch-wide transform; `batch` is the historical launch. */
+        TransformKernelMode m_kernelMode = TransformKernelMode::batch;
         std::uint32_t m_reserveBound;
         U32View m_inBase;
         MappedU32View m_inBaseHost;
