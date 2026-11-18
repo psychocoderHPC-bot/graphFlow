@@ -125,6 +125,8 @@ namespace graphFlow
                     throw std::logic_error{"graphFlow::SlotArena: the free list handed out a live range"};
                 if(free.start + count > m_generalHigh)
                     m_generalHigh = free.start + count;
+                if(m_generalHigh > m_peakGeneralHigh)
+                    m_peakGeneralHigh = m_generalHigh;
                 return free.start;
             }
             throw std::runtime_error{
@@ -212,10 +214,20 @@ namespace graphFlow
             return m_fullCursor;
         }
 
-        /** Highest slot ever handed out to a general request; the full class must stay above it. */
+        /** Highest slot ever handed out to a general request; the full class must stay above it.
+         *
+         * The value resets when a full release returns the free list to the whole arena, so it is
+         * the current bound, not a run statistic. `peakGeneralHighWater()` keeps the maximum.
+         */
         [[nodiscard]] std::uint64_t generalHighWater() const
         {
             return m_generalHigh;
+        }
+
+        /** Maximum `generalHighWater()` observed since construction; never resets. */
+        [[nodiscard]] std::uint64_t peakGeneralHighWater() const
+        {
+            return m_peakGeneralHigh;
         }
 
         /** Released full-chunk ranges waiting for reuse. */
@@ -509,6 +521,8 @@ namespace graphFlow
         std::vector<Range> m_free;
         /** Highest number of live full-chunk ranges observed. */
         std::uint64_t m_peakLiveFull = 0u;
+        /** Maximum general high-water mark observed; never resets. */
+        std::uint64_t m_peakGeneralHigh = 0u;
         /** Released full-chunk starts, ascending. */
         std::vector<std::uint64_t> m_fullFree;
         std::map<std::uint64_t, Live> m_live;
@@ -614,6 +628,12 @@ namespace graphFlow
         [[nodiscard]] std::uint64_t fullChunkSize() const
         {
             return m_arena.fullChunkSize();
+        }
+
+        /** Maximum general high-water mark observed since construction; never resets. */
+        [[nodiscard]] std::uint64_t peakGeneralHighWater() const
+        {
+            return m_arena.peakGeneralHighWater();
         }
 
         [[nodiscard]] std::uint32_t liveRangeCount() const

@@ -139,6 +139,12 @@ namespace graphFlow
             return m_arena ? m_arena->peakLiveFullChunks() : 0u;
         }
 
+        /** Maximum general high-water mark observed; never resets (arena only). */
+        [[nodiscard]] std::uint64_t peakGeneralHighWater() const
+        {
+            return m_arena ? m_arena->peakGeneralHighWater() : 0u;
+        }
+
         [[nodiscard]] ChunkHandle acquire()
         {
             return acquire(m_chunkCapacity);

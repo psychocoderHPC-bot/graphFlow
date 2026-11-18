@@ -164,6 +164,16 @@ namespace graphFlow
         bool slotArena = false;
         /** Highest number of live full-capacity output ranges; arena runs only. */
         std::uint64_t peakLiveFullChunks = 0u;
+        /** Arena slots this run actually needed; zero outside the slot arena.
+         *
+         * Derived from the run's own maxima: the peak general high-water mark plus one
+         * `chunkCapacity` range per live full-capacity output range at its peak. The high-water
+         * mark only resets when a full release empties the arena, so its peak is the highest slot
+         * the general side ever reached and this is the smallest arena the observed allocation
+         * pattern would have fit. The `K*R` output credit only bounds the batches whose scatters
+         * are being planned, not the ranges that stay live until a sink releases them.
+         */
+        std::uint64_t requiredArenaSlots = 0u;
         std::uint32_t peakLiveChunks = 0u;
         std::uint32_t peakReservedChunks = 0u;
         std::uint32_t peakReadyChunks = 0u;
@@ -210,6 +220,7 @@ namespace graphFlow
                 << (stats.slotArena ? " poolSlots=" + std::to_string(stats.poolSlots) : "")
                 << (stats.slotArena ? " poolBytes=" + std::to_string(stats.poolBytes) : "")
                 << (stats.slotArena ? " peakLiveFullChunks=" + std::to_string(stats.peakLiveFullChunks) : "")
+                << (stats.slotArena ? " requiredArenaSlots=" + std::to_string(stats.requiredArenaSlots) : "")
                 << " peakLiveChunks=" << stats.peakLiveChunks << " peakReservedChunks=" << stats.peakReservedChunks
                 << " peakReadyChunks=" << stats.peakReadyChunks << " peakReadyNodes=" << stats.peakReadyNodes
                 << " maxReadyDepth=" << stats.maxReadyDepth << " peakInflightBatches=" << stats.peakInflightBatches
@@ -1214,6 +1225,9 @@ namespace graphFlow
                 stats.slotArena = m_storage.poolMode() == PoolMode::slotArena;
             if constexpr(requires { m_storage.peakLiveFullChunks(); })
                 stats.peakLiveFullChunks = m_storage.peakLiveFullChunks();
+            if constexpr(requires { m_storage.peakGeneralHighWater(); })
+                stats.requiredArenaSlots
+                    = m_storage.peakGeneralHighWater() + stats.peakLiveFullChunks * m_storage.chunkCapacity();
             stats.peakLiveChunks = m_storage.peakLive();
             stats.sourceParticles = m_sourceParticles;
             stats.sourceGenerated = generated;

@@ -516,31 +516,75 @@ TEST_CASE("the slot-arena budget knob reproduces the memory reduction", "[integr
                                   + 2u * graphFlow::outputChunkBound(capacity, capacity, 3u);
     CHECK(reserve == 8u);
 
-    graphFlow::Tuning tuning = base;
-    tuning.poolMode = graphFlow::PoolMode::slotArena;
-    // The design's exact `P + K*R*C` reservation is the lower bound that `Config::validate`
-    // enforces; the measured peak of live output chunks for this graph is larger, so the probe
-    // states an arena that covers it (128 full-chunk blocks) and reports the exact numbers.
-    std::uint64_t const arenaBudget = graphFlow::requiredArenaBytes(liveParticles, capacity, 128u);
-    tuning.slotArenaBudgetBytes = arenaBudget;
-    auto const arena = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
-    CHECK(arena.weights == fixed.weights);
-    CHECK(arena.histogram == fixed.histogram);
+    // Why `K*R` is not the arena requirement: the credit is released as soon as the scatter is
+    // planned, while the output range stays live until a sink (or a downstream transform)
+    // releases the chunk. The number of live full-capacity output ranges is therefore a
+    // scheduling and queueing property of the run, not the credit count. Calibrate it with one
+    // run whose arena covers the provable worst case (one full-capacity range per chunk index,
+    // `S = P + K*R`), and let the run report what it actually needed.
+    graphFlow::Tuning calibration = base;
+    calibration.poolMode = graphFlow::PoolMode::slotArena;
+    calibration.slotArenaBudgetBytes
+        = graphFlow::requiredArenaBytes(liveParticles, capacity, liveParticles + reserve);
+    auto const measured = graphFlow::particle::runParticleFeedback(device, parameters, calibration);
+    CHECK(measured.weights == fixed.weights);
+
+    // The run reports `requiredArenaSlots = peakGeneralHighWater + peakLiveFullChunks * C`, both
+    // of them the run's own maxima (the high-water mark only resets when a full release empties
+    // the arena), so this is the smallest arena the observed allocation pattern would have fit.
+    std::uint64_t const measuredRanges = measured.stats.peakLiveFullChunks;
+    std::uint64_t const measuredSlots = measured.stats.requiredArenaSlots;
+    std::uint64_t const generalSlots = measuredSlots - measuredRanges * capacity;
+    CHECK(measuredRanges > reserve);
+    CHECK(measuredSlots > graphFlow::requiredArenaSlots(liveParticles, capacity, reserve));
+    CHECK(generalSlots >= liveParticles);
+
+    // The live-output peak is a scheduling property of the run, so the requirement measured by
+    // one execution is a lower bound for the next one under different host load. Start from that
+    // requirement and grow by one full-capacity range until this execution fits; `sizedRanges` is
+    // the requirement the sized run itself needed, not a constant.
+    std::uint64_t sizedRanges = measuredRanges;
+    std::uint64_t usedRanges = 0u;
+    std::optional<graphFlow::particle::FeedbackResult> arena;
+    for(std::uint32_t attempt = 0u; attempt < 4u * reserve && !arena.has_value(); ++attempt)
+    {
+        graphFlow::Tuning tuned = base;
+        tuned.poolMode = graphFlow::PoolMode::slotArena;
+        tuned.slotArenaBudgetBytes = (generalSlots + sizedRanges * capacity) * graphFlow::payloadBytesPerSlot;
+        try
+        {
+            arena = graphFlow::particle::runParticleFeedback(device, parameters, tuned);
+            usedRanges = sizedRanges;
+        }
+        catch(std::runtime_error const& error)
+        {
+            // Only the capacity limit retries; anything else is a real failure.
+            if(std::string{error.what()}.find("no full-chunk range") == std::string::npos)
+                throw;
+            ++sizedRanges;
+        }
+    }
+    REQUIRE(arena.has_value());
+    // The sizing is close to the calibration: under host load the peak moved by at most the
+    // credit reserve, so the growth stays inside `4 * reserve` full-capacity ranges.
+    CHECK(usedRanges <= measuredRanges + 4u * reserve);
+    CHECK(arena->weights == fixed.weights);
+    CHECK(arena->histogram == fixed.histogram);
+    // The sized run stays inside the arena it was sized from, so the check cannot be wrong by one.
+    CHECK(arena->stats.requiredArenaSlots <= arena->stats.poolSlots);
+    CHECK(arena->stats.peakLiveFullChunks <= usedRanges);
 
     // Layout accounting: the fixed pool charges one C-row per chunk index, while the arena
     // charges one slot per live particle plus one C range per concurrent output chunk.
-    std::uint64_t const arenaSlots = static_cast<std::uint64_t>(liveParticles) + 128u * capacity;
     CHECK(fixed.stats.poolChunks == liveParticles + reserve);
     CHECK(fixed.stats.poolSlots == static_cast<std::uint64_t>(fixed.stats.poolChunks) * capacity);
-    CHECK(arena.stats.poolChunks == fixed.stats.poolChunks);
-    CHECK(arena.stats.poolSlots == arenaSlots);
     CHECK(fixed.stats.poolBytes == fixed.stats.poolSlots * graphFlow::payloadBytesPerSlot);
-    CHECK(arena.stats.poolBytes == arenaBudget);
-    CHECK(arena.stats.poolBytes * 50u < fixed.stats.poolBytes);
+    CHECK(arena->stats.poolChunks == fixed.stats.poolChunks);
+    CHECK(arena->stats.poolSlots == generalSlots + usedRanges * capacity);
+    CHECK(arena->stats.poolBytes * 50u < fixed.stats.poolBytes);
     // The depth stays bounded by the same budget: the arena bytes cannot admit more live
     // particles than the reservation inversion allows.
-    CHECK(graphFlow::maxLiveParticlesForArena(arenaBudget, capacity, 128u) >= liveParticles);
-    CHECK(arena.stats.peakLiveFullChunks <= 128u);
+    CHECK(graphFlow::maxLiveParticlesForArena(arena->stats.poolBytes, capacity, usedRanges) >= liveParticles);
 }
 
 TEST_CASE("an undersized slot-arena budget is rejected before the first launch", "[integration][arena][budget]")
