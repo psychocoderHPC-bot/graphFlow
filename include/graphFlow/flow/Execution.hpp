@@ -839,7 +839,7 @@ namespace graphFlow::detail
         TOutChunks const& outChunks,
         TOutBases const& outBases,
         TExpectedBases const& expectedBases,
-        TOutViews&... out)
+        std::tuple<TOutViews&...> const& out)
     {
         std::uint32_t const global = position + offset;
         std::uint32_t const outputChunk = global / chunkCapacity;
@@ -858,7 +858,7 @@ namespace graphFlow::detail
             payload = applyTransform(functor, acc, engine, status, std::move(payload));
         else
             payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
-        TAccess{}.store(outSlot, payload, out...);
+        std::apply([&](auto&... views) { TAccess{}.store(outSlot, payload, views...); }, out);
     }
 
     /** Offset every payload column to the slot range of one chunk.
@@ -928,6 +928,9 @@ namespace graphFlow::detail
             using namespace alpaka;
             Status status{&statusView[0u]};
             auto const simdAlgo = onAcc::SimdAlgo{onAcc::worker::linearThreadsInBlock};
+            // Keep the output views in one tuple: nvcc 12.x rejects expanding this function's
+            // parameter pack inside the nested per-element lambda.
+            auto outViews = std::tuple<TOutViews&...>{out...};
             for(auto [chunkIndex] : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{chunks}))
             {
                 std::uint32_t const chunk = static_cast<std::uint32_t>(chunkIndex);
@@ -961,7 +964,7 @@ namespace graphFlow::detail
                                         outChunks,
                                         outBases,
                                         expectedBases,
-                                        out...);
+                                        outViews);
                                 }
                             },
                             columns...);
@@ -1024,6 +1027,7 @@ namespace graphFlow::detail
             using namespace alpaka;
             Status status{&statusView[0u]};
             auto const simdAlgo = onAcc::SimdAlgo{onAcc::worker::linearThreadsInWarp};
+            auto outViews = std::tuple<TOutViews&...>{out...};
             for(auto [chunkIndex] : onAcc::makeIdxMap(acc, onAcc::worker::linearWarpsInGrid, IdxRange{chunks}))
             {
                 std::uint32_t const chunk = static_cast<std::uint32_t>(chunkIndex);
@@ -1057,7 +1061,7 @@ namespace graphFlow::detail
                                         outChunks,
                                         outBases,
                                         expectedBases,
-                                        out...);
+                                        outViews);
                                 }
                             },
                             columns...);
