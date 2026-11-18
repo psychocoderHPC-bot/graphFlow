@@ -607,6 +607,21 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
     CHECK(zero.parameters.slotArenaBudgetBytes == 0u);
     CHECK_FALSE(zero.tuning.slotArenaBudgetBytes.has_value());
 
+    // An arena budget above the resolved pool budget raises the pool budget: the arena is the
+    // payload, so a larger arena must also raise the cap that bounds it.
+    graphFlow::cli::ResolvedOptions const raised = graphFlow::cli::resolveOptions(
+        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "67108864"}),
+        cpuProperties());
+    REQUIRE(raised.tuning.slotArenaBudgetBytes.has_value());
+    REQUIRE(raised.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*raised.tuning.poolPayloadBudgetBytes == 67108864u);
+
+    // An arena budget below the pool budget leaves the pool budget to the device policy.
+    graphFlow::cli::ResolvedOptions const small = graphFlow::cli::resolveOptions(
+        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "4096"}),
+        cpuProperties());
+    CHECK_FALSE(small.tuning.poolPayloadBudgetBytes.has_value());
+
     // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
     CHECK_THROWS_WITH(
         graphFlow::cli::resolveOptions(parseArgs({"--slot-arena-budget", "1024"}), cpuProperties()),

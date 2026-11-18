@@ -349,6 +349,12 @@ namespace graphFlow::cli
         }
 
         resolved.tuning = particle::tuningOf(resolved.parameters);
+        // The slot arena is the payload, so an explicit arena budget above the resolved pool
+        // budget raises that budget instead of being rejected as inconsistent. The device-policy
+        // memory cap still sets the derived C and P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes
+           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
+            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
         // Opt-in occupancy target. Absent keeps the default tuning unchanged, so the example
         // output is byte-identical to the pre-phase-1 binary.
         if(options.occupancyTarget)
