@@ -457,7 +457,9 @@ TEST_CASE("slot arena completes the N=100000 C=8192 run with the fixed physics",
     // The peak live output chunks, not the K*R credits, size the full-chunk class; the measured
     // value is reported so the arena budget is reproducible.
     CHECK(arena.stats.peakLiveFullChunks > 0u);
-    CHECK(arena.stats.peakLiveFullChunks <= arena.stats.poolBytes / (parameters.chunkSize * graphFlow::payloadBytesPerSlot));
+    CHECK(
+        arena.stats.peakLiveFullChunks
+        <= arena.stats.poolBytes / (parameters.chunkSize * graphFlow::payloadBytesPerSlot));
     checkAgainstReference(parameters, arena);
 }
 
@@ -519,8 +521,7 @@ TEST_CASE("the slot-arena budget knob reproduces the memory reduction", "[integr
     // The design's exact `P + K*R*C` reservation is the lower bound that `Config::validate`
     // enforces; the measured peak of live output chunks for this graph is larger, so the probe
     // states an arena that covers it (128 full-chunk blocks) and reports the exact numbers.
-    std::uint64_t const arenaBudget
-        = graphFlow::requiredArenaBytes(liveParticles, capacity, 128u);
+    std::uint64_t const arenaBudget = graphFlow::requiredArenaBytes(liveParticles, capacity, 128u);
     tuning.slotArenaBudgetBytes = arenaBudget;
     auto const arena = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
     CHECK(arena.weights == fixed.weights);

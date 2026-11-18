@@ -237,8 +237,7 @@ namespace graphFlow
                 if(slotArenaBudgetBytes != 0u && slotArenaBudgetBytes > poolPayloadBudgetBytes)
                     throw std::invalid_argument{
                         "graphFlow::Config: the slot-arena budget of " + std::to_string(slotArenaBudgetBytes)
-                        + " bytes exceeds the payload budget of " + std::to_string(poolPayloadBudgetBytes)
-                        + " bytes"};
+                        + " bytes exceeds the payload budget of " + std::to_string(poolPayloadBudgetBytes) + " bytes"};
                 std::uint64_t const arenaBudget
                     = slotArenaBudgetBytes != 0u ? slotArenaBudgetBytes : poolPayloadBudgetBytes;
                 std::uint64_t const slots

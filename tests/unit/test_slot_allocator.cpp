@@ -269,7 +269,9 @@ TEST_CASE("a fragmented general free list cannot block a full-chunk allocation",
     {
         exhausted = error.what();
     }
-    CHECK(exhausted.find("no full-chunk range of 8 slots is free above the general high-water mark") != std::string::npos);
+    CHECK(
+        exhausted.find("no full-chunk range of 8 slots is free above the general high-water mark")
+        != std::string::npos);
 
     arena.release(reused, block);
     arena.release(bottom, block);

@@ -722,9 +722,8 @@ namespace graphFlow
                 // arena still has to hold the peak number of concurrent output chunks.
                 // `Config::validate()` checks the `P + K*R*C` reservation against the arena and
                 // rejects an undersized one before the run.
-                std::uint64_t const arenaBudget = config.slotArenaBudgetBytes != 0u
-                                                      ? config.slotArenaBudgetBytes
-                                                      : config.poolPayloadBudgetBytes;
+                std::uint64_t const arenaBudget
+                    = config.slotArenaBudgetBytes != 0u ? config.slotArenaBudgetBytes : config.poolPayloadBudgetBytes;
                 config.slotArenaSlots = maxPayloadSlots(arenaBudget, config.slotBytes);
             }
 

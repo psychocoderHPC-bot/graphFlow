@@ -153,8 +153,7 @@ namespace graphFlow
             }
             else
             {
-                if(m_fullCursor < m_fullChunkSize
-                   || m_fullCursor - m_fullChunkSize < m_generalHigh)
+                if(m_fullCursor < m_fullChunkSize || m_fullCursor - m_fullChunkSize < m_generalHigh)
                     throw std::runtime_error{
                         "graphFlow::SlotArena: no full-chunk range of " + std::to_string(m_fullChunkSize)
                         + " slots is free above the general high-water mark of " + std::to_string(m_generalHigh)
@@ -566,8 +565,7 @@ namespace graphFlow
             if(owns(index))
                 throw std::logic_error{"graphFlow::ArenaSlotMap: chunk index already owns a slot range"};
             if(m_arena.fullChunkSize() == 0u)
-                throw std::logic_error{
-                    "graphFlow::ArenaSlotMap: the arena has no full-chunk size class"};
+                throw std::logic_error{"graphFlow::ArenaSlotMap: the arena has no full-chunk size class"};
             std::uint64_t const start = m_arena.allocateFull();
             m_bases[index] = start;
             m_fills[index] = static_cast<std::uint32_t>(m_arena.fullChunkSize());
