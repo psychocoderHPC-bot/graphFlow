@@ -239,6 +239,21 @@ builds is source, partition and sink nodes, so no per-chunk transform launch
 and no transform queue pool exists. Its `--help` text says so, and the run
 prints a `# note:` line when one of the three is set to a non-default value.
 
+`Tuning::transformKernelMode` (`TransformKernelMode::batch` by default) selects
+the kernel mapping of the batch-wide transform. `simdBlocks` assigns one chunk
+per block and walks the batch chunk list through an index map over
+`blocksInGrid`; `simdWarps` derives a flat warp id from the block index and the
+warp index (the `linearWarpsInGrid` mapping) and assigns one chunk per warp.
+Both process the chunk elements through `onAcc::SimdAlgo::concurrent()`, which
+hands each thread SIMD packs of the SoA columns. The mapping changes launch
+geometry only: the per-payload output position, the partially filled tail and
+the RNG engine derived from the payload's `(id, event)` stay the batch
+semantics. The SIMD mappings need a SoA payload storage and are rejected on the
+fixed AoS layouts. `Config::validate()` rejects a SIMD mapping together with
+`ChunkKernelSchedule::perChunk`, because the per-chunk schedule already fixes
+the launch geometry. The `photon_scattering` CLI exposes the knob as
+`--transform-kernel-mode batch|simdBlocks|simdWarps` (default `batch`).
+
 `Tuning::slotArenaBudgetBytes` (`std::uint64_t`, zero keeps the whole payload
 budget) sizes the slot-arena payload array independently of
 `poolPayloadBudgetBytes`: the arena holds `floor(bytes / slotBytes)` slots
