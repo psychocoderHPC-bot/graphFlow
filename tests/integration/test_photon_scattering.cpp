@@ -682,19 +682,28 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
 TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuning][simd]")
 {
     auto const device = graphFlow::test::makeCpuDevice();
-    auto run = [&](graphFlow::TransformKernelMode mode, std::uint32_t chunkSize)
+
+    struct Case
+    {
+        std::uint64_t photons;
+        std::uint32_t chunkSize;
+        ScatterMode mode;
+        std::uint32_t maxScatters;
+    };
+
+    auto run = [&](graphFlow::TransformKernelMode kernelMode, Case const& testCase)
     {
         Parameters parameters;
-        parameters.numPhotons = 513u;
-        parameters.chunkSize = chunkSize;
+        parameters.numPhotons = testCase.photons;
+        parameters.chunkSize = testCase.chunkSize;
         parameters.batchChunks = 8u;
         parameters.seed = 42u;
         parameters.thickness = 1.0;
         parameters.sigmaS = 0.8;
         parameters.sigmaA = 0.2;
-        parameters.mode = ScatterMode::isotropic;
-        parameters.maxScatters = 256u;
-        parameters.transformKernelMode = mode;
+        parameters.mode = testCase.mode;
+        parameters.maxScatters = testCase.maxScatters;
+        parameters.transformKernelMode = kernelMode;
         graphFlow::Tuning tuning = graphFlow::photon::tuningOf(parameters);
         return graphFlow::photon::runPhotonScattering(device, parameters, tuning);
     };
@@ -718,13 +727,19 @@ TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuni
         CHECK(expected.inconsistent == actual.inconsistent);
     };
 
-    // 513 particles over chunks of 64 leave a 1-particle tail, so the tail arithmetic and the
-    // batch-global output positions are exercised by both SIMD mappings.
-    for(std::uint32_t const chunkSize : {64u, 128u})
+    // 513 particles over chunks of 64 leave a one-particle tail and 525 over chunks of 64 a
+    // 13-particle tail, so both SIMD mappings exercise the tail arithmetic, the width-one pack of
+    // the alpaka remainder loop and the batch-global output positions. The forward mode covers the
+    // propose node alone, the isotropic mode adds the scatter node's angular draw and counter step.
+    for(Case const& testCase :
+        {Case{513u, 64u, ScatterMode::isotropic, 256u},
+         Case{513u, 128u, ScatterMode::isotropic, 256u},
+         Case{525u, 64u, ScatterMode::isotropic, 256u},
+         Case{525u, 128u, ScatterMode::forward, 3u}})
     {
-        auto const batch = run(graphFlow::TransformKernelMode::batch, chunkSize);
-        compare(batch, run(graphFlow::TransformKernelMode::simdBlocks, chunkSize));
-        compare(batch, run(graphFlow::TransformKernelMode::simdWarps, chunkSize));
+        auto const batch = run(graphFlow::TransformKernelMode::batch, testCase);
+        compare(batch, run(graphFlow::TransformKernelMode::simdBlocks, testCase));
+        compare(batch, run(graphFlow::TransformKernelMode::simdWarps, testCase));
     }
 }
 
