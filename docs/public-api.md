@@ -254,6 +254,17 @@ fixed AoS layouts. `Config::validate()` rejects a SIMD mapping together with
 the launch geometry. The `photon_scattering` CLI exposes the knob as
 `--transform-kernel-mode batch|simdBlocks|simdWarps` (default `batch`).
 
+The SIMD mappings are numerically equivalent to `batch`, not bit-reproducible
+against it. Their functors evaluate the whole payload pack, including `sin` and
+`cos`, on `Simd` values, and a vectorised transcendental is not required to
+match the scalar libm result bit for bit. The tests accept the per-particle
+payload within `1e-12` relative (plus `1e-12` absolute for values whose
+magnitude is below that floor) and compare the terminal category counters
+instead of md5s. The scalar `batch` mode keeps its exact output. The SIMD width
+is derived from the payload columns and the architecture the compiler targets,
+and graphFlow deliberately sets no architecture flag; a CPU build enables the
+wider pack only when configured with one, for example `-march=native`.
+
 `Tuning::slotArenaBudgetBytes` (`std::uint64_t`, zero keeps the whole payload
 budget) sizes the slot-arena payload array independently of
 `poolPayloadBudgetBytes`: the arena holds `floor(bytes / slotBytes)` slots

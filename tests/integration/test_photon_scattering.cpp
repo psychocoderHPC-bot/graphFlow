@@ -61,6 +61,25 @@ namespace
         return result.eventCounts[static_cast<std::uint32_t>(event)];
     }
 
+    /** Relative difference used by the SIMD validation.
+     *
+     * The denominator is the larger magnitude. A pair whose magnitudes are both below `floor` is
+     * judged by its absolute difference, so a near-zero payload value cannot dominate the reported
+     * maximum relative error.
+     */
+    double simdRelativeDifference(double expected, double actual, double floor = 1e-12)
+    {
+        double const scale = std::max(std::abs(expected), std::abs(actual));
+        return scale < floor ? 0.0 : std::abs(expected - actual) / scale;
+    }
+
+    /** Mixed absolute/relative acceptance bound of the SIMD transform paths. */
+    bool simdValueWithinTolerance(double expected, double actual, double relative, double absolute)
+    {
+        double const scale = std::max(std::abs(expected), std::abs(actual));
+        return std::abs(expected - actual) <= absolute + relative * scale;
+    }
+
     double poissonPmf(double mean, std::uint32_t k)
     {
         double logP = -mean + static_cast<double>(k) * std::log(mean);
@@ -679,7 +698,7 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
     compare(gated);
 }
 
-TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuning][simd]")
+TEST_CASE("photon transform kernel mapping is numerically equivalent", "[photon][tuning][simd]")
 {
     auto const device = graphFlow::test::makeCpuDevice();
 
@@ -708,21 +727,60 @@ TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuni
         return graphFlow::photon::runPhotonScattering(device, parameters, tuning);
     };
 
-    auto const compare
-        = [](graphFlow::photon::ScatteringResult const& expected, graphFlow::photon::ScatteringResult const& actual)
+    auto const compare = [](graphFlow::photon::ScatteringResult const& expected,
+                            graphFlow::photon::ScatteringResult const& actual,
+                            char const* mode)
     {
         REQUIRE(expected.terminal.size() == actual.terminal.size());
+        // The SIMD mappings evaluate the transcendentals on the pack, which is not bit-identical
+        // to the scalar libm call. The payload values are accepted within a mixed bound and the
+        // observed maximum is reported. The discrete outcomes are compared separately because a
+        // flipped comparison changes a terminal category or the completed-scatter count.
+        constexpr double relativeTolerance = 1e-12;
+        constexpr double absoluteTolerance = 1e-12;
+        double maxPositionRelative = 0.0;
+        double maxDirectionRelative = 0.0;
+        std::uint64_t valueViolations = 0u;
+        std::uint64_t eventFlips = 0u;
+        std::uint64_t scatterCountFlips = 0u;
+        auto const checkValue = [&](double expectedValue, double actualValue, double& maxRelative)
+        {
+            maxRelative = std::max(maxRelative, simdRelativeDifference(expectedValue, actualValue));
+            if(!simdValueWithinTolerance(expectedValue, actualValue, relativeTolerance, absoluteTolerance))
+                ++valueViolations;
+        };
         for(std::size_t id = 0u; id < expected.terminal.size(); ++id)
         {
-            CHECK(expected.terminal[id].event == actual.terminal[id].event);
-            CHECK(expected.terminal[id].scatterCount == actual.terminal[id].scatterCount);
-            CHECK(expected.terminal[id].position.x == actual.terminal[id].position.x);
-            CHECK(expected.terminal[id].position.y == actual.terminal[id].position.y);
-            CHECK(expected.terminal[id].position.z == actual.terminal[id].position.z);
-            CHECK(expected.terminal[id].direction.x == actual.terminal[id].direction.x);
-            CHECK(expected.terminal[id].direction.y == actual.terminal[id].direction.y);
-            CHECK(expected.terminal[id].direction.z == actual.terminal[id].direction.z);
+            auto const& expectedValue = expected.terminal[id];
+            auto const& actualValue = actual.terminal[id];
+            eventFlips += expectedValue.event != actualValue.event ? 1u : 0u;
+            scatterCountFlips += expectedValue.scatterCount != actualValue.scatterCount ? 1u : 0u;
+            checkValue(expectedValue.position.x, actualValue.position.x, maxPositionRelative);
+            checkValue(expectedValue.position.y, actualValue.position.y, maxPositionRelative);
+            checkValue(expectedValue.position.z, actualValue.position.z, maxPositionRelative);
+            checkValue(expectedValue.direction.x, actualValue.direction.x, maxDirectionRelative);
+            checkValue(expectedValue.direction.y, actualValue.direction.y, maxDirectionRelative);
+            checkValue(expectedValue.direction.z, actualValue.direction.z, maxDirectionRelative);
         }
+        double maxCounterRelative = 0.0;
+        bool countersMatch = true;
+        for(std::uint32_t event = 0u; event < graphFlow::photon::eventBins; ++event)
+        {
+            double const expectedCount = static_cast<double>(expected.eventCounts[event]);
+            double const actualCount = static_cast<double>(actual.eventCounts[event]);
+            maxCounterRelative = std::max(maxCounterRelative, simdRelativeDifference(expectedCount, actualCount));
+            if(!simdValueWithinTolerance(expectedCount, actualCount, relativeTolerance, 0.0))
+                countersMatch = false;
+        }
+        WARN(
+            "SIMD " << mode << ": max relative position=" << maxPositionRelative
+                    << " direction=" << maxDirectionRelative << " counter=" << maxCounterRelative
+                    << ", event flips=" << eventFlips << ", scatter-count flips=" << scatterCountFlips);
+        CHECK(valueViolations == 0u);
+        CHECK(countersMatch);
+        CHECK(maxCounterRelative <= relativeTolerance);
+        CHECK(eventFlips == 0u);
+        CHECK(scatterCountFlips == 0u);
         CHECK(expected.terminated == actual.terminated);
         CHECK(expected.inconsistent == actual.inconsistent);
     };
@@ -738,9 +796,134 @@ TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuni
          Case{525u, 128u, ScatterMode::forward, 3u}})
     {
         auto const batch = run(graphFlow::TransformKernelMode::batch, testCase);
-        compare(batch, run(graphFlow::TransformKernelMode::simdBlocks, testCase));
-        compare(batch, run(graphFlow::TransformKernelMode::simdWarps, testCase));
+        compare(batch, run(graphFlow::TransformKernelMode::simdBlocks, testCase), "simdBlocks");
+        compare(batch, run(graphFlow::TransformKernelMode::simdWarps, testCase), "simdWarps");
     }
+}
+
+TEST_CASE("photon SIMD functors are within the relative-error bound", "[photon][simd][numerics]")
+{
+    // The two functors are exercised on one pack directly, so the reported maxima are attributable
+    // to the propose stage and to the scatter stage rather than to the end-to-end history. The
+    // pack width is the host width the build actually uses; the mapping tests above run at the
+    // width selected by the payload's first column.
+    constexpr std::uint32_t width = alpaka::getArchSimdWidth<double>(alpaka::api::host, alpaka::deviceKind::cpu);
+    using Pack = graphFlow::photon::PhotonSimdPack<double, width>;
+    using Simd = alpaka::Simd<double, width>;
+    using PayloadTraits = graphFlow::SimdPayload<Photon, width>;
+
+    constexpr double relativeTolerance = 1e-12;
+    constexpr double absoluteTolerance = 1e-12;
+    constexpr std::uint64_t seed = 1234u;
+    constexpr std::uint32_t proposePurpose = graphFlow::rng::streamPurposeForNode(1u);
+    constexpr std::uint32_t scatterPurpose = graphFlow::rng::streamPurposeForNode(2u);
+    Slab const slab{1.0, 0.8, 0.2};
+
+    Pack photons;
+    photons.id
+        = alpaka::Simd<std::uint64_t, width>{[](std::uint32_t const lane) { return std::uint64_t{5000u + lane}; }};
+    photons.positionX = Simd{[](std::uint32_t const lane) { return 0.1 * static_cast<double>(lane); }};
+    photons.positionY = Simd{[](std::uint32_t const lane) { return 0.05 * static_cast<double>(lane); }};
+    photons.positionZ = Simd{[](std::uint32_t const lane) { return 0.05 + 0.2 * static_cast<double>(lane); }};
+    photons.directionX = Simd::fill(0.1);
+    photons.directionY = Simd::fill(-0.2);
+    photons.directionZ = Simd{[](std::uint32_t const lane) { return lane % 2u == 0u ? 0.7 : -0.7; }};
+    photons.scatterCount = Simd{[](std::uint32_t const lane) { return static_cast<double>(lane); }};
+    photons.event = Simd::fill(graphFlow::photon::eventValue<double>(Event::absorbed));
+    photons.distance = Simd::fill(0.0);
+    photons.valid = Simd::fill(0.0);
+
+    auto const makePayload = [&](std::uint32_t lane, Event event, bool valid)
+    {
+        Photon payload;
+        payload[idTag] = photons.id[lane];
+        payload[positionTag] = Vec3{photons.positionX[lane], photons.positionY[lane], photons.positionZ[lane]};
+        payload[directionTag] = Vec3{photons.directionX[lane], photons.directionY[lane], photons.directionZ[lane]};
+        payload[scatterCountTag] = static_cast<std::uint32_t>(photons.scatterCount[lane]);
+        payload[proposalTag] = graphFlow::photon::Proposal{event, 0.0, valid};
+        return payload;
+    };
+
+    std::uint32_t scalarWord = 0u;
+    std::uint32_t simdWord = 0u;
+    graphFlow::Status scalarStatus{&scalarWord};
+    graphFlow::Status simdStatus{&simdWord};
+    graphFlow::photon::ProposeFlightT<double> propose{slab, 32u};
+    Pack const proposed = propose.simdTransform(0, seed, proposePurpose, simdStatus, photons);
+    double maxProposeRelative = 0.0;
+    std::uint64_t proposeFlips = 0u;
+    std::uint64_t proposeViolations = 0u;
+    for(std::uint32_t lane = 0u; lane < width; ++lane)
+    {
+        Photon scalarPhoton = makePayload(lane, Event::absorbed, false);
+        graphFlow::rng::Engine engine
+            = graphFlow::rng::makeEngine(seed, scalarPhoton[idTag], scalarPhoton[scatterCountTag], proposePurpose);
+        propose(0, engine, scalarStatus, scalarPhoton);
+        auto const expected = scalarPhoton[proposalTag];
+        auto const actual = PayloadTraits::lane(proposed, lane)[proposalTag];
+        proposeFlips += expected.event != actual.event ? 1u : 0u;
+        proposeFlips += expected.valid != actual.valid ? 1u : 0u;
+        maxProposeRelative = std::max(maxProposeRelative, simdRelativeDifference(expected.distance, actual.distance));
+        if(!simdValueWithinTolerance(expected.distance, actual.distance, relativeTolerance, absoluteTolerance))
+            ++proposeViolations;
+    }
+
+    Pack scatterInput = photons;
+    scatterInput.event = Simd::fill(graphFlow::photon::eventValue<double>(Event::scatter));
+    scatterInput.distance = Simd::fill(0.0);
+    scatterInput.valid = Simd::fill(1.0);
+    graphFlow::photon::ScatterT<> scatter{slab, ScatterMode::isotropic};
+    Pack const scattered = scatter.simdTransform(0, seed, scatterPurpose, simdStatus, scatterInput);
+    double maxScatterRelative = 0.0;
+    std::uint64_t scatterViolations = 0u;
+    std::uint64_t scatterCountFlips = 0u;
+    for(std::uint32_t lane = 0u; lane < width; ++lane)
+    {
+        Photon scalarPhoton = makePayload(lane, Event::scatter, true);
+        graphFlow::rng::Engine engine
+            = graphFlow::rng::makeEngine(seed, scalarPhoton[idTag], scalarPhoton[scatterCountTag], scatterPurpose);
+        scatter(0, engine, scalarStatus, scalarPhoton);
+        auto const actual = PayloadTraits::lane(scattered, lane);
+        scatterCountFlips += scalarPhoton[scatterCountTag] != actual[scatterCountTag] ? 1u : 0u;
+        maxScatterRelative = std::max(
+            maxScatterRelative,
+            simdRelativeDifference(scalarPhoton[directionTag].x, actual[directionTag].x));
+        maxScatterRelative = std::max(
+            maxScatterRelative,
+            simdRelativeDifference(scalarPhoton[directionTag].y, actual[directionTag].y));
+        maxScatterRelative = std::max(
+            maxScatterRelative,
+            simdRelativeDifference(scalarPhoton[directionTag].z, actual[directionTag].z));
+        if(!simdValueWithinTolerance(
+               scalarPhoton[directionTag].x,
+               actual[directionTag].x,
+               relativeTolerance,
+               absoluteTolerance)
+           || !simdValueWithinTolerance(
+               scalarPhoton[directionTag].y,
+               actual[directionTag].y,
+               relativeTolerance,
+               absoluteTolerance)
+           || !simdValueWithinTolerance(
+               scalarPhoton[directionTag].z,
+               actual[directionTag].z,
+               relativeTolerance,
+               absoluteTolerance))
+            ++scatterViolations;
+    }
+
+    WARN("propose functor: max relative distance=" << maxProposeRelative << ", event/valid flips=" << proposeFlips);
+    WARN(
+        "scatter functor: max relative direction=" << maxScatterRelative
+                                                   << ", scatter-count flips=" << scatterCountFlips);
+    CHECK(scalarWord == 0u);
+    CHECK(simdWord == 0u);
+    CHECK(proposeViolations == 0u);
+    CHECK(scatterViolations == 0u);
+    CHECK(proposeFlips == 0u);
+    CHECK(scatterCountFlips == 0u);
+    CHECK(maxProposeRelative <= relativeTolerance);
+    CHECK(maxScatterRelative <= relativeTolerance);
 }
 
 TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[photon][physics][diagnostics]")

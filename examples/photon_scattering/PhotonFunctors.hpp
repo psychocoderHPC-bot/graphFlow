@@ -328,8 +328,9 @@ namespace graphFlow::photon
          * hit are `Simd` arithmetic, and every per-particle decision is a comparison mask applied
          * with `where`. The draw loop is the only per-lane loop: each lane owns an engine built
          * from its own `(id, scatterCount)` position, so the two uniforms must be assembled from
-         * per-lane draws. The status word is decided per lane afterwards, reusing the scalar
-         * validators, which keeps the failure codes identical to the batch kernel.
+         * per-lane draws. Everything after the draws, `log` included, runs on the pack. The
+         * release status word is reduced from the packed validity mask; the debug build reuses the
+         * scalar validators, which keeps the failure codes identical to the batch kernel.
          */
         template<typename TPack, typename TAcc>
         ALPAKA_FN_ACC TPack simdTransform(
@@ -406,8 +407,8 @@ namespace graphFlow::photon
             proposal.valid = Simd::fill(T{0});
             where(valid, proposal.valid) = T{1};
 
-            // Status is a diagnostic word, so it is reduced per lane. Release builds read the
-            // packed validity bit; debug builds rebuild the lane and run the scalar validator.
+            // Status is a diagnostic word. Release builds reduce the packed validity mask; debug
+            // builds rebuild the lane and run the scalar validator, which reports the same code.
             if constexpr(graphFlow::debug::checksEnabled)
             {
                 for(std::uint32_t lane = 0u; lane < width; ++lane)
@@ -417,11 +418,9 @@ namespace graphFlow::photon
                         status.set(StatusCode::invalid);
                 }
             }
-            else
+            else if((proposal.valid == T{0}).reduce([](bool a, bool b) { return a || b; }))
             {
-                for(std::uint32_t lane = 0u; lane < width; ++lane)
-                    if(proposal.valid[lane] == T{0})
-                        status.set(StatusCode::invalid);
+                status.set(StatusCode::invalid);
             }
             return proposal;
         }
@@ -515,12 +514,14 @@ namespace graphFlow::photon
 
         /** Vectorised scatter stage over one pack of photons.
          *
-         * The angular draw is the only per-lane loop: each lane owns an engine built from its own
-         * `(id, scatterCount)` position. The direction update, the validity gate and the counter
-         * step are `Simd` arithmetic selected with `where` masks. The direction and counter only
-         * change for lanes that reached the scatter event, so the inactive lanes keep the values
-         * they had. Tracing stays a per-lane scatter into the vertex buffer and is compiled out for
-         * the production `NoTrace` writer.
+         * The angular draw is the only per-lane arithmetic loop: each lane owns an engine built
+         * from its own `(id, scatterCount)` position, and the two uniforms are assembled into
+         * packs. The direction update, the counter step, the `sqrt` and both transcendentals run
+         * on `Simd` values selected with `where` masks. The direction and counter only change for
+         * lanes that reached the scatter event, so the inactive lanes keep the values they had.
+         * The release status word is reduced from the mask instead of walked lane by lane; the
+         * debug build keeps the scalar validators, and the optional trace writer stays a per-lane
+         * scatter into the vertex buffer, compiled out for the production `NoTrace` writer.
          */
         template<typename TPack, typename TAcc>
         ALPAKA_FN_ACC TPack simdTransform(
@@ -556,13 +557,11 @@ namespace graphFlow::photon
                 Simd oneMinusMu2 = T{1} - mu * mu;
                 where(oneMinusMu2 < T{0}, oneMinusMu2) = T{0}; // the scalar path clamps at zero
                 Simd const transverse = alpaka::math::sqrt(oneMinusMu2);
-                // `alpaka::math::cos/sin` on a pack is not the scalar function: the host backend
-                // evaluates the native `std::simd` overload, which differs from `std::cos` by one
-                // ulp on some lanes. The physics contract is byte identity with the batch kernel,
-                // so the two transcendentals are evaluated per lane and the products stay on the
-                // packs. `log`, `sqrt` and `abs` are bit-identical on the pack and stay vectorised.
-                Simd const cosPhi = Simd{[&phi](std::uint32_t const lane) { return alpaka::math::cos(phi[lane]); }};
-                Simd const sinPhi = Simd{[&phi](std::uint32_t const lane) { return alpaka::math::sin(phi[lane]); }};
+                // The pack overloads evaluate the whole pack in one call. A vectorised
+                // transcendental is not required to be bit-identical to the scalar libm function,
+                // so the SIMD mappings are validated with a relative-error bound instead.
+                Simd const cosPhi = alpaka::math::cos(phi);
+                Simd const sinPhi = alpaka::math::sin(phi);
                 Simd const isoX = transverse * cosPhi;
                 Simd const isoY = transverse * sinPhi;
                 where(advancing, scattered.directionX) = isoX;
@@ -597,13 +596,17 @@ namespace graphFlow::photon
             }
             else
             {
-                for(std::uint32_t lane = 0u; lane < width; ++lane)
-                {
-                    if(!advancing[lane])
-                        status.set(StatusCode::invalid);
-                    else if(photon.scatterCount[lane] == static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
-                        status.set(StatusCode::overflow);
-                }
+                // Reduce the masks instead of walking the lanes. `invalid` wins over `overflow`,
+                // matching the scalar loop's rejection of a non-advancing lane before the counter
+                // step; both codes abort the batch.
+                bool const allAdvancing = advancing.reduce([](bool a, bool b) { return a && b; });
+                bool const anyOverflow
+                    = (advancing && (photon.scatterCount == static_cast<T>(std::numeric_limits<std::uint32_t>::max())))
+                          .reduce([](bool a, bool b) { return a || b; });
+                if(!allAdvancing)
+                    status.set(StatusCode::invalid);
+                else if(anyOverflow)
+                    status.set(StatusCode::overflow);
             }
 
             if constexpr(!std::is_same_v<TTrace, NoTrace>)

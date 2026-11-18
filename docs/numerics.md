@@ -101,6 +101,27 @@ non-finite state, out-of-slab positions, and inconsistent proposals through
 `StatusCode::invalid`. The option does not change the draw order or the
 arithmetic; it only adds checks in debug builds.
 
+## SIMD transform validation
+
+The opt-in `simdBlocks` and `simdWarps` mappings keep the scalar stream
+positions, the per-particle `where` masks and the batch-global output positions.
+They are not bit-reproducible against the `batch` kernel: the propose stage
+evaluates `log` and the scatter stage evaluates `sqrt`, `sin` and `cos` on the
+whole `Simd` pack, and a vectorised transcendental need not match the scalar
+libm function bit for bit. The tests therefore compare the payload with a mixed
+bound, `|expected - actual| <= 1e-12 + 1e-12 * max(|expected|, |actual|)`, and
+report the observed maximum relative error per functor. They also compare the
+transmitted, reflected, absorbed and capped counters and the per-particle event
+and completed-scatter count, because a comparison that flips near a threshold
+changes a discrete outcome rather than only a payload value. The scalar `batch`
+mode and every non-SIMD configuration keep their exact recorded output.
+
+The pack width comes from the payload's first column and the architecture the
+compiler targets. graphFlow sets no architecture flag, so a CPU build uses the
+wider pack only when configured with one; benchmark and production builds that
+want the SIMD modes to pay off should pass an architecture flag such as
+`-march=native`.
+
 ## Integer decisions
 
 ```text

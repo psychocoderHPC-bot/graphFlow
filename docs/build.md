@@ -63,6 +63,11 @@ ctest --test-dir build-cpu --output-on-failure --no-tests=error \
   --output-junit ctest-cpu.xml
 ```
 
+graphFlow sets no architecture flag. The `simdBlocks` and `simdWarps`
+transform mappings take their pack width from the targeted architecture, so add
+an architecture flag (for example `-DCMAKE_CXX_FLAGS=-march=native`) when a CPU
+build should use the wider pack. The project default stays portable.
+
 ### Example CLI contract tests
 
 CTest also runs the real `graphFlow_particle_feedback` binary through
