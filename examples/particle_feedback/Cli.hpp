@@ -95,7 +95,7 @@ namespace graphFlow::cli
                "       the chunk flags are accepted for CLI parity and change nothing here: every graph\n"
                "       in this example is source, partition and sink nodes, so no per-chunk transform\n"
                "       launch and no transform queue pool is ever built. The run prints a note when\n"
-               "       one of them is set.\n";
+               "       one of them is set to a non-default value.\n";
     }
 
     inline graphFlow::PoolMode parsePoolMode(std::string const& value)
@@ -400,12 +400,27 @@ namespace graphFlow::cli
         resolved.tuning.chunkKernelSchedule = parseChunkKernelSchedule(options.chunkKernelSchedule);
         resolved.tuning.chunkQueueDepth = options.chunkQueueDepth;
         resolved.tuning.chunkLatencyCapUs = options.chunkLatencyCapUs;
-        // The slot arena is the payload, so an explicit arena budget above the resolved pool
-        // budget raises that budget instead of being rejected as inconsistent. The device-policy
-        // memory cap still sets the derived C and P; only the arena allocation grows.
-        if(resolved.tuning.slotArenaBudgetBytes
-           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
-            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
+        // The slot arena is allocated from the pool budget, so the two values have to agree. An
+        // explicitly configured budget is the caller's decision and is never rewritten: a pool
+        // budget smaller than the arena cannot hold it, so that combination is rejected with both
+        // values named. With the derived budget the arena raises the pool budget, which is exactly
+        // what the arena knob asks for. The device-policy memory cap still sets the derived C and
+        // P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes)
+        {
+            std::uint64_t const arenaBytes = *resolved.tuning.slotArenaBudgetBytes;
+            if(policyConfigIn.memoryBudgetBytes != 0u)
+            {
+                if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                    throw std::invalid_argument{
+                        "the slot-arena budget (" + std::to_string(arenaBytes)
+                        + " bytes) exceeds the explicit pool payload budget ("
+                        + std::to_string(resolved.policy.memoryBudgetBytes)
+                        + " bytes); the arena is allocated from the pool budget"};
+            }
+            else if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                resolved.tuning.poolPayloadBudgetBytes = arenaBytes;
+        }
         // Opt-in occupancy target. Absent keeps the default tuning unchanged, so the example
         // output is byte-identical to the pre-phase-1 binary.
         if(options.occupancyTarget)

@@ -290,12 +290,26 @@ namespace graphFlow::photon::cli
 
         graphFlow::photon::validateParameters(resolved.parameters);
         resolved.tuning = graphFlow::photon::tuningOf(resolved.parameters);
-        // The slot arena is the payload, so an explicit arena budget above the resolved pool
-        // budget raises that budget instead of being rejected as inconsistent. The device-policy
-        // memory cap still sets the derived C and P; only the arena allocation grows.
-        if(resolved.tuning.slotArenaBudgetBytes
-           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
-            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
+        // The slot arena is allocated from the pool budget, so the two values have to agree. An
+        // explicit `--pool-budget-bytes` is the user's decision and is never rewritten: a pool
+        // budget smaller than the arena cannot hold it, so that combination is rejected with both
+        // values named. Without an explicit pool budget the derived one is raised to the arena
+        // size, which is exactly what the arena knob asks for. The device-policy memory cap still
+        // sets the derived C and P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes)
+        {
+            std::uint64_t const arenaBytes = *resolved.tuning.slotArenaBudgetBytes;
+            if(resolved.parameters.poolPayloadBudgetBytes != 0u)
+            {
+                if(resolved.parameters.poolPayloadBudgetBytes < arenaBytes)
+                    throw std::invalid_argument{
+                        "--slot-arena-budget (" + std::to_string(arenaBytes) + " bytes) exceeds --pool-budget-bytes ("
+                        + std::to_string(resolved.parameters.poolPayloadBudgetBytes)
+                        + " bytes); the arena is allocated from the pool budget"};
+            }
+            else if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                resolved.tuning.poolPayloadBudgetBytes = arenaBytes;
+        }
         // Opt-in occupancy target; absent keeps the default tuning and the output unchanged.
         if(options.occupancyTarget)
             resolved.tuning.occupancyTargetChunks = options.occupancyTarget;

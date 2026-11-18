@@ -237,7 +237,7 @@ storage chunk capacity. The `photon_scattering` CLI exposes the three knobs as
 against both examples, but it cannot honour them: every graph that example
 builds is source, partition and sink nodes, so no per-chunk transform launch
 and no transform queue pool exists. Its `--help` text says so, and the run
-prints a `# note:` line when one of the three is set.
+prints a `# note:` line when one of the three is set to a non-default value.
 
 `Tuning::slotArenaBudgetBytes` (`std::uint64_t`, zero keeps the whole payload
 budget) sizes the slot-arena payload array independently of
@@ -254,7 +254,9 @@ actually needed, so size the budget from it. Both the `particle_feedback` and
 the `photon_scattering` examples expose the layout as
 `--pool-mode fixed|slotArena` and the budget as `--slot-arena-budget BYTES`,
 valid only with `--pool-mode slotArena`; zero is accepted and means the whole
-pool budget.
+pool budget. An arena budget above the derived pool budget raises that budget,
+but an explicit `--pool-budget-bytes` is never rewritten: a pool budget smaller
+than the arena is rejected with both byte counts named.
 
 `scatterMode` selects `ScatterMode::SharedStaging` (the default) or
 `ScatterMode::Direct` on the dense path. `binPath` is `BinPath::automatic` by
@@ -615,7 +617,8 @@ Run it with:
 The example also accepts `--chunk-kernel-schedule`, `--chunk-queue-depth` and
 `--chunk-latency-cap-us` for CLI parity with `photon_scattering`. Its graphs are
 partition-only, so these three cannot change the run: the usage text states
-that, and a run that sets one prints a `# note:` line saying the same.
+that, and a run that sets one to a non-default value prints a `# note:` line
+saying the same.
 
 ### Photon scattering
 

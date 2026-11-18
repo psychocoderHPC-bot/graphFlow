@@ -546,6 +546,32 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
         != std::string::npos);
     CHECK(inertChunk.output.find("chunkLaunches=0 chunkLimit=none") != std::string::npos);
 
+    // A non-zero particle count proves the dispatch inertness instead of inferring it from an
+    // empty particle set: particles are transported while the chunk flags are set, and the
+    // scheduler line still reports no per-chunk launch and the off-path clamp.
+    ExampleRun const inertChunkNonZero = runExample(
+        "--backend cpu --particles 64 --chunk-size 16 --live-particles 64 --seed 42 "
+        "--chunk-kernel-schedule perChunk --chunk-queue-depth 4 --chunk-latency-cap-us 25");
+    CHECK(inertChunkNonZero.exitCode == 0);
+    CHECK(inertChunkNonZero.output.find(" particles=64 ") != std::string::npos);
+    CHECK(inertChunkNonZero.output.find("# note: chunk-kernel-schedule") != std::string::npos);
+    CHECK(inertChunkNonZero.output.find("chunkLaunches=0 chunkLimit=none") != std::string::npos);
+
+    // The note gate is an OR over the three flags, so pin every flag on its own.
+    for(char const* flag : {"--chunk-kernel-schedule perChunk", "--chunk-queue-depth 4", "--chunk-latency-cap-us 25"})
+    {
+        ExampleRun const oneFlag = runExample(std::string{"--backend cpu --particles 0 "} + flag);
+        INFO("single flag: " << flag);
+        CHECK(oneFlag.exitCode == 0);
+        CHECK(oneFlag.output.find("# note: chunk-kernel-schedule") != std::string::npos);
+    }
+
+    // Passing the defaults explicitly changes nothing, so it must stay silent.
+    ExampleRun const explicitDefaults = runExample(
+        "--backend cpu --particles 0 --chunk-kernel-schedule off --chunk-queue-depth 1 --chunk-latency-cap-us 0");
+    CHECK(explicitDefaults.exitCode == 0);
+    CHECK(explicitDefaults.output.find("# note: chunk-kernel-schedule") == std::string::npos);
+
     // Without the flags the note is absent, so the default output is unchanged.
     CHECK(cpu.output.find("# note: chunk-kernel-schedule") == std::string::npos);
 
@@ -645,6 +671,31 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
     CHECK_THROWS_WITH(
         graphFlow::cli::resolveOptions(parseArgs({"--slot-arena-budget", "1024"}), cpuProperties()),
         Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+
+    // An explicit payload budget is never rewritten by the arena. The arena only raises a derived
+    // budget, so an explicitly larger pool budget survives and no arena-sized override appears.
+    graphFlow::DevicePolicyConfig explicitLarge;
+    explicitLarge.memoryBudgetBytes = 134'217'728u;
+    graphFlow::cli::ResolvedOptions const kept
+        = graphFlow::cli::resolveOptions(parsed, cpuProperties(), explicitLarge);
+    CHECK(kept.policy.memoryBudgetBytes == 134'217'728u);
+    CHECK_FALSE(kept.tuning.poolPayloadBudgetBytes.has_value());
+
+    // An explicit budget smaller than the arena cannot hold the arena, so the combination is
+    // rejected before the run and the message names both byte counts.
+    graphFlow::DevicePolicyConfig explicitSmall;
+    explicitSmall.memoryBudgetBytes = 1'048'576u;
+    std::string budgetError;
+    try
+    {
+        (void) graphFlow::cli::resolveOptions(parsed, cpuProperties(), explicitSmall);
+    }
+    catch(std::invalid_argument const& error)
+    {
+        budgetError = error.what();
+    }
+    CHECK(budgetError.find("(67108864 bytes)") != std::string::npos);
+    CHECK(budgetError.find("(1048576 bytes)") != std::string::npos);
 }
 
 TEST_CASE("CLI accepts the per-chunk transform flags for parity", "[cli][chunk-schedule]")
