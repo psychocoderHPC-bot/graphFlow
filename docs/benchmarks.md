@@ -454,6 +454,9 @@ dominates. Credit bounds reserved ranges rather than live ranges.
 
 ## Measurement method, chunk pipeline runs
 
+Provenance: measured on the exclusive 4x V100-SXM2-32GB node. These figures are
+not comparable with the `hal` A30 measurements above.
+
 `--output-dir` must be omitted for throughput runs: it writes a roughly 489 MiB
 `exits.csv` and costs about 9 seconds of host CPU per run, which inflated a 1.5 s
 run to about 10.6 s and made an earlier sweep under-powered. Arms must be
