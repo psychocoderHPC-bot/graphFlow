@@ -223,16 +223,17 @@ capacity, the pool size, the payload layout and the host-side output-position
 planning stay what the device policy derived. It affects
 `Flow::transform` nodes only; source, sink and partition nodes keep the batch
 path, because the per-chunk queue pools are allocated only for transform nodes.
-`Tuning::chunkQueueDepth` (default 1) is the number of non-blocking device
-queues a per-chunk transform node owns; lane `i` enqueues on queue
-`i % chunkQueueDepth`, so the chunks of one node run and retire independently.
+`Tuning::chunkQueueDepth` (default 2, the measured best or tied width) is the
+number of non-blocking device queues a per-chunk transform node owns; lane `i`
+enqueues on queue `i % chunkQueueDepth`, so the chunks of one node run and
+retire independently.
 Zero is rejected when the schedule is `perChunk`. `Tuning::chunkLatencyCapUs`
 (default 0, meaning no cap) is the per-chunk launch latency cap in
 microseconds; it clamps only the capacity and wave count that the per-chunk
 launch-size policy reports, at a fixed 10 us per wave, and never changes the
 storage chunk capacity. The `photon_scattering` CLI exposes the three knobs as
 `--chunk-kernel-schedule off|perChunk` (default `off`), `--chunk-queue-depth D`
-(default 1) and `--chunk-latency-cap-us U` (default 0). The
+(default 2) and `--chunk-latency-cap-us U` (default 0). The
 `particle_feedback` CLI accepts the same three flags so one command line works
 against both examples, but it cannot honour them: every graph that example
 builds is source, partition and sink nodes, so no per-chunk transform launch
@@ -648,7 +649,7 @@ python3 tools/plot_photon_scattering.py --input /tmp/photon-forward \
 launch schedule described above; a user opts in when the device has enough
 capacity for the per-chunk launch pattern to pay off, for example the
 measured runs in [benchmarks](benchmarks.md#per-chunk-transform-schedule-photon-scattering).
-`--chunk-queue-depth D` (default 1) sets the queue pool of each per-chunk
+`--chunk-queue-depth D` (default 2) sets the queue pool of each per-chunk
 transform node, and `--chunk-latency-cap-us U` (default 0, no cap) clamps the
 capacity and waves that launch-size policy reports without touching the storage
 chunk capacity. With `perChunk` the scheduler line reports

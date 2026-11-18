@@ -135,7 +135,8 @@ int main(int argc, char** argv)
                 // but cannot take effect here: no graph in this example registers a transform
                 // node, so `Flow` never builds a per-chunk lane. Say so instead of silently
                 // accepting a benchmark knob that does nothing.
-                if(options.chunkKernelSchedule != "off" || options.chunkQueueDepth != 1u
+                if(options.chunkKernelSchedule != "off"
+                   || options.chunkQueueDepth != graphFlow::cli::defaultChunkQueueDepth
                    || options.chunkLatencyCapUs != 0u)
                     std::cout << "# note: chunk-kernel-schedule, chunk-queue-depth and chunk-latency-cap-us have "
                                  "no effect in this example: its graph has no transform node\n";

@@ -76,8 +76,13 @@ namespace graphFlow
          * output-position planning stay derived from the device policy.
          */
         ChunkKernelSchedule chunkKernelSchedule = ChunkKernelSchedule::off;
-        /** Chunk queues a per-chunk transform node owns; one keeps a single serial queue. */
-        std::uint32_t chunkQueueDepth = 1u;
+        /** Chunk queues a per-chunk transform node owns; two is the measured default.
+         *
+         * Two overlaps the dispatch and retirement of consecutive chunks on both measured cards
+         * and is the best or tied choice on each; one keeps a single serial queue. See
+         * `docs/benchmarks.md`.
+         */
+        std::uint32_t chunkQueueDepth = 2u;
         /** Per-chunk latency cap in microseconds fed to the chunk-size policy; zero means no cap. */
         std::uint32_t chunkLatencyCapUs = 0u;
         /** Bin-table implementation of every partition node in this run.

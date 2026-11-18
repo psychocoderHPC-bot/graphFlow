@@ -283,7 +283,7 @@ TEST_CASE("Config and Tuning default to the off schedule and validate queue dept
 
     Config const defaults;
     CHECK(defaults.chunkKernelSchedule == ChunkKernelSchedule::off);
-    CHECK(defaults.chunkQueueDepth == 1u);
+    CHECK(defaults.chunkQueueDepth == 2u);
     CHECK(defaults.chunkLatencyCapUs == 0u);
     CHECK_NOTHROW(defaults.validate());
 

@@ -112,7 +112,7 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK(defaults.seed == 0u);
     CHECK(defaults.maxVisits == 64u);
     CHECK(defaults.chunkKernelSchedule == "off");
-    CHECK(defaults.chunkQueueDepth == 1u);
+    CHECK(defaults.chunkQueueDepth == 2u);
     CHECK(defaults.chunkLatencyCapUs == 0u);
 
     graphFlow::cli::Options const options
@@ -578,9 +578,14 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
 
     // Passing the defaults explicitly changes nothing, so it must stay silent.
     ExampleRun const explicitDefaults = runExample(
-        "--backend cpu --particles 0 --chunk-kernel-schedule off --chunk-queue-depth 1 --chunk-latency-cap-us 0");
+        "--backend cpu --particles 0 --chunk-kernel-schedule off --chunk-queue-depth 2 --chunk-latency-cap-us 0");
     CHECK(explicitDefaults.exitCode == 0);
     CHECK(explicitDefaults.output.find("# note: chunk-kernel-schedule") == std::string::npos);
+
+    // The previous default of one is no longer the default, so it reports the note.
+    ExampleRun const serialQueue = runExample("--backend cpu --particles 0 --chunk-queue-depth 1");
+    CHECK(serialQueue.exitCode == 0);
+    CHECK(serialQueue.output.find("# note: chunk-kernel-schedule") != std::string::npos);
 
     // Without the flags the note is absent, so the default output is unchanged.
     CHECK(cpu.output.find("# note: chunk-kernel-schedule") == std::string::npos);
@@ -806,11 +811,11 @@ TEST_CASE("CLI accepts the per-chunk transform flags for parity", "[cli][chunk-s
 {
     using Catch::Matchers::ContainsSubstring;
 
-    // The per-chunk transform defaults stay off, depth 1 and no latency cap.
+    // The per-chunk transform defaults stay off, depth 2 and no latency cap.
     graphFlow::cli::ResolvedOptions const defaults = graphFlow::cli::resolveOptions(parseArgs({}), cpuProperties());
     CHECK(defaults.tuning.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::off);
     REQUIRE(defaults.tuning.chunkQueueDepth.has_value());
-    CHECK(*defaults.tuning.chunkQueueDepth == 1u);
+    CHECK(*defaults.tuning.chunkQueueDepth == 2u);
     REQUIRE(defaults.tuning.chunkLatencyCapUs.has_value());
     CHECK(*defaults.tuning.chunkLatencyCapUs == 0u);
 

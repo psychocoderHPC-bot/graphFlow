@@ -22,6 +22,13 @@
 
 namespace graphFlow::cli
 {
+    /** Effective default width of the per-chunk transform queue pool.
+     *
+     * The inert-flag note in `main.cpp` compares against this value, so changing the measured
+     * default cannot leave the note behind in a default run.
+     */
+    inline constexpr std::uint32_t defaultChunkQueueDepth = 2u;
+
     /** Raw command-line values.
      *
      * `chunkSize`, `liveParticles` and `tileSize` are optional so the resolver can tell an
@@ -48,7 +55,7 @@ namespace graphFlow::cli
          */
         std::string chunkKernelSchedule = "off"; // off|perChunk
         /** Queues of a per-chunk transform node; inert, see `chunkKernelSchedule`. */
-        std::uint32_t chunkQueueDepth = 1u;
+        std::uint32_t chunkQueueDepth = defaultChunkQueueDepth;
         /** Per-chunk latency cap in microseconds; inert, see `chunkKernelSchedule`. */
         std::uint32_t chunkLatencyCapUs = 0u;
         std::uint64_t seed = 0u;
