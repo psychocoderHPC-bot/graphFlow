@@ -783,6 +783,13 @@ namespace graphFlow::detail
      * neighbour access and no merge with another chunk. The output position math is the batch
      * accounting of the off path: `global / chunkCapacity` selects the output chunk and
      * `global % chunkCapacity` its offset, so the multi-chunk output table stays authoritative.
+     *
+     * The per-launch scalars `inBase`, `fill` and `position` supersede the batch-wide
+     * `m_inBase`, `m_inCount` and `m_outPosition` tables, and the parameter list below has no
+     * span for them on purpose: `launchPerChunk` does not publish those tables, because this
+     * schedule dispatches one chunk per batch and the transfers cost about 5% of the A30
+     * throughput. The signature therefore cannot read them. A kernel that needs them must add
+     * the spans here and publish them at the fan-out.
      */
     template<
         typename TFunctor,
@@ -2019,11 +2026,20 @@ namespace graphFlow::detail
                     m_pending.push_back(ChunkDescriptor{handle, fill, 0u});
                 }
 
-                // Mirror the batch-wide copies so both schedules leave identical device state,
-                // even though this path passes the per-launch values as kernel scalars.
-                alpaka::onHost::memcpy(queue, m_inBase, m_inBaseHost, alpaka::Vec{chunkCount});
-                alpaka::onHost::memcpy(queue, m_inCount, m_inCountHost, alpaka::Vec{chunkCount});
-                alpaka::onHost::memcpy(queue, m_outPosition, m_outPositionHost, alpaka::Vec{chunkCount});
+                // The batch-wide `m_inBase`, `m_inCount` and `m_outPosition` tables are
+                // deliberately not published on this path. `TransformPerChunkKernel` receives
+                // the input base, the input count and the batch-global output position of each
+                // chunk as the per-launch scalars `inBase`, `fill` and `position`, and its
+                // parameter list has no span for those three tables, so no kernel launched
+                // here can read them. Publishing them would cost three device transfers per
+                // chunk, because this schedule dispatches one chunk per batch, and that cost
+                // about 5% of the A30 throughput.
+                //
+                // The output-chunk table is different: the kernel does read it, so it is still
+                // published before the fan-out. Any future kernel that wants the three omitted
+                // tables has to add spans for them to `TransformPerChunkKernel`, where the
+                // comment on that parameter list records the supersession and the obligation to
+                // publish them here.
                 alpaka::onHost::memcpy(
                     queue,
                     m_outChunks,
@@ -2032,9 +2048,23 @@ namespace graphFlow::detail
                 publishBaseTables(queue, true);
 
                 auto const views = Access::views(m_storage);
+                [[maybe_unused]] std::uint64_t debugPosition = 0u;
                 for(std::size_t i = 0u; i < chunkCount; ++i)
                 {
                     ChunkDescriptor const& chunk = batch.chunks[i];
+                    if constexpr(graphFlow::debug::checksEnabled)
+                    {
+                        // Removing the three device tables makes these scalars the only carrier
+                        // of the per-chunk plan, so validate them against an independent
+                        // derivation before the kernel consumes them: the base from the storage
+                        // and the position from the batch prefix.
+                        bool const planMatches
+                            = m_inBaseHost.data()[i] == static_cast<std::uint32_t>(m_storage.base(chunk.handle))
+                              && m_outPositionHost.data()[i] == static_cast<std::uint32_t>(debugPosition);
+                        if(!planMatches)
+                            throw BatchError{"transform: per-chunk plan disagrees with the storage base table"};
+                    }
+                    debugPosition += chunk.fill;
                     if(chunk.fill == 0u)
                         continue;
                     // `m_launches` counts enqueued kernels: one per non-empty chunk here and one
