@@ -5,9 +5,11 @@
 
 This page contains the P07 exclusive measurement merged into `a610281`, the
 P07b Q/C re-run and kernel-axis matrix merged at `56c11ac`, the
-historical pre-T5/T7 baseline, and the historical integrated T13 result. Every
-number states its provenance. The full matrix, budget rejections, copy
-reference, kernel matrix, and raw-row provenance live in
+historical pre-T5/T7 baseline, the historical integrated T13 result, and the
+chunk-pipeline measured results (occupancy target, default-path parity, the
+frozen p07 gate on reference hardware, and the slot arena). Every number states
+its provenance. The full matrix, budget rejections, copy reference, kernel
+matrix, and raw-row provenance live in
 [tools/BENCH_TABLE.md](../tools/BENCH_TABLE.md).
 
 ## P07 measurement matrix and frozen target (code `64d4a1e`)
@@ -369,3 +371,94 @@ The whole-process wall time includes a 0.31-0.34 s start-up floor on fwk394,
 so the steady-phase improvement is larger than the wall percentage. The
 magnitudes are card-specific and must not be extrapolated, and the queue depth
 was not tuned. No H100 was used.
+
+## Chunk occupancy target, phase 1 (main `54ba63f`)
+
+Provenance: the opt-in chunk occupancy target merged in
+`54ba63f8d3696993bc65670b7c1d9f8b8d5d3016` (PR #87). One exclusive
+4x V100-SXM2-32GB node; the photon transform harness from the per-chunk
+transform schedule section at 4M photons, `C=4224`, `P=8448`, `Q=8`, seed 7,
+no output directory. Eight accepted repetitions per arm; arms interleaved and
+the ordering alternated.
+
+| D | delta vs baseline | minimum detectable effect |
+| ---: | ---: | ---: |
+| 5 | +0.43% | 1.05% |
+| 8 | +0.06% | 2.14% |
+| 16 | +0.45% | 0.99% |
+| 32 | +0.15% | 1.61% |
+
+Baseline median `1.5190` s at `2,633,398` photons/s, coefficient of variation
+0.62%. Every confidence interval includes zero. The target is throughput-neutral
+within that resolution; a sub-1% effect is not excluded.
+`--occupancy-target 4` is rejected before launch because the registered lane
+count is 5 on that graph.
+
+## Default-path throughput parity, phase 1
+
+Provenance: the phase 1 change set versus the previous `main` on the same
+exclusive 4x V100-SXM2-32GB node.
+
+| Harness | delta | 95% CI |
+| --- | ---: | --- |
+| frozen p07 gate, Q=8 | +0.23% | [-29,207, +89,183] particles/s |
+| photon harness | -0.19% | [-10,296, +1,607] photons/s |
+
+A raw ABAB ordering suggested +0.80% and the reversed order -0.87%, which is
+why the ordering was alternated and an order term fitted.
+
+## Frozen p07 gate on reference hardware
+
+Provenance: the same exclusive 4x V100-SXM2-32GB node, `N=1e8`, `C=8192`,
+`P=16384`, seed 42.
+
+| Q | median particles/s |
+| ---: | ---: |
+| 8 | 13,210,040 |
+| 2 | 11,641,444 |
+| 1 | 520,800 (median) |
+
+Q=8 passes the `13,000,000` target, 1.6% above nominal and 12.9% above the
+`11,700,000` floor. Q=1 is about 25 times slower than Q=8. Earlier measurements
+on other hardware (A30 `10.76e6`, RTX 2080 Ti `11.59e6` at `C=4096`, GV100
+`10.12e6`) were hardware provenance rather than regressions; the absolute
+target must not be used as a pass or fail on other cards.
+
+## Slot arena, phase 2 (main `ca26235`)
+
+Provenance: the slot arena merged in
+`ca262351ce71c67aa7e46e3693889b9542418c47` (PR #94). Measured on `hal` with an
+A30 for CUDA and the same host for CPU; 24 bytes per slot. The fixed-layout
+bytes are identical for both backends; no CUDA-specific fixed value was
+recorded. No throughput
+improvement is claimed, because chunk width was measured throughput-neutral at
+fixed depth: equal-depth controls gave +0.3% at 4M photons, +1.1% at 40M and
++1.2% on a GV100 when the chunk size changed from `8,192` to `100,000`.
+
+| Configuration | Layout | CPU bytes | CUDA bytes |
+| --- | --- | ---: | ---: |
+| `C=4224`, `P=8448` | fixed | 857,235,456 | |
+| | arena | 12,367,872 (69.3x) | 13,787,136 (62.2x) |
+| `C=8192`, `P=16384`, `N=100000` | fixed | 3,222,798,336 | |
+| | arena | 42,270,720 (76.2x) | 41,287,680 (78.1x) |
+
+At a 64 MiB budget the fixed policy admits `P=640` at `C=4224` and `P=256` at
+`C=8192`, while the arena runs 8,448 and 16,384. The physics output is
+byte-identical between the two layouts on CPU and CUDA.
+
+An earlier design figure of 817 MiB to 0.81 MB, about 1057x, is retracted as
+unreachable. It used a credit factor of 6 where the transform reserve is 8, and
+it assumed the arena need only cover the credit bound, whereas the live
+output-range peak, measured between 129 and 214 depending on configuration,
+dominates. Credit bounds reserved ranges rather than live ranges.
+
+## Measurement method, chunk pipeline runs
+
+Provenance: measured on the exclusive 4x V100-SXM2-32GB node. These figures are
+not comparable with the `hal` A30 measurements above.
+
+`--output-dir` must be omitted for throughput runs: it writes a roughly 489 MiB
+`exits.csv` and costs about 9 seconds of host CPU per run, which inflated a 1.5 s
+run to about 10.6 s and made an earlier sweep under-powered. Arms must be
+interleaved with alternating order: position bias alone produced a spurious
++0.8% effect that reversed under reversed ordering.
