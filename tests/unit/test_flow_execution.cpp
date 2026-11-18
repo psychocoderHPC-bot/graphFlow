@@ -508,3 +508,99 @@ TEST_CASE("CPU completed-run scheduler stats satisfy the peak invariants", "[sta
     auto device = graphFlow::test::makeCpuDevice();
     graphFlow::test::diagnostics::checkCompletedOutcome(graphFlow::test::diagnostics::runCompleted(device));
 }
+
+TEST_CASE("fixed layout publishes the chunk base table once per run", "[unit][flow][execution][arena]")
+{
+    using Storage = graphFlow::PayloadSlotStorage<Pod, Device>;
+    using Runner = graphFlow::GraphRunner<Device, Storage>;
+    constexpr std::uint32_t capacity = 8u;
+    constexpr std::uint32_t batches = 3u;
+
+    auto device = graphFlow::test::makeCpuDevice();
+    auto makeStorage = [&](graphFlow::PoolMode mode)
+    {
+        if(mode == graphFlow::PoolMode::fixed)
+            return Storage{device, 16u, capacity};
+        graphFlow::SlotArenaOptions options;
+        options.arenaSlots = 16u * capacity;
+        return Storage{device, 16u, capacity, options};
+    };
+
+    // The fixed layout's rows are the immutable `index * chunkCapacity`, so the stage must publish
+    // the device mirror once. The slot arena rewrites rows on acquire and release, so it keeps
+    // publishing before every kernel that indexes the table.
+    auto transformPublishes = [&](graphFlow::PoolMode mode)
+    {
+        Storage storage = makeStorage(mode);
+        graphFlow::Config config;
+        config.chunkCapacity = capacity;
+        config.batchChunks = 1u;
+        config.tileSize = 4u;
+        config.frameCap = 1u;
+        config.poolMode = mode;
+
+        graphFlow::detail::TransformStage<Device, Storage, Pod, BumpPod> stage{device, storage, config, BumpPod{3u}};
+        auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+        std::uint64_t position = 0u;
+        for(std::uint32_t batch = 0u; batch < batches; ++batch)
+        {
+            graphFlow::ChunkHandle const handle = storage.acquire();
+            writeChunk(device, storage, handle, std::vector<Pod>(capacity, Pod{0u, 1u}));
+            Runner::Batch const descriptors{{graphFlow::ChunkDescriptor{handle, capacity, 0u}}, position};
+            stage.launch(queue, descriptors);
+            drain(device, queue);
+            std::uint32_t allocated = 0u;
+            REQUIRE_FALSE(stage.advance(queue, descriptors, allocated));
+            std::vector<graphFlow::ChunkDescriptor> outputs;
+            stage.finish(descriptors, outputs);
+            for(graphFlow::ChunkDescriptor const& output : outputs)
+                storage.release(output.handle);
+            storage.release(handle);
+            position += capacity;
+        }
+        return stage.baseTablePublishes();
+    };
+
+    CHECK(transformPublishes(graphFlow::PoolMode::fixed) == 1u);
+    CHECK(transformPublishes(graphFlow::PoolMode::slotArena) == batches);
+
+    auto partitionPublishes = [&](graphFlow::PoolMode mode)
+    {
+        Storage storage = makeStorage(mode);
+        graphFlow::Config config;
+        config.chunkCapacity = capacity;
+        config.batchChunks = 1u;
+        config.tileSize = 4u;
+        config.frameCap = 1u;
+        config.poolMode = mode;
+
+        graphFlow::detail::PartitionStage<Device, Storage, Pod, ParityClassifier, AddOnOddBin>
+            stage{device, storage, config, ParityClassifier{}, AddOnOddBin{}};
+        auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+        for(std::uint32_t batch = 0u; batch < batches; ++batch)
+        {
+            graphFlow::ChunkHandle const handle = storage.acquire();
+            std::vector<Pod> input(capacity);
+            for(std::uint32_t i = 0u; i < capacity; ++i)
+                input[i] = Pod{i, 1u};
+            writeChunk(device, storage, handle, input);
+            Runner::Batch const descriptors{{graphFlow::ChunkDescriptor{handle, capacity, 0u}}, 0u};
+            stage.launch(queue, descriptors);
+            drain(device, queue);
+            std::uint32_t allocated = 0u;
+            REQUIRE(stage.advance(queue, descriptors, allocated));
+            drain(device, queue);
+            REQUIRE_FALSE(stage.advance(queue, descriptors, allocated));
+            std::vector<graphFlow::ChunkDescriptor> outputs;
+            stage.finish(descriptors, outputs);
+            for(graphFlow::ChunkDescriptor const& output : outputs)
+                storage.release(output.handle);
+            storage.release(handle);
+        }
+        return stage.baseTablePublishes();
+    };
+
+    CHECK(partitionPublishes(graphFlow::PoolMode::fixed) == 1u);
+    // One publish before classify and one after the output acquires per batch.
+    CHECK(partitionPublishes(graphFlow::PoolMode::slotArena) == 2u * batches);
+}

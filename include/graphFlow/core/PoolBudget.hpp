@@ -173,12 +173,15 @@ namespace graphFlow
      * The slot arena separates the two quantities the fixed layout couples: a chunk index (the
      * handle the scheduler acquires and routes) and the slots that chunk owns. `chunkIndices` is
      * the ledger size, `liveParticles + reserveChunks`, because full fragmentation turns every
-     * live particle into one chunk. `slots` is the arena size, `liveParticles + reserveChunks * C`,
-     * because a live input chunk owns exactly its fill while an output-credit chunk is charged at
-     * the full `C` its `j % C` addressing needs. `bytes` is `slots * slotBytes`.
+     * live particle into one chunk. `slots` is the minimum arena size,
+     * `liveParticles + reserveChunks * C`, because a live input chunk owns exactly its fill while
+     * an output-credit chunk is charged at the full `C` its `j % C` addressing needs. `bytes` is
+     * `slots * slotBytes`.
      *
-     * This is the single derivation the policy, `Flow::run` and `Config::validate` share, so the
-     * three cannot disagree about how much memory a slot-arena configuration needs.
+     * The policy and `Config::validate` use this derivation as the minimum a slot-arena
+     * configuration needs. `Flow::resolveConfig` does not size the arena with it: the arena is the
+     * whole payload budget in slots, because the exact reservation is a lower bound rather than a
+     * hard bound and the first-fit allocator needs slack beyond it.
      */
     struct SlotArenaGeometry
     {

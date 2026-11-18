@@ -622,8 +622,8 @@ namespace graphFlow
      * For the slot arena the policy budget is already the whole arena budget: `makeDevicePolicy`
      * charged the `K*R*C` credit term when it clamped P, so adding the reserve again would
      * double-count it. The pool budget therefore stays the policy budget, and
-     * `Config::slotArenaSlots` is derived by `Flow::resolveConfig` from the exact
-     * `P + K*R*C` geometry.
+     * `Config::slotArenaSlots` is derived by `Flow::resolveConfig` from the whole payload budget
+     * in slots; the exact `P + K*R*C` reservation only has to fit inside it.
      */
     inline void applyDevicePolicy(Config& config, DevicePolicy const& policy)
     {

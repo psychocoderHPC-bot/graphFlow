@@ -1761,6 +1761,8 @@ namespace graphFlow::detail
             if(m_staleBaseTable && !debug::checksEnabled)
                 throw std::invalid_argument{
                     "graphFlow: debugStaleBaseTable is a validation-only injection and needs debug validation"};
+            if constexpr(requires { m_storage.poolMode(); })
+                m_fixedBaseTable = m_storage.poolMode() == PoolMode::fixed;
             m_pending.reserve(m_reserveBound);
             if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
             {
@@ -1909,6 +1911,16 @@ namespace graphFlow::detail
         [[nodiscard]] std::uint32_t launches() const noexcept
         {
             return m_launches;
+        }
+
+        /** Device publishes of the base table.
+         *
+         * Diagnostics for the layout difference: the fixed layout publishes once for the whole
+         * run, the slot arena publishes before every kernel that indexes the table.
+         */
+        [[nodiscard]] std::uint32_t baseTablePublishes() const noexcept
+        {
+            return m_baseTablePublishes;
         }
 
         [[nodiscard]] std::uint32_t reserveBound() const noexcept
@@ -2079,12 +2091,14 @@ namespace graphFlow::detail
             m_pending.clear();
         }
 
-        /** Copy the host base table to the device mirror on `queue` before the kernel.
+        /** Publish the host base table to the device mirror on `queue` before the kernel.
          *
          * The copy and the kernel share one queue, so the kernel reads exactly the rows this
-         * batch published rather than whatever the previous batch left behind. Under the
-         * validation-only stale-table injection the first copy still runs (the device buffer must
-         * be defined) and later copies are skipped, which is the missing-enqueue failure mode.
+         * batch published rather than whatever the previous batch left behind. The fixed layout's
+         * rows are the immutable `index * chunkCapacity`, so its first publish defines the device
+         * mirror for the whole run and later batches enqueue nothing. Under the validation-only
+         * stale-table injection the first copy still runs (the device buffer must be defined) and
+         * later copies are skipped, which is the missing-enqueue failure mode.
          */
         void publishBaseTables(Queue const& queue, bool beginBatch)
         {
@@ -2095,11 +2109,26 @@ namespace graphFlow::detail
                 m_skipBasePublish = m_staleBaseTable && m_batchesPublished > 0u;
                 ++m_batchesPublished;
             }
+            if(m_fixedBaseTable && m_baseTablePublished)
+                return;
             std::uint64_t const rows = m_storage.numChunks();
+            bool const firstPublish = !m_baseTablePublished;
             if(!m_skipBasePublish)
+            {
                 m_baseTableStaging.publish(queue, m_outBases, m_storage.baseTableHost().data(), rows);
+                ++m_baseTablePublishes;
+                m_baseTablePublished = true;
+            }
             if constexpr(debug::checksEnabled)
+            {
+                // The expected table is initialised row by row as batches plan chunks, so the
+                // first fixed-layout publish fills the unused rows from the storage. Without it
+                // a chunk first used by a later batch would compare its device row against an
+                // uninitialised expected row.
+                if(m_fixedBaseTable && firstPublish)
+                    std::copy_n(m_storage.baseTableHost().data(), rows, m_outExpectedBasesHost.data());
                 alpaka::onHost::memcpy(queue, m_outExpectedBases, m_outExpectedBasesHost, alpaka::Vec{rows});
+            }
         }
 
         TDevice m_device;
@@ -2131,6 +2160,10 @@ namespace graphFlow::detail
         bool m_staleBaseTable = false;
         bool m_skipBasePublish = false;
         std::uint32_t m_batchesPublished = 0u;
+        /** Fixed layout: every row is the immutable `index * chunkCapacity`, so one publish suffices. */
+        bool m_fixedBaseTable = false;
+        bool m_baseTablePublished = false;
+        std::uint32_t m_baseTablePublishes = 0u;
         U32View m_status;
         MappedU32View m_statusHost;
         // Per-chunk completion slots; allocated only when the schedule is on.
@@ -2244,6 +2277,8 @@ namespace graphFlow::detail
             if(m_staleBaseTable && !debug::checksEnabled)
                 throw std::invalid_argument{
                     "graphFlow: debugStaleBaseTable is a validation-only injection and needs debug validation"};
+            if constexpr(requires { m_storage.poolMode(); })
+                m_fixedBaseTable = m_storage.poolMode() == PoolMode::fixed;
             m_totals.assign(m_bins, 0u);
             m_pending.reserve(m_reserveBound);
         }
@@ -2363,6 +2398,16 @@ namespace graphFlow::detail
         [[nodiscard]] std::uint32_t scatterLaunches() const noexcept
         {
             return m_scatterLaunches;
+        }
+
+        /** Device publishes of the base table.
+         *
+         * Diagnostics for the layout difference: the fixed layout publishes once for the whole
+         * run, the slot arena publishes before every kernel that indexes the table.
+         */
+        [[nodiscard]] std::uint32_t baseTablePublishes() const noexcept
+        {
+            return m_baseTablePublishes;
         }
 
         [[nodiscard]] std::uint32_t reserveBound() const noexcept
@@ -2541,12 +2586,14 @@ namespace graphFlow::detail
             m_pending.clear();
         }
 
-        /** Copy the host base table to the device mirror on `queue` before the kernel.
+        /** Publish the host base table to the device mirror on `queue` before the kernel.
          *
          * The copy is enqueued after every acquire/release of the batch and immediately before
-         * the kernel that indexes the table, on the same queue. Under the validation-only
-         * stale-table injection the first copy still runs so the device buffer is defined, and
-         * later copies are skipped, which is the missing-enqueue failure mode.
+         * the kernel that indexes the table, on the same queue. The fixed layout's rows are the
+         * immutable `index * chunkCapacity`, so its first publish defines the device mirror for
+         * the whole run and later batches enqueue nothing. Under the validation-only stale-table
+         * injection the first copy still runs so the device buffer is defined, and later copies
+         * are skipped, which is the missing-enqueue failure mode.
          */
         void publishBaseTables(Queue const& queue, bool beginBatch)
         {
@@ -2557,11 +2604,26 @@ namespace graphFlow::detail
                 m_skipBasePublish = m_staleBaseTable && m_batchesPublished > 0u;
                 ++m_batchesPublished;
             }
+            if(m_fixedBaseTable && m_baseTablePublished)
+                return;
             std::uint64_t const rows = m_storage.numChunks();
+            bool const firstPublish = !m_baseTablePublished;
             if(!m_skipBasePublish)
+            {
                 m_baseTableStaging.publish(queue, m_bases, m_storage.baseTableHost().data(), rows);
+                ++m_baseTablePublishes;
+                m_baseTablePublished = true;
+            }
             if constexpr(debug::checksEnabled)
+            {
+                // The expected table is initialised row by row as batches plan chunks, so the
+                // first fixed-layout publish fills the unused rows from the storage. Without it
+                // a chunk first used by a later batch would compare its device row against an
+                // uninitialised expected row.
+                if(m_fixedBaseTable && firstPublish)
+                    std::copy_n(m_storage.baseTableHost().data(), rows, m_expectedBasesHost.data());
                 alpaka::onHost::memcpy(queue, m_expectedBases, m_expectedBasesHost, alpaka::Vec{rows});
+            }
         }
 
         void finalise()
@@ -2608,6 +2670,10 @@ namespace graphFlow::detail
         bool m_staleBaseTable = false;
         bool m_skipBasePublish = false;
         std::uint32_t m_batchesPublished = 0u;
+        /** Fixed layout: every row is the immutable `index * chunkCapacity`, so one publish suffices. */
+        bool m_fixedBaseTable = false;
+        bool m_baseTablePublished = false;
+        std::uint32_t m_baseTablePublishes = 0u;
         U32View m_status;
         MappedU32View m_statusHost;
         std::uint32_t m_stage = 0u;

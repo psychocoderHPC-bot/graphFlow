@@ -313,6 +313,7 @@ if(GRAPHFLOW_BUILD_TESTS)
         tests/integration/test_generic_dag.cpp
         tests/integration/test_generic_flow.cpp
         tests/integration/test_per_chunk_schedule.cpp
+        tests/integration/test_slot_arena_parity.cpp
         tests/integration/test_aos_over_soa.cpp
         tests/integration/test_photon_scattering.cpp
     )
