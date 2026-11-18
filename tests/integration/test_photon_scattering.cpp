@@ -12,6 +12,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -990,4 +991,160 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
     graphFlow::photon::cli::Options zeroBudget = valid;
     zeroBudget.poolPayloadBudgetBytes = 0u;
     CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(zeroBudget, properties), std::invalid_argument);
+}
+
+TEST_CASE("photon CLI exposes the chunk-slot layout", "[photon][cli][arena]")
+{
+    using Catch::Matchers::ContainsSubstring;
+
+    auto const properties = graphFlow::test::makeCpuDevice().getDeviceProperties();
+    auto const parse = [](std::vector<std::string> const& arguments)
+    {
+        std::vector<char const*> parseArgv;
+        parseArgv.reserve(arguments.size());
+        for(auto const& argument : arguments)
+            parseArgv.push_back(argument.c_str());
+        return graphFlow::photon::cli::parseOptions(static_cast<int>(parseArgv.size()), parseArgv.data());
+    };
+
+    graphFlow::photon::cli::Options defaults;
+    defaults.numPhotons = 17u;
+    CHECK(defaults.poolMode == graphFlow::PoolMode::fixed);
+    CHECK_FALSE(defaults.slotArenaBudgetBytes.has_value());
+    auto const resolvedDefaults = graphFlow::photon::cli::resolveOptions(defaults, properties);
+    CHECK(resolvedDefaults.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedDefaults.parameters.slotArenaBudgetBytes == 0u);
+    CHECK(resolvedDefaults.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK_FALSE(resolvedDefaults.tuning.slotArenaBudgetBytes.has_value());
+
+    // The flags exist on this example because the photon flow has transform nodes, so the arena
+    // and the per-chunk schedule both have a real effect. Here only the layout is exercised.
+    auto const options = parse(
+        {"graphFlow_photon_scattering",
+         "--photons",
+         "17",
+         "--pool-mode",
+         "slotArena",
+         "--slot-arena-budget",
+         "67108864"});
+    CHECK(options.poolMode == graphFlow::PoolMode::slotArena);
+    REQUIRE(options.slotArenaBudgetBytes.has_value());
+    CHECK(*options.slotArenaBudgetBytes == 67'108'864u);
+
+    auto const resolved = graphFlow::photon::cli::resolveOptions(options, properties);
+    CHECK(resolved.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolved.parameters.slotArenaBudgetBytes == 67'108'864u);
+    CHECK(resolved.policy.poolMode == graphFlow::PoolMode::slotArena);
+    REQUIRE(resolved.tuning.slotArenaBudgetBytes.has_value());
+    CHECK(*resolved.tuning.slotArenaBudgetBytes == 67'108'864u);
+    // The arena is the payload, so a budget above the host policy budget raises the pool budget.
+    REQUIRE(resolved.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*resolved.tuning.poolPayloadBudgetBytes == 67'108'864u);
+
+    // Zero keeps the whole pool budget, exactly like an absent flag.
+    graphFlow::photon::cli::Options zero;
+    zero.numPhotons = 17u;
+    zero.poolMode = graphFlow::PoolMode::slotArena;
+    zero.slotArenaBudgetBytes = 0u;
+    auto const resolvedZero = graphFlow::photon::cli::resolveOptions(zero, properties);
+    CHECK(resolvedZero.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK_FALSE(resolvedZero.tuning.slotArenaBudgetBytes.has_value());
+
+    CHECK_THROWS_WITH(
+        parse({"graphFlow_photon_scattering", "--pool-mode", "arena"}),
+        ContainsSubstring("expected fixed or slotArena"));
+
+    // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
+    graphFlow::photon::cli::Options fixedWithBudget;
+    fixedWithBudget.numPhotons = 17u;
+    fixedWithBudget.slotArenaBudgetBytes = 1024u;
+    CHECK_THROWS_WITH(
+        graphFlow::photon::cli::resolveOptions(fixedWithBudget, properties),
+        ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+
+    // An explicit --pool-budget-bytes is never rewritten: the arena only raises a derived budget,
+    // so a larger explicit pool budget survives unchanged.
+    auto const explicitLarge = parse(
+        {"graphFlow_photon_scattering",
+         "--photons",
+         "17",
+         "--pool-mode",
+         "slotArena",
+         "--pool-budget-bytes",
+         "134217728",
+         "--slot-arena-budget",
+         "67108864"});
+    auto const resolvedLarge = graphFlow::photon::cli::resolveOptions(explicitLarge, properties);
+    CHECK(resolvedLarge.parameters.poolPayloadBudgetBytes == 134'217'728u);
+    REQUIRE(resolvedLarge.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*resolvedLarge.tuning.poolPayloadBudgetBytes == 134'217'728u);
+
+    // A pool budget smaller than the arena cannot hold the arena, so the run is rejected with a
+    // message that names both byte counts instead of silently lowering the user's budget.
+    std::string budgetError;
+    try
+    {
+        auto const conflict = parse(
+            {"graphFlow_photon_scattering",
+             "--photons",
+             "17",
+             "--chunk-size",
+             "32",
+             "--pool-mode",
+             "slotArena",
+             "--pool-budget-bytes",
+             "1048576",
+             "--slot-arena-budget",
+             "67108864"});
+        (void) graphFlow::photon::cli::resolveOptions(conflict, properties);
+    }
+    catch(std::invalid_argument const& error)
+    {
+        budgetError = error.what();
+    }
+    CHECK(budgetError.find("--slot-arena-budget (67108864 bytes)") != std::string::npos);
+    CHECK(budgetError.find("--pool-budget-bytes (1048576 bytes)") != std::string::npos);
+}
+
+TEST_CASE("photon slot-arena run reports the arena statistics end to end", "[photon][arena]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    auto const properties = device.getDeviceProperties();
+    constexpr std::uint64_t photons = 512u;
+
+    std::vector<std::string> const arguments{
+        "graphFlow_photon_scattering",
+        "--photons",
+        "512",
+        "--chunk-size",
+        "64",
+        "--seed",
+        "42",
+        "--max-scatters",
+        "64",
+        "--pool-mode",
+        "slotArena",
+        "--slot-arena-budget",
+        "16777216"};
+    std::vector<char const*> parseArgv;
+    parseArgv.reserve(arguments.size());
+    for(auto const& argument : arguments)
+        parseArgv.push_back(argument.c_str());
+    auto const options = graphFlow::photon::cli::parseOptions(static_cast<int>(parseArgv.size()), parseArgv.data());
+    auto const resolved = graphFlow::photon::cli::resolveOptions(options, properties);
+
+    auto const result = graphFlow::photon::runPhotonScattering(device, resolved.parameters, resolved.tuning);
+    checkTerminalAccounting(result, photons);
+
+    // A slot-arena run publishes the arena keys, so the high-water mark of a real run is visible
+    // in the scheduler line instead of only being derivable from the code.
+    CHECK(result.stats.slotArena);
+    CHECK(result.stats.poolSlots == 16'777'216u / graphFlow::photon::Photon::attribute_list::slotBytes);
+    CHECK(result.stats.requiredArenaSlots > 0u);
+    CHECK(result.stats.requiredArenaSlots <= result.stats.poolSlots);
+    std::string const schedulerLine = graphFlow::formatSchedulerStats(result.stats);
+    CHECK(schedulerLine.find(" poolSlots=") != std::string::npos);
+    CHECK(schedulerLine.find(" poolBytes=") != std::string::npos);
+    CHECK(schedulerLine.find(" peakLiveFullChunks=") != std::string::npos);
+    CHECK(schedulerLine.find(" requiredArenaSlots=") != std::string::npos);
 }

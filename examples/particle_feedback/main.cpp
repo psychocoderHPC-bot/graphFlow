@@ -131,6 +131,14 @@ int main(int argc, char** argv)
                 std::cout << "# selected-backend=" << graphFlow::backendName(selected)
                           << " selected-device=" << options.deviceIndex << " device-name=" << deviceName << '\n';
                 std::cout << "# policy " << resolved.policy.description << '\n';
+                // The per-chunk transform options are accepted for parity with the photon example
+                // but cannot take effect here: no graph in this example registers a transform
+                // node, so `Flow` never builds a per-chunk lane. Say so instead of silently
+                // accepting a benchmark knob that does nothing.
+                if(options.chunkKernelSchedule != "off" || options.chunkQueueDepth != 1u
+                   || options.chunkLatencyCapUs != 0u)
+                    std::cout << "# note: chunk-kernel-schedule, chunk-queue-depth and chunk-latency-cap-us have "
+                                 "no effect in this example: its graph has no transform node\n";
                 graphFlow::QueueProbeResult const probe = graphFlow::probeQueueIndependence(device);
                 std::cout << "# queue-probe overlap=" << graphFlow::toString(probe.overlap)
                           << " queues-alias=" << (probe.queuesAlias ? "yes" : "no")

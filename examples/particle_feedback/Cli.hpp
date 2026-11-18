@@ -40,6 +40,17 @@ namespace graphFlow::cli
         std::uint32_t batchChunks = 1u; // Q
         std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor
+        /** Transform launch schedule; accepted for CLI parity with `photon_scattering`.
+         *
+         * Every graph this example builds is source, partition and sink nodes, so the per-chunk
+         * transform path is never constructed and the value cannot change execution. It is parsed
+         * and validated so a shared command line works against both examples.
+         */
+        std::string chunkKernelSchedule = "off"; // off|perChunk
+        /** Queues of a per-chunk transform node; inert, see `chunkKernelSchedule`. */
+        std::uint32_t chunkQueueDepth = 1u;
+        /** Per-chunk latency cap in microseconds; inert, see `chunkKernelSchedule`. */
+        std::uint32_t chunkLatencyCapUs = 0u;
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
@@ -74,11 +85,17 @@ namespace graphFlow::cli
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
                "                                    [--occupancy-target D] [--pool-mode fixed|slotArena]\n"
                "                                    [--slot-arena-budget BYTES]\n"
+               "                                    [--chunk-kernel-schedule off|perChunk]\n"
+               "                                    [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
                "                                    [--seed S] [--max-visits M]\n"
                "                                    [--workload feedback|kernel]\n"
                "       kernel workload only: [--scatter shared|direct]\n"
                "                             [--bin-path dense|hash] [--bins B]\n"
-               "                             [--distribution balanced|one-hot|skewed|sparse]\n";
+               "                             [--distribution balanced|one-hot|skewed|sparse]\n"
+               "       the chunk flags are accepted for CLI parity and change nothing here: every graph\n"
+               "       in this example is source, partition and sink nodes, so no per-chunk transform\n"
+               "       launch and no transform queue pool is ever built. The run prints a note when\n"
+               "       one of them is set to a non-default value.\n";
     }
 
     inline graphFlow::PoolMode parsePoolMode(std::string const& value)
@@ -88,6 +105,20 @@ namespace graphFlow::cli
         if(value == graphFlow::poolModeName(graphFlow::PoolMode::slotArena))
             return graphFlow::PoolMode::slotArena;
         throw std::invalid_argument{"--pool-mode: expected fixed or slotArena, got '" + value + "'"};
+    }
+
+    /** Parse the transform launch schedule of `--chunk-kernel-schedule`.
+     *
+     * Accepted for parity with `photon_scattering`; this example's graphs have no transform node,
+     * so the parsed value reaches `Tuning` but never changes execution.
+     */
+    inline graphFlow::ChunkKernelSchedule parseChunkKernelSchedule(std::string const& value)
+    {
+        if(value == "off")
+            return graphFlow::ChunkKernelSchedule::off;
+        if(value == "perChunk")
+            return graphFlow::ChunkKernelSchedule::perChunk;
+        throw std::invalid_argument{"--chunk-kernel-schedule: expected off or perChunk, got '" + value + "'"};
     }
 
     inline particle::Workload parseWorkload(std::string const& value)
@@ -229,6 +260,19 @@ namespace graphFlow::cli
                 // whole pool budget, which is also the absent-value behaviour.
                 options.slotArenaBudgetBytes = parseU64(flag, nextValue(flag));
             }
+            else if(flag == "--chunk-kernel-schedule")
+            {
+                options.chunkKernelSchedule = nextValue(flag);
+            }
+            else if(flag == "--chunk-queue-depth")
+            {
+                options.chunkQueueDepth = parseU32(flag, nextValue(flag));
+            }
+            else if(flag == "--chunk-latency-cap-us")
+            {
+                // Zero is a defined value: no cap.
+                options.chunkLatencyCapUs = parseU32(flag, nextValue(flag), true);
+            }
             else if(flag == "--seed")
             {
                 options.seed = parseU64(flag, nextValue(flag));
@@ -349,12 +393,34 @@ namespace graphFlow::cli
         }
 
         resolved.tuning = particle::tuningOf(resolved.parameters);
-        // The slot arena is the payload, so an explicit arena budget above the resolved pool
-        // budget raises that budget instead of being rejected as inconsistent. The device-policy
-        // memory cap still sets the derived C and P; only the arena allocation grows.
-        if(resolved.tuning.slotArenaBudgetBytes
-           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
-            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
+        // Accepted for parity with `photon_scattering`: every node in this example's graphs is a
+        // source, partition or sink, so `Flow` never builds a per-chunk transform lane and these
+        // values cannot change execution. They are carried so one command line works for both
+        // examples; `main` prints a note and the usage text states the limitation.
+        resolved.tuning.chunkKernelSchedule = parseChunkKernelSchedule(options.chunkKernelSchedule);
+        resolved.tuning.chunkQueueDepth = options.chunkQueueDepth;
+        resolved.tuning.chunkLatencyCapUs = options.chunkLatencyCapUs;
+        // The slot arena is allocated from the pool budget, so the two values have to agree. An
+        // explicitly configured budget is the caller's decision and is never rewritten: a pool
+        // budget smaller than the arena cannot hold it, so that combination is rejected with both
+        // values named. With the derived budget the arena raises the pool budget, which is exactly
+        // what the arena knob asks for. The device-policy memory cap still sets the derived C and
+        // P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes)
+        {
+            std::uint64_t const arenaBytes = *resolved.tuning.slotArenaBudgetBytes;
+            if(policyConfigIn.memoryBudgetBytes != 0u)
+            {
+                if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                    throw std::invalid_argument{
+                        "the slot-arena budget (" + std::to_string(arenaBytes)
+                        + " bytes) exceeds the explicit pool payload budget ("
+                        + std::to_string(resolved.policy.memoryBudgetBytes)
+                        + " bytes); the arena is allocated from the pool budget"};
+            }
+            else if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                resolved.tuning.poolPayloadBudgetBytes = arenaBytes;
+        }
         // Opt-in occupancy target. Absent keeps the default tuning unchanged, so the example
         // output is byte-identical to the pre-phase-1 binary.
         if(options.occupancyTarget)
