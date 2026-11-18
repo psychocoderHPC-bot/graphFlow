@@ -169,9 +169,10 @@ namespace graphFlow
          * Derived from the run's own maxima: the peak general high-water mark plus one
          * `chunkCapacity` range per live full-capacity output range at its peak. The high-water
          * mark only resets when a full release empties the arena, so its peak is the highest slot
-         * the general side ever reached and this is the smallest arena the observed allocation
-         * pattern would have fit. The `K*R` output credit only bounds the batches whose scatters
-         * are being planned, not the ranges that stay live until a sink releases them.
+         * the general side ever reached. The sum of the two maxima is a sufficient size for the
+         * observed allocation pattern, not a minimal one: the peaks were not necessarily reached
+         * at the same time. The `K*R` output credit only bounds the batches whose scatters are
+         * being planned, not the ranges that stay live until a sink releases them.
          */
         std::uint64_t requiredArenaSlots = 0u;
         std::uint32_t peakLiveChunks = 0u;
