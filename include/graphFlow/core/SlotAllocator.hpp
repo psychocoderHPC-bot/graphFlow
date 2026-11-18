@@ -48,10 +48,12 @@ namespace graphFlow
      * list, so small-range fragmentation cannot block it: it needs `chunkCapacity` free slots
      * above the general high-water mark, and a released full-chunk range is recycled directly.
      *
-     * Failure mode: a full-chunk request fails only when the general high-water mark has grown to
-     * within one `chunkCapacity` of the full-chunk cursor, i.e. general allocations have consumed
-     * the arena up to the top. That is a genuinely full arena, not fragmentation, and it raises a
-     * loud `std::runtime_error` naming the request and the tested bound.
+     * Failure mode: a full-chunk request fails when the gap between the general high-water mark
+     * and the full-chunk bump cursor is smaller than one `chunkCapacity`. The high-water mark is
+     * monotone and never decreases, so releasing a large general range does not reopen that gap
+     * for the full-chunk class; growth of the general high-water mark is what closes it. That is a
+     * capacity limit, not a fragmentation limit, and it raises a loud `std::runtime_error` naming
+     * the request, the high-water mark and the arena size.
      */
     class SlotArena
     {
@@ -138,8 +140,8 @@ namespace graphFlow
          * The general free list is not consulted, so fragmentation by small ranges cannot make
          * this fail. A released full-chunk range is reused first; otherwise the range is taken
          * from the top of the free arena above the general high-water mark. The only failure is a
-         * genuinely full arena, which raises a `std::runtime_error` naming the request and the
-         * available gap.
+         * gap smaller than one full chunk above that high-water mark, which raises a
+         * `std::runtime_error` naming the request, the high-water mark and the arena size.
          */
         std::uint64_t allocateFull()
         {
