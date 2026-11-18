@@ -369,6 +369,11 @@ namespace graphFlow::cli
         policyConfig.poolMode = mode;
         if(budget != 0u)
             policyConfig.memoryBudgetBytes = budget;
+        // Accelerators use the measured P/C ratio of eight, matching the programmatic `Flow`
+        // default. The CLI resolves the policy first, so it must select the ratio here as well.
+        bool const wideChunk = !options.chunkSize || *options.chunkSize >= policyConfig.logicalTileWidth;
+        if(!cpuBackend && wideChunk)
+            policyConfig.liveParticlesPerChunk = acceleratorLiveParticlesPerChunk;
 
         DevicePolicyOverrides overrides;
         overrides.chunkCapacity = options.chunkSize;

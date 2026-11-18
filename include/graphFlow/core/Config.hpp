@@ -148,6 +148,8 @@ namespace graphFlow
         std::uint32_t policyTargetBlocksPerSm = 4u;
         std::uint32_t policyLogicalTileWidth = 128u;
         std::uint32_t policyMaxChunkCapacity = 8192u;
+        /** P/C ratio for the host and for direct policy calls; `Flow` selects the measured
+         * accelerator ratio of eight. An explicit `liveParticles` still overrides both. */
         std::uint32_t policyLiveParticlesPerChunk = 2u;
         std::uint64_t policyMemoryBudgetBytes = 0u; // zero means "derive from the device"
         /** Payload bytes of one storage slot; the particle SoA default is 24. */

@@ -688,6 +688,20 @@ namespace graphFlow
             overrides.tileSize = m_tuning.tileSize;
 
             DevicePolicyConfig policyConfig = policyConfigOf(config);
+            // Accelerators use the measured P/C ratio of eight, which raises the in-flight chunk
+            // depth without exceeding the payload budget. The host keeps the historical ratio.
+            constexpr bool isCpuDevice
+                = std::same_as<ALPAKA_TYPEOF(m_device.getDeviceKind()), alpaka::deviceKind::Cpu>;
+            // Sub-tile chunks are test and edge configurations. They keep the historical ratio:
+            // the deep ratio is only meaningful when one chunk already spans a tile, and it
+            // exposes a pre-existing reservation-accounting edge case at C=1.
+            bool const wideChunk
+                = !overrides.chunkCapacity || *overrides.chunkCapacity >= policyConfig.logicalTileWidth;
+            if constexpr(!isCpuDevice)
+            {
+                if(wideChunk)
+                    policyConfig.liveParticlesPerChunk = acceleratorLiveParticlesPerChunk;
+            }
             DevicePolicy policy = makeDevicePolicy(m_device.getDeviceProperties(), itemCount, overrides, policyConfig);
             if(config.poolMode == PoolMode::slotArena)
             {
