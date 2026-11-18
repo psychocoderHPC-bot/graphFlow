@@ -679,6 +679,55 @@ TEST_CASE("photon transport is independent of chunk capacity and batch size", "[
     compare(gated);
 }
 
+TEST_CASE("photon transform kernel mapping is physics identical", "[photon][tuning][simd]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    auto run = [&](graphFlow::TransformKernelMode mode, std::uint32_t chunkSize)
+    {
+        Parameters parameters;
+        parameters.numPhotons = 513u;
+        parameters.chunkSize = chunkSize;
+        parameters.batchChunks = 8u;
+        parameters.seed = 42u;
+        parameters.thickness = 1.0;
+        parameters.sigmaS = 0.8;
+        parameters.sigmaA = 0.2;
+        parameters.mode = ScatterMode::isotropic;
+        parameters.maxScatters = 256u;
+        parameters.transformKernelMode = mode;
+        graphFlow::Tuning tuning = graphFlow::photon::tuningOf(parameters);
+        return graphFlow::photon::runPhotonScattering(device, parameters, tuning);
+    };
+
+    auto const compare
+        = [](graphFlow::photon::ScatteringResult const& expected, graphFlow::photon::ScatteringResult const& actual)
+    {
+        REQUIRE(expected.terminal.size() == actual.terminal.size());
+        for(std::size_t id = 0u; id < expected.terminal.size(); ++id)
+        {
+            CHECK(expected.terminal[id].event == actual.terminal[id].event);
+            CHECK(expected.terminal[id].scatterCount == actual.terminal[id].scatterCount);
+            CHECK(expected.terminal[id].position.x == actual.terminal[id].position.x);
+            CHECK(expected.terminal[id].position.y == actual.terminal[id].position.y);
+            CHECK(expected.terminal[id].position.z == actual.terminal[id].position.z);
+            CHECK(expected.terminal[id].direction.x == actual.terminal[id].direction.x);
+            CHECK(expected.terminal[id].direction.y == actual.terminal[id].direction.y);
+            CHECK(expected.terminal[id].direction.z == actual.terminal[id].direction.z);
+        }
+        CHECK(expected.terminated == actual.terminated);
+        CHECK(expected.inconsistent == actual.inconsistent);
+    };
+
+    // 513 particles over chunks of 64 leave a 1-particle tail, so the tail arithmetic and the
+    // batch-global output positions are exercised by both SIMD mappings.
+    for(std::uint32_t const chunkSize : {64u, 128u})
+    {
+        auto const batch = run(graphFlow::TransformKernelMode::batch, chunkSize);
+        compare(batch, run(graphFlow::TransformKernelMode::simdBlocks, chunkSize));
+        compare(batch, run(graphFlow::TransformKernelMode::simdWarps, chunkSize));
+    }
+}
+
 TEST_CASE("forward photon scattering reproduces the Poisson collision count", "[photon][physics][diagnostics]")
 {
     auto const device = graphFlow::test::makeCpuDevice();

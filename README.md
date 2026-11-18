@@ -409,6 +409,18 @@ chunkLimit=<name>`; `chunkLimit` names the clamp that set the per-chunk
 launch-size policy (`wave`, `maximum`, `grid`, `memory` or `latency`). The off
 path reports `chunkLaunches=0 chunkLimit=none`.
 
+`--transform-kernel-mode batch|simdBlocks|simdWarps` (default `batch`) selects
+the kernel mapping of the batch-wide transform. `simdBlocks` keeps one chunk
+per block and walks the batch chunk list with `onAcc::makeIdxMap` over
+`blocksInGrid`; `simdWarps` assigns one chunk per warp and walks it with
+`linearWarpsInGrid`. Both process the chunk through
+`onAcc::SimdAlgo::concurrent()`, so a thread loads SIMD packs of the SoA
+columns. The mapping changes launch geometry only: output positions, partial
+tails and the per-payload RNG stream stay the batch semantics. The SIMD
+mappings need a SoA payload storage and apply only to `Flow::transform` nodes.
+`--chunk-kernel-schedule perChunk` already fixes the launch geometry, so that
+schedule and a SIMD mapping are mutually exclusive.
+
 Each run writes `figure1_paths`, `figure2_scatter_spectrum`,
 `figure3_outcomes` and `figure4_detector` as PNG, SVG and PDF. Figure 1 shows
 the x-z projection with the scripted three-scatter reflected path from the
