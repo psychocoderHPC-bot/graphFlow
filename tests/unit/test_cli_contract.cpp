@@ -589,16 +589,15 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
     graphFlow::cli::Options const defaults = parseArgs({});
     CHECK_FALSE(defaults.slotArenaBudgetBytes.has_value());
 
-    graphFlow::cli::Options const parsed
-        = parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "67108864"});
+    graphFlow::cli::Options const parsed = parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "67108864"});
     REQUIRE(parsed.slotArenaBudgetBytes.has_value());
-    CHECK(*parsed.slotArenaBudgetBytes == 67108864u);
+    CHECK(*parsed.slotArenaBudgetBytes == 67'108'864u);
 
     graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(parsed, cpuProperties());
     CHECK(resolved.parameters.poolMode == graphFlow::PoolMode::slotArena);
-    CHECK(resolved.parameters.slotArenaBudgetBytes == 67108864u);
+    CHECK(resolved.parameters.slotArenaBudgetBytes == 67'108'864u);
     REQUIRE(resolved.tuning.slotArenaBudgetBytes.has_value());
-    CHECK(*resolved.tuning.slotArenaBudgetBytes == 67108864u);
+    CHECK(*resolved.tuning.slotArenaBudgetBytes == 67'108'864u);
 
     // Zero is a defined value: it keeps the whole pool budget, like an absent flag.
     graphFlow::cli::ResolvedOptions const zero = graphFlow::cli::resolveOptions(
@@ -614,7 +613,7 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
         cpuProperties());
     REQUIRE(raised.tuning.slotArenaBudgetBytes.has_value());
     REQUIRE(raised.tuning.poolPayloadBudgetBytes.has_value());
-    CHECK(*raised.tuning.poolPayloadBudgetBytes == 67108864u);
+    CHECK(*raised.tuning.poolPayloadBudgetBytes == 67'108'864u);
 
     // An arena budget below the pool budget leaves the pool budget to the device policy.
     graphFlow::cli::ResolvedOptions const small = graphFlow::cli::resolveOptions(

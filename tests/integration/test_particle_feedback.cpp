@@ -524,8 +524,7 @@ TEST_CASE("the slot-arena budget knob reproduces the memory reduction", "[integr
     // `S = P + K*R`), and let the run report what it actually needed.
     graphFlow::Tuning calibration = base;
     calibration.poolMode = graphFlow::PoolMode::slotArena;
-    calibration.slotArenaBudgetBytes
-        = graphFlow::requiredArenaBytes(liveParticles, capacity, liveParticles + reserve);
+    calibration.slotArenaBudgetBytes = graphFlow::requiredArenaBytes(liveParticles, capacity, liveParticles + reserve);
     auto const measured = graphFlow::particle::runParticleFeedback(device, parameters, calibration);
     CHECK(measured.weights == fixed.weights);
 
