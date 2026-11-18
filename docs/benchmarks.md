@@ -321,10 +321,11 @@ which reports `sharing=unknown`, so they are baselines, not acceptance numbers.
 
 ## Per-chunk transform schedule (photon scattering)
 
-Provenance: code `c7ff8e21e509733c17c90968f8d6656dce03466c`
-(branch `issue-83-per-chunk-schedule`), one process per arm, interleaved
-repetitions, median across repetitions. Harness, identical for both arms and
-every card:
+**Current measurement (code `474a5a8e89c8c0caca03e1b38f7aca07ff30a91b`).**
+Provenance: code `474a5a8e89c8c0caca03e1b38f7aca07ff30a91b` on branch
+`fix/perchunk-copy-cost`, the commit that removes the three defensive device
+copies from the per-chunk path. Harness, identical for both arms and every
+card:
 
 ```sh
 ./graphFlow_photon_scattering --backend cuda --photons 4000000 --thickness 4 \
@@ -332,10 +333,41 @@ every card:
   --batch-chunks 8 [--chunk-kernel-schedule perChunk --chunk-queue-depth 4]
 ```
 
-N=4M photons, Q=8, seed 7, Release. The off arm is the default schedule; the
-perChunk arm uses queue depth 4. The physics output is byte-identical across
-arms: md5 `9cbb15ab113a85ff23f1fa406dc0eda8` in every accepted repetition on
-every card.
+N=4M photons, Q=8, seed 7, Release, no output directory. 20 accepted
+interleaved repetitions per arm on `hal` (A30 `sm_80`, `sharing=unknown`, so a
+baseline), 12 per arm on `fwk394` (`Quadro GV100`, `sm_70`), one discarded
+pre-warm per arm and the ordering alternated. The physics output is
+byte-identical across arms in every accepted repetition on both cards: md5
+`9cbb15ab113a85ff23f1fa406dc0eda8`. `MDE` is the minimum detectable effect of
+the paired comparison at the stated repetition count.
+
+| Card | batch median s | perChunk (depth 4) median s | paired delta | 95% CI | MDE |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A30 `sm_80` | 1.6640 | 1.5876 | -4.90% | [-5.23, -4.56] | 0.50% |
+| Quadro GV100 `sm_70` | 1.2796 | 1.1038 | -13.65% | [-14.02, -13.27] | 0.62% |
+
+The order term is negligible: the A30 batch median drifts by -0.11% between
+the two presentation orders and the order-blocked estimates are -4.89% and
+-4.90%. Per-arm coefficients of variation are 2.2% and 2.8% on the A30 and
+0.35% and 0.56% on the GV100.
+
+PR #88 added three host-to-device copies of `m_inBase`, `m_inCount` and
+`m_outPosition` to the per-chunk path for device-state parity with the
+batch-wide path. That schedule dispatches one chunk per batch, so the three
+transfers ran about 2,841 times at this workload and removed 5.4 percentage
+points of the A30 gain: the same harness on `main` at `8bf41ed1` measures
+`+0.53%` `[-0.01, +0.97]` on the A30, that is no per-chunk advantage outside
+noise. No kernel on the per-chunk path reads those tables, because
+`TransformPerChunkKernel` receives the input base, the input count and the
+batch-global output position as per-launch scalars, so the copies are hoisted
+out of the per-chunk fan-out and only the batch-wide path still issues them.
+The numbers recorded before PR #88 follow as history; they are not the current
+numbers.
+
+**Historical measurement, before PR #88 (code `c7ff8e21`).**
+Provenance: code `c7ff8e21e509733c17c90968f8d6656dce03466c`
+(branch `issue-83-per-chunk-schedule`), one process per arm, interleaved
+repetitions, median across repetitions.
 
 | Card | off wall s | perChunk (depth 4) wall s | delta |
 | --- | ---: | ---: | ---: |
@@ -345,8 +377,10 @@ every card.
 
 The off path against the unmodified binary in the same window is +0.37% on the
 A30, -0.62% on the RTX 2080 Ti and -0.31% on the GV100, so the off path shows
-no regression within noise.
+no regression within noise. The RTX 2080 Ti row was not re-measured for the
+current numbers above.
 
+**Mechanism (code `c7ff8e21`).**
 Mechanism, from a controlled constant-threads-per-block experiment on hal A30
 (code `c7ff8e21e509733c17c90968f8d6656dce03466c`, experiment-only override of
 the threads-per-block setting, otherwise identical harness and flags): the
