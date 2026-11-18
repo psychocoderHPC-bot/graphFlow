@@ -198,16 +198,26 @@ TEST_CASE("CLI rejects an oversized tile, capacity and P", "[cli]")
         = parseArgs({"--chunk-size", std::to_string(policyConfig.maxChunkCapacity + 1u)});
     CHECK_THROWS_AS(graphFlow::cli::resolveOptions(oversizedChunk, properties, policyConfig), std::invalid_argument);
 
-    // Explicit P and C that exceed the payload budget together. Explicit P is rejected, not
-    // clamped; only the auto-derived P adapts to the budget.
-    graphFlow::cli::Options const infeasible
-        = parseArgs({"--particles", "1000000", "--chunk-size", "8192", "--live-particles", "8192"});
+    // Explicit P and C that exceed the fixed payload budget together. Explicit P is rejected, not
+    // clamped; only the auto-derived P adapts to the budget. The fixed layout is requested
+    // explicitly because the CPU default is the slot arena, where `P` does not multiply `C`.
+    graphFlow::cli::Options const infeasible = parseArgs(
+        {"--pool-mode", "fixed", "--particles", "1000000", "--chunk-size", "8192", "--live-particles", "8192"});
     CHECK_THROWS_AS(graphFlow::cli::resolveOptions(infeasible, properties), std::invalid_argument);
 
     // A budget that cannot hold even one live particle is still a hard error.
-    graphFlow::DevicePolicyConfig tiny = policyConfig;
-    tiny.memoryBudgetBytes = 1024u;
-    CHECK_THROWS_AS(graphFlow::cli::resolveOptions(infeasible, properties, tiny), std::invalid_argument);
+    graphFlow::cli::Options const tiny = parseArgs(
+        {"--pool-mode",
+         "fixed",
+         "--pool-budget-bytes",
+         "1024",
+         "--particles",
+         "1000000",
+         "--chunk-size",
+         "8192",
+         "--live-particles",
+         "8192"});
+    CHECK_THROWS_AS(graphFlow::cli::resolveOptions(tiny, properties), std::invalid_argument);
 }
 
 TEST_CASE("CLI preserves explicit C, P and T overrides", "[cli]")
@@ -273,7 +283,7 @@ TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]"
     properties.multiProcessorCount = 56u;
     properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
 
-    graphFlow::cli::Options const options = parseArgs({"--particles", "100000000"});
+    graphFlow::cli::Options const options = parseArgs({"--backend", "cuda", "--particles", "100000000"});
     graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(options, properties);
 
     CHECK(resolved.policy.memoryBudgetBytes == 3'171'090'432ull);
@@ -296,15 +306,15 @@ TEST_CASE("CLI default policy fits an A30 usable-memory budget", "[cli][policy]"
     CHECK(resolved.tuning.frameCap == resolved.parameters.frameCap);
 
     // The largest feasible explicit P passes; the former preset P=16384 is rejected.
-    graphFlow::cli::Options const fitting
-        = parseArgs({"--particles", "100000000", "--chunk-size", "8192", "--live-particles", "16128"});
+    graphFlow::cli::Options const fitting = parseArgs(
+        {"--backend", "cuda", "--particles", "100000000", "--chunk-size", "8192", "--live-particles", "16128"});
     graphFlow::cli::ResolvedOptions const explicitFitting = graphFlow::cli::resolveOptions(fitting, properties);
     CHECK(explicitFitting.policy.liveParticles == 16128u);
     CHECK(explicitFitting.policy.liveParticlesExplicit);
     CHECK(explicitFitting.liveParticlesExplicit);
 
-    graphFlow::cli::Options const overBudget
-        = parseArgs({"--particles", "100000000", "--chunk-size", "8192", "--live-particles", "16384"});
+    graphFlow::cli::Options const overBudget = parseArgs(
+        {"--backend", "cuda", "--particles", "100000000", "--chunk-size", "8192", "--live-particles", "16384"});
     CHECK_THROWS_AS(graphFlow::cli::resolveOptions(overBudget, properties), std::invalid_argument);
 }
 
@@ -630,6 +640,102 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
 }
 #endif
 
+TEST_CASE("CLI defaults the CPU run to the slot arena with a 1 GiB payload budget", "[cli][arena][defaults]")
+{
+    constexpr std::uint64_t cpuBudget = 1'073'741'824u;
+
+    graphFlow::cli::Options const defaults = parseArgs({"--particles", "1000000"});
+    CHECK_FALSE(defaults.poolModeExplicit);
+    CHECK_FALSE(defaults.poolPayloadBudgetBytes.has_value());
+
+    graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(defaults, cpuProperties());
+    CHECK(resolved.backend == graphFlow::Backend::cpu);
+    CHECK(resolved.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolved.parameters.poolPayloadBudgetBytes == cpuBudget);
+    CHECK(resolved.policy.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolved.policy.memoryBudgetBytes == cpuBudget);
+    REQUIRE(resolved.tuning.poolMode.has_value());
+    CHECK(*resolved.tuning.poolMode == graphFlow::PoolMode::slotArena);
+    REQUIRE(resolved.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*resolved.tuning.poolPayloadBudgetBytes == cpuBudget);
+    // `Flow` re-derives the policy; the budget the CLI used has to reach it as well.
+    REQUIRE(resolved.tuning.policyMemoryBudgetBytes.has_value());
+    CHECK(*resolved.tuning.policyMemoryBudgetBytes == cpuBudget);
+    CHECK(resolved.policy.chunkCapacity > 0u);
+    CHECK(resolved.policy.liveParticles > 0u);
+    // The arena charges live slots, so P alone has to fit the budget; P*C does not scale.
+    CHECK(std::uint64_t{resolved.policy.liveParticles} * graphFlow::payloadBytesPerSlot <= cpuBudget);
+    CHECK(resolved.policy.description.find("poolMode=slotArena") != std::string::npos);
+    CHECK(resolved.policy.description.find("budget=1073741824") != std::string::npos);
+
+    // Explicit fixed keeps the fixed layout but still receives the 1 GiB CPU default budget.
+    graphFlow::cli::Options const fixedOptions = parseArgs({"--pool-mode", "fixed", "--particles", "1000000"});
+    CHECK(fixedOptions.poolModeExplicit);
+    graphFlow::cli::ResolvedOptions const fixed = graphFlow::cli::resolveOptions(fixedOptions, cpuProperties());
+    CHECK(fixed.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(fixed.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(fixed.policy.memoryBudgetBytes == cpuBudget);
+    CHECK(fixed.parameters.poolPayloadBudgetBytes == cpuBudget);
+
+    // An explicit budget wins and reaches the policy before C is derived.
+    graphFlow::cli::ResolvedOptions const budgeted = graphFlow::cli::resolveOptions(
+        parseArgs({"--particles", "1000000", "--pool-budget-bytes", "134217728"}),
+        cpuProperties());
+    CHECK(budgeted.policy.memoryBudgetBytes == 134'217'728u);
+    CHECK(budgeted.parameters.poolPayloadBudgetBytes == 134'217'728u);
+    CHECK(budgeted.policy.chunkCapacity >= resolved.policy.chunkCapacity);
+    CHECK(budgeted.policy.liveParticles >= resolved.policy.liveParticles);
+
+    // An explicit CPU arena budget overrides the 1 GiB default without changing the layout.
+    graphFlow::cli::ResolvedOptions const arena = graphFlow::cli::resolveOptions(
+        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "33554432"}),
+        cpuProperties());
+    CHECK(arena.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(arena.parameters.slotArenaBudgetBytes == 33'554'432u);
+    REQUIRE(arena.tuning.slotArenaBudgetBytes.has_value());
+    CHECK(*arena.tuning.slotArenaBudgetBytes == 33'554'432u);
+    CHECK(arena.policy.memoryBudgetBytes == cpuBudget);
+
+    // An explicit zero budget is rejected before any policy runs.
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--pool-budget-bytes", "0"}), cpuProperties()),
+        Catch::Matchers::ContainsSubstring("must be non-zero"));
+
+    // Accelerators keep the fixed layout and their derived budget.
+    alpaka::onHost::DeviceProperties properties = cpuProperties();
+    properties.warpSize = 32u;
+    properties.maxThreadsPerBlock = 1024u;
+    properties.maxBlocksPerGrid = 0x7FFF'FFFFu;
+    properties.multiProcessorCount = 56u;
+    properties.globalMemCapacityBytes = 8ull * 3'171'090'432ull;
+    graphFlow::cli::ResolvedOptions const gpu
+        = graphFlow::cli::resolveOptions(parseArgs({"--backend", "cuda", "--particles", "1000000"}), properties);
+    CHECK(gpu.backend == graphFlow::Backend::cuda);
+    CHECK(gpu.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(gpu.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(gpu.parameters.poolPayloadBudgetBytes == 0u);
+    CHECK(gpu.policy.memoryBudgetBytes == 3'171'090'432ull);
+    CHECK(gpu.policy.description.find("poolMode=fixed") != std::string::npos);
+
+    // An explicit budget also wins on an accelerator.
+    graphFlow::cli::ResolvedOptions const gpuBudget = graphFlow::cli::resolveOptions(
+        parseArgs({"--backend", "cuda", "--particles", "1000000", "--pool-budget-bytes", "33554432"}),
+        properties);
+    CHECK(gpuBudget.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(gpuBudget.policy.memoryBudgetBytes == 33'554'432u);
+    CHECK(gpuBudget.parameters.poolPayloadBudgetBytes == 33'554'432u);
+
+    // The arena budget is only valid when the effective mode is the arena.
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(
+            parseArgs({"--pool-mode", "fixed", "--slot-arena-budget", "1024"}),
+            cpuProperties()),
+        Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--backend", "cuda", "--slot-arena-budget", "1024"}), properties),
+        Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+}
+
 TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
 {
     graphFlow::cli::Options const defaults = parseArgs({});
@@ -652,43 +758,41 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
     CHECK(zero.parameters.slotArenaBudgetBytes == 0u);
     CHECK_FALSE(zero.tuning.slotArenaBudgetBytes.has_value());
 
-    // An arena budget above the resolved pool budget raises the pool budget: the arena is the
-    // payload, so a larger arena must also raise the cap that bounds it.
+    // An arena budget above the derived pool budget raises the pool budget: the arena is the
+    // payload, so a larger arena must also raise the cap that bounds it. Without an explicit
+    // --pool-budget-bytes the 1 GiB CPU default counts as derived.
     graphFlow::cli::ResolvedOptions const raised = graphFlow::cli::resolveOptions(
-        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "67108864"}),
+        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "2147483648"}),
         cpuProperties());
     REQUIRE(raised.tuning.slotArenaBudgetBytes.has_value());
     REQUIRE(raised.tuning.poolPayloadBudgetBytes.has_value());
-    CHECK(*raised.tuning.poolPayloadBudgetBytes == 67'108'864u);
+    CHECK(*raised.tuning.poolPayloadBudgetBytes == 2'147'483'648u);
 
-    // An arena budget below the pool budget leaves the pool budget to the device policy.
+    // An arena budget below the pool budget leaves the derived 1 GiB pool budget in place.
     graphFlow::cli::ResolvedOptions const small = graphFlow::cli::resolveOptions(
         parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "4096"}),
         cpuProperties());
-    CHECK_FALSE(small.tuning.poolPayloadBudgetBytes.has_value());
-
-    // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
-    CHECK_THROWS_WITH(
-        graphFlow::cli::resolveOptions(parseArgs({"--slot-arena-budget", "1024"}), cpuProperties()),
-        Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+    REQUIRE(small.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*small.tuning.poolPayloadBudgetBytes == 1'073'741'824u);
 
     // An explicit payload budget is never rewritten by the arena. The arena only raises a derived
-    // budget, so an explicitly larger pool budget survives and no arena-sized override appears.
-    graphFlow::DevicePolicyConfig explicitLarge;
-    explicitLarge.memoryBudgetBytes = 134'217'728u;
-    graphFlow::cli::ResolvedOptions const kept
-        = graphFlow::cli::resolveOptions(parsed, cpuProperties(), explicitLarge);
+    // budget, so an explicitly larger pool budget survives unchanged.
+    graphFlow::cli::ResolvedOptions const kept = graphFlow::cli::resolveOptions(
+        parseArgs({"--pool-mode", "slotArena", "--pool-budget-bytes", "134217728", "--slot-arena-budget", "67108864"}),
+        cpuProperties());
     CHECK(kept.policy.memoryBudgetBytes == 134'217'728u);
-    CHECK_FALSE(kept.tuning.poolPayloadBudgetBytes.has_value());
+    REQUIRE(kept.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*kept.tuning.poolPayloadBudgetBytes == 134'217'728u);
 
     // An explicit budget smaller than the arena cannot hold the arena, so the combination is
     // rejected before the run and the message names both byte counts.
-    graphFlow::DevicePolicyConfig explicitSmall;
-    explicitSmall.memoryBudgetBytes = 1'048'576u;
     std::string budgetError;
     try
     {
-        (void) graphFlow::cli::resolveOptions(parsed, cpuProperties(), explicitSmall);
+        (void) graphFlow::cli::resolveOptions(
+            parseArgs(
+                {"--pool-mode", "slotArena", "--pool-budget-bytes", "1048576", "--slot-arena-budget", "67108864"}),
+            cpuProperties());
     }
     catch(std::invalid_argument const& error)
     {
@@ -702,7 +806,7 @@ TEST_CASE("CLI accepts the per-chunk transform flags for parity", "[cli][chunk-s
 {
     using Catch::Matchers::ContainsSubstring;
 
-    // The defaults stay the historical configuration, so an unflagged run is unchanged.
+    // The per-chunk transform defaults stay off, depth 1 and no latency cap.
     graphFlow::cli::ResolvedOptions const defaults = graphFlow::cli::resolveOptions(parseArgs({}), cpuProperties());
     CHECK(defaults.tuning.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::off);
     REQUIRE(defaults.tuning.chunkQueueDepth.has_value());

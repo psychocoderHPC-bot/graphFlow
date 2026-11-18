@@ -54,7 +54,9 @@ namespace graphFlow::cli
         std::uint64_t seed = 0u;
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
+        std::optional<std::uint64_t> poolPayloadBudgetBytes; // total pool payload budget in bytes
         graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        bool poolModeExplicit = false; // --pool-mode was given, so the backend default is off
         std::optional<std::uint64_t> slotArenaBudgetBytes; // slot-arena payload budget in bytes
         // Opt-in kernel workload. The axis options stay absent so the resolver can reject an
         // axis on the default feedback workload instead of silently ignoring it.
@@ -83,7 +85,8 @@ namespace graphFlow::cli
                "                                    [--particles N] [--chunk-size C]\n"
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
-               "                                    [--occupancy-target D] [--pool-mode fixed|slotArena]\n"
+               "                                    [--occupancy-target D] [--pool-budget-bytes B]\n"
+               "                                    [--pool-mode fixed|slotArena]\n"
                "                                    [--slot-arena-budget BYTES]\n"
                "                                    [--chunk-kernel-schedule off|perChunk]\n"
                "                                    [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
@@ -92,6 +95,9 @@ namespace graphFlow::cli
                "       kernel workload only: [--scatter shared|direct]\n"
                "                             [--bin-path dense|hash] [--bins B]\n"
                "                             [--distribution balanced|one-hot|skewed|sparse]\n"
+               "       the CPU backend defaults to --pool-mode slotArena with a 1 GiB payload\n"
+               "       budget; accelerators default to --pool-mode fixed with the derived device\n"
+               "       budget. An explicit --pool-mode or --pool-budget-bytes always wins.\n"
                "       the chunk flags are accepted for CLI parity and change nothing here: every graph\n"
                "       in this example is source, partition and sink nodes, so no per-chunk transform\n"
                "       launch and no transform queue pool is ever built. The run prints a note when\n"
@@ -250,9 +256,14 @@ namespace graphFlow::cli
                 // so `--occupancy-target 0` is the explicit off switch.
                 options.occupancyTarget = parseU32(flag, nextValue(flag), true);
             }
+            else if(flag == "--pool-budget-bytes")
+            {
+                options.poolPayloadBudgetBytes = parseU64(flag, nextValue(flag));
+            }
             else if(flag == "--pool-mode")
             {
                 options.poolMode = parsePoolMode(nextValue(flag));
+                options.poolModeExplicit = true;
             }
             else if(flag == "--slot-arena-budget")
             {
@@ -329,10 +340,28 @@ namespace graphFlow::cli
         ResolvedOptions resolved;
         resolved.backend = requireBackend(options.backend);
 
+        // The CPU backend keeps the slot arena with a bounded 1 GiB payload budget. The fixed
+        // layout charges `P*C` slots, so the old 16 MiB host budget shrank `C` to a few hundred
+        // particles per chunk. Accelerators keep the fixed layout and their derived budget. An
+        // explicit flag always wins over these defaults.
+        bool const cpuBackend = resolved.backend == graphFlow::Backend::cpu;
+        auto const defaultCpuBudget = 1024ull * 1024ull * 1024ull;
+        if(options.poolPayloadBudgetBytes && *options.poolPayloadBudgetBytes == 0u)
+            throw std::invalid_argument{"--pool-budget-bytes: value must be non-zero"};
+        std::uint64_t const budget = options.poolPayloadBudgetBytes.value_or(cpuBackend ? defaultCpuBudget : 0ull);
+        graphFlow::PoolMode const mode
+            = options.poolModeExplicit ? options.poolMode
+                                       : (cpuBackend ? graphFlow::PoolMode::slotArena : graphFlow::PoolMode::fixed);
+
         // Mirror the layout in the CLI-side policy, so an explicit P is checked against the
         // arena formula the run will use. `Flow` re-derives with the exact graph credit K*R*C.
+        // The budget is applied here, before the policy inverts it: it used to reach the run only
+        // through `Tuning`, after `makeDevicePolicy`, so an explicit `--pool-budget-bytes` could
+        // not raise the derived `C`.
         DevicePolicyConfig policyConfig = policyConfigIn;
-        policyConfig.poolMode = options.poolMode;
+        policyConfig.poolMode = mode;
+        if(budget != 0u)
+            policyConfig.memoryBudgetBytes = budget;
 
         DevicePolicyOverrides overrides;
         overrides.chunkCapacity = options.chunkSize;
@@ -351,10 +380,12 @@ namespace graphFlow::cli
         resolved.parameters.seed = options.seed;
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
-        resolved.parameters.poolMode = options.poolMode;
+        resolved.parameters.poolMode = mode;
+        if(budget != 0u)
+            resolved.parameters.poolPayloadBudgetBytes = budget;
         if(options.slotArenaBudgetBytes)
         {
-            if(options.poolMode != graphFlow::PoolMode::slotArena)
+            if(mode != graphFlow::PoolMode::slotArena)
                 throw std::invalid_argument{"--slot-arena-budget requires --pool-mode slotArena"};
             resolved.parameters.slotArenaBudgetBytes = *options.slotArenaBudgetBytes;
         }
@@ -393,6 +424,11 @@ namespace graphFlow::cli
         }
 
         resolved.tuning = particle::tuningOf(resolved.parameters);
+        // `Flow` re-derives the device policy from `Tuning`. Mirror the budget the CLI used
+        // into the policy knob so the re-derivation does not fall back to the 16 MiB host
+        // default and reject the C and P that were derived from the 1 GiB CPU default.
+        if(budget != 0u)
+            resolved.tuning.policyMemoryBudgetBytes = budget;
         // Accepted for parity with `photon_scattering`: every node in this example's graphs is a
         // source, partition or sink, so `Flow` never builds a per-chunk transform lane and these
         // values cannot change execution. They are carried so one command line works for both
@@ -401,22 +437,20 @@ namespace graphFlow::cli
         resolved.tuning.chunkQueueDepth = options.chunkQueueDepth;
         resolved.tuning.chunkLatencyCapUs = options.chunkLatencyCapUs;
         // The slot arena is allocated from the pool budget, so the two values have to agree. An
-        // explicitly configured budget is the caller's decision and is never rewritten: a pool
+        // explicit `--pool-budget-bytes` is the caller's decision and is never rewritten: a pool
         // budget smaller than the arena cannot hold it, so that combination is rejected with both
-        // values named. With the derived budget the arena raises the pool budget, which is exactly
-        // what the arena knob asks for. The device-policy memory cap still sets the derived C and
-        // P; only the arena allocation grows.
+        // values named. Without an explicit budget the derived one, including the 1 GiB CPU
+        // default, is raised to the arena size, which is exactly what the arena knob asks for. The
+        // device-policy memory cap still sets the derived C and P; only the arena allocation grows.
         if(resolved.tuning.slotArenaBudgetBytes)
         {
             std::uint64_t const arenaBytes = *resolved.tuning.slotArenaBudgetBytes;
-            if(policyConfigIn.memoryBudgetBytes != 0u)
+            if(options.poolPayloadBudgetBytes)
             {
-                if(resolved.policy.memoryBudgetBytes < arenaBytes)
+                if(budget < arenaBytes)
                     throw std::invalid_argument{
-                        "the slot-arena budget (" + std::to_string(arenaBytes)
-                        + " bytes) exceeds the explicit pool payload budget ("
-                        + std::to_string(resolved.policy.memoryBudgetBytes)
-                        + " bytes); the arena is allocated from the pool budget"};
+                        "--slot-arena-budget (" + std::to_string(arenaBytes) + " bytes) exceeds --pool-budget-bytes ("
+                        + std::to_string(budget) + " bytes); the arena is allocated from the pool budget"};
             }
             else if(resolved.policy.memoryBudgetBytes < arenaBytes)
                 resolved.tuning.poolPayloadBudgetBytes = arenaBytes;

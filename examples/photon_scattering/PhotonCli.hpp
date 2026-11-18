@@ -40,6 +40,7 @@ namespace graphFlow::photon::cli
         std::uint32_t chunkLatencyCapUs = 0u; // zero means no cap
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
         graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        bool poolModeExplicit = false; // --pool-mode was given, so the backend default is off
         std::optional<std::uint64_t> slotArenaBudgetBytes; // slot-arena payload budget in bytes
         std::optional<std::string> outputDirectory;
         std::uint32_t tracePhotons = 0u;
@@ -79,7 +80,10 @@ namespace graphFlow::photon::cli
                "                                      [--chunk-kernel-schedule off|perChunk]\n"
                "                                      [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
                "                                      [--output-dir DIR] [--trace-photons M]\n"
-               "                                      [--trace-vertices V]\n";
+               "                                      [--trace-vertices V]\n"
+               "       the CPU backend defaults to --pool-mode slotArena with a 1 GiB payload\n"
+               "       budget; accelerators default to --pool-mode fixed with the derived device\n"
+               "       budget. An explicit --pool-mode or --pool-budget-bytes always wins.\n";
     }
 
     inline std::uint64_t parseU64(std::string_view flag, std::string const& value)
@@ -204,7 +208,10 @@ namespace graphFlow::photon::cli
             else if(flag == "--pool-budget-bytes")
                 options.poolPayloadBudgetBytes = parseU64(flag, nextValue(flag));
             else if(flag == "--pool-mode")
+            {
                 options.poolMode = parsePoolMode(flag, nextValue(flag));
+                options.poolModeExplicit = true;
+            }
             else if(flag == "--slot-arena-budget")
                 // Bytes of the slot-arena payload budget. Zero is a defined value: it keeps the
                 // whole pool budget, which is also the absent-value behaviour.
@@ -232,6 +239,19 @@ namespace graphFlow::photon::cli
         ResolvedOptions resolved;
         resolved.backend = graphFlow::requireBackend(options.backend);
 
+        // The CPU backend keeps the slot arena with a bounded 1 GiB payload budget. The fixed
+        // layout charges `P*C` slots, so the old 16 MiB host budget shrank `C` to 256 and turned a
+        // 4M-photon run into hundreds of thousands of tiny batches. Accelerators keep the fixed
+        // layout and their derived budget. An explicit flag always wins over these defaults.
+        bool const cpuBackend = resolved.backend == graphFlow::Backend::cpu;
+        auto const defaultCpuBudget = 1024ull * 1024ull * 1024ull;
+        if(options.poolPayloadBudgetBytes && *options.poolPayloadBudgetBytes == 0u)
+            throw std::invalid_argument{"--pool-budget-bytes: value must be non-zero"};
+        std::uint64_t const budget = options.poolPayloadBudgetBytes.value_or(cpuBackend ? defaultCpuBudget : 0ull);
+        graphFlow::PoolMode const mode
+            = options.poolModeExplicit ? options.poolMode
+                                       : (cpuBackend ? graphFlow::PoolMode::slotArena : graphFlow::PoolMode::fixed);
+
         graphFlow::DevicePolicyOverrides overrides;
         overrides.chunkCapacity = options.chunkSize;
         overrides.liveParticles = options.liveParticles;
@@ -242,7 +262,12 @@ namespace graphFlow::photon::cli
         policyConfig.slotBytes = graphFlow::photon::Photon::attribute_list::slotBytes;
         // Mirror the layout in the CLI-side policy, so an explicit P is checked against the
         // arena formula the run will use. `Flow` re-derives with the exact graph credit K*R*C.
-        policyConfig.poolMode = options.poolMode;
+        // The budget is applied here, before the policy inverts it: it used to be copied into
+        // `Tuning` after `makeDevicePolicy`, so an explicit `--pool-budget-bytes` could not raise
+        // the derived `C`.
+        policyConfig.poolMode = mode;
+        if(budget != 0u)
+            policyConfig.memoryBudgetBytes = budget;
         resolved.policy = graphFlow::makeDevicePolicy(properties, options.numPhotons, overrides, policyConfig);
         resolved.liveParticlesExplicit = resolved.policy.liveParticlesExplicit;
 
@@ -265,16 +290,12 @@ namespace graphFlow::photon::cli
         resolved.parameters.trace.enabled = options.tracePhotons != 0u;
         resolved.parameters.trace.maxPhotons = options.tracePhotons;
         resolved.parameters.trace.maxVertices = options.traceVertices;
-        if(options.poolPayloadBudgetBytes)
-        {
-            if(*options.poolPayloadBudgetBytes == 0u)
-                throw std::invalid_argument{"--pool-budget-bytes: value must be non-zero"};
-            resolved.parameters.poolPayloadBudgetBytes = *options.poolPayloadBudgetBytes;
-        }
-        resolved.parameters.poolMode = options.poolMode;
+        resolved.parameters.poolMode = mode;
+        if(budget != 0u)
+            resolved.parameters.poolPayloadBudgetBytes = budget;
         if(options.slotArenaBudgetBytes)
         {
-            if(options.poolMode != graphFlow::PoolMode::slotArena)
+            if(mode != graphFlow::PoolMode::slotArena)
                 throw std::invalid_argument{"--slot-arena-budget requires --pool-mode slotArena"};
             resolved.parameters.slotArenaBudgetBytes = *options.slotArenaBudgetBytes;
         }
@@ -290,22 +311,26 @@ namespace graphFlow::photon::cli
 
         graphFlow::photon::validateParameters(resolved.parameters);
         resolved.tuning = graphFlow::photon::tuningOf(resolved.parameters);
+        // `Flow` re-derives the device policy from `Tuning`. Mirror the budget the CLI used
+        // into the policy knob so the re-derivation does not fall back to the 16 MiB host
+        // default and reject the C and P that were derived from the 1 GiB CPU default.
+        if(budget != 0u)
+            resolved.tuning.policyMemoryBudgetBytes = budget;
         // The slot arena is allocated from the pool budget, so the two values have to agree. An
         // explicit `--pool-budget-bytes` is the user's decision and is never rewritten: a pool
         // budget smaller than the arena cannot hold it, so that combination is rejected with both
-        // values named. Without an explicit pool budget the derived one is raised to the arena
-        // size, which is exactly what the arena knob asks for. The device-policy memory cap still
-        // sets the derived C and P; only the arena allocation grows.
+        // values named. Without an explicit pool budget the derived one, including the 1 GiB CPU
+        // default, is raised to the arena size, which is exactly what the arena knob asks for. The
+        // device-policy memory cap still sets the derived C and P; only the arena allocation grows.
         if(resolved.tuning.slotArenaBudgetBytes)
         {
             std::uint64_t const arenaBytes = *resolved.tuning.slotArenaBudgetBytes;
-            if(resolved.parameters.poolPayloadBudgetBytes != 0u)
+            if(options.poolPayloadBudgetBytes)
             {
-                if(resolved.parameters.poolPayloadBudgetBytes < arenaBytes)
+                if(budget < arenaBytes)
                     throw std::invalid_argument{
                         "--slot-arena-budget (" + std::to_string(arenaBytes) + " bytes) exceeds --pool-budget-bytes ("
-                        + std::to_string(resolved.parameters.poolPayloadBudgetBytes)
-                        + " bytes); the arena is allocated from the pool budget"};
+                        + std::to_string(budget) + " bytes); the arena is allocated from the pool budget"};
             }
             else if(resolved.policy.memoryBudgetBytes < arenaBytes)
                 resolved.tuning.poolPayloadBudgetBytes = arenaBytes;
