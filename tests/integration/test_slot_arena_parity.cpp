@@ -137,8 +137,8 @@ namespace
     {
         for(std::size_t id = 0u; id < values.size(); ++id)
         {
-            std::uint32_t const expected = static_cast<std::uint32_t>(id % 97u) + 3u
-                + static_cast<std::uint32_t>(id % TBins) * 1000u;
+            std::uint32_t const expected
+                = static_cast<std::uint32_t>(id % 97u) + 3u + static_cast<std::uint32_t>(id % TBins) * 1000u;
             CAPTURE(id);
             CHECK(values[id] == expected);
         }
@@ -166,16 +166,12 @@ namespace
     }
 } // namespace
 
-TEST_CASE(
-    "arena matches fixed physics with a batch-wide transform",
-    "[integration][arena][transform]")
+TEST_CASE("arena matches fixed physics with a batch-wide transform", "[integration][arena][transform]")
 {
     checkArenaParity<5u>(2048u, tuningFor(16u, 2u), "batch-wide");
 }
 
-TEST_CASE(
-    "arena matches fixed physics with the per-chunk transform schedule",
-    "[integration][arena][transform]")
+TEST_CASE("arena matches fixed physics with the per-chunk transform schedule", "[integration][arena][transform]")
 {
     // A small admission capacity keeps the chunk indices in rotation, so the arena hands out
     // reused ranges whose base is not the chunk index times the capacity.
@@ -185,9 +181,7 @@ TEST_CASE(
     checkArenaParity<5u>(4096u, tuning, "perChunk");
 }
 
-TEST_CASE(
-    "arena matches fixed physics on the hash path with a fragmented stream",
-    "[integration][arena][hash]")
+TEST_CASE("arena matches fixed physics on the hash path with a fragmented stream", "[integration][arena][hash]")
 {
     // An explicit hash request selects the hash kernels for any width; C=8 lets every source
     // chunk split into up to one chunk per bin, so the live chunk count grows downstream while

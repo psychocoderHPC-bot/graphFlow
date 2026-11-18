@@ -539,11 +539,7 @@ TEST_CASE("fixed layout publishes the chunk base table once per run", "[unit][fl
         config.frameCap = 1u;
         config.poolMode = mode;
 
-        graphFlow::detail::TransformStage<Device, Storage, Pod, BumpPod> stage{
-            device,
-            storage,
-            config,
-            BumpPod{3u}};
+        graphFlow::detail::TransformStage<Device, Storage, Pod, BumpPod> stage{device, storage, config, BumpPod{3u}};
         auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
         std::uint64_t position = 0u;
         for(std::uint32_t batch = 0u; batch < batches; ++batch)
@@ -578,12 +574,8 @@ TEST_CASE("fixed layout publishes the chunk base table once per run", "[unit][fl
         config.frameCap = 1u;
         config.poolMode = mode;
 
-        graphFlow::detail::PartitionStage<Device, Storage, Pod, ParityClassifier, AddOnOddBin> stage{
-            device,
-            storage,
-            config,
-            ParityClassifier{},
-            AddOnOddBin{}};
+        graphFlow::detail::PartitionStage<Device, Storage, Pod, ParityClassifier, AddOnOddBin>
+            stage{device, storage, config, ParityClassifier{}, AddOnOddBin{}};
         auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
         for(std::uint32_t batch = 0u; batch < batches; ++batch)
         {
