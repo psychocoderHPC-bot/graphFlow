@@ -44,6 +44,7 @@ namespace graphFlow::cli
         std::uint32_t maxVisits = 64u;
         std::uint32_t deviceIndex = 0u;
         graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        std::optional<std::uint64_t> slotArenaBudgetBytes; // slot-arena payload budget in bytes
         // Opt-in kernel workload. The axis options stay absent so the resolver can reject an
         // axis on the default feedback workload instead of silently ignoring it.
         particle::Workload workload = particle::Workload::feedback;
@@ -72,6 +73,7 @@ namespace graphFlow::cli
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
                "                                    [--occupancy-target D] [--pool-mode fixed|slotArena]\n"
+               "                                    [--slot-arena-budget BYTES]\n"
                "                                    [--seed S] [--max-visits M]\n"
                "                                    [--workload feedback|kernel]\n"
                "       kernel workload only: [--scatter shared|direct]\n"
@@ -221,6 +223,12 @@ namespace graphFlow::cli
             {
                 options.poolMode = parsePoolMode(nextValue(flag));
             }
+            else if(flag == "--slot-arena-budget")
+            {
+                // Bytes of the slot-arena payload budget. Zero is a defined value: it keeps the
+                // whole pool budget, which is also the absent-value behaviour.
+                options.slotArenaBudgetBytes = parseU64(flag, nextValue(flag));
+            }
             else if(flag == "--seed")
             {
                 options.seed = parseU64(flag, nextValue(flag));
@@ -300,6 +308,12 @@ namespace graphFlow::cli
         resolved.parameters.maxVisits = options.maxVisits;
         resolved.parameters.deviceIndex = options.deviceIndex;
         resolved.parameters.poolMode = options.poolMode;
+        if(options.slotArenaBudgetBytes)
+        {
+            if(options.poolMode != graphFlow::PoolMode::slotArena)
+                throw std::invalid_argument{"--slot-arena-budget requires --pool-mode slotArena"};
+            resolved.parameters.slotArenaBudgetBytes = *options.slotArenaBudgetBytes;
+        }
 
         resolved.workload = options.workload;
         if(options.workload == particle::Workload::feedback)
@@ -335,6 +349,12 @@ namespace graphFlow::cli
         }
 
         resolved.tuning = particle::tuningOf(resolved.parameters);
+        // The slot arena is the payload, so an explicit arena budget above the resolved pool
+        // budget raises that budget instead of being rejected as inconsistent. The device-policy
+        // memory cap still sets the derived C and P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes
+           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
+            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
         // Opt-in occupancy target. Absent keeps the default tuning unchanged, so the example
         // output is byte-identical to the pre-phase-1 binary.
         if(options.occupancyTarget)

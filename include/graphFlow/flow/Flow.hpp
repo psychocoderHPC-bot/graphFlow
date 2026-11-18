@@ -678,6 +678,7 @@ namespace graphFlow
             config.scatterMode = m_tuning.scatterMode.value_or(config.scatterMode);
             config.binPath = m_tuning.binPath.value_or(config.binPath);
             config.poolMode = m_tuning.poolMode.value_or(config.poolMode);
+            config.slotArenaBudgetBytes = m_tuning.slotArenaBudgetBytes.value_or(config.slotArenaBudgetBytes);
             config.debugStaleBaseTable = m_tuning.debugStaleBaseTable;
             config.slotBytes = TStorage::slotBytes;
 
@@ -714,12 +715,16 @@ namespace graphFlow
                     config.poolOutputReserveChunks);
             if(config.poolMode == PoolMode::slotArena)
             {
-                // The arena is the payload budget in slots (`S_max = floor(budget/slotBytes)`).
-                // `P + K*R*C` is the reservation that must fit inside it, not the allocation
-                // size: the first-fit range allocator needs slack beyond the exact worst case
-                // because a released fragment can leave the free list unable to serve the next
-                // full-`C` output range. `Config::validate()` checks the reservation.
-                config.slotArenaSlots = maxPayloadSlots(config.poolPayloadBudgetBytes, config.slotBytes);
+                // The arena is its own budget in slots (`floor(arenaBudget/slotBytes)`), which is
+                // `slotArenaBudgetBytes` when the knob is set and the whole payload budget
+                // otherwise. Output ranges come from the arena's full-chunk size class, so
+                // small-range fragmentation of the general free list cannot block them; the
+                // arena still has to hold the peak number of concurrent output chunks.
+                // `Config::validate()` checks the `P + K*R*C` reservation against the arena and
+                // rejects an undersized one before the run.
+                std::uint64_t const arenaBudget
+                    = config.slotArenaBudgetBytes != 0u ? config.slotArenaBudgetBytes : config.poolPayloadBudgetBytes;
+                config.slotArenaSlots = maxPayloadSlots(arenaBudget, config.slotBytes);
             }
 
             config.validate();

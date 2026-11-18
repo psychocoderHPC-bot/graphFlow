@@ -259,7 +259,7 @@ TEST_CASE("slot arena budget helpers invert the fixed-pool reservation", "[slot]
     CHECK_THROWS_AS(checkedArenaSlotCount(tooWide, "arena"), std::overflow_error);
 
     // The arena storage derives its size from the budget when no explicit slot count is given.
-    auto device = test::makeCpuDevice();
+    auto device = graphFlow::test::makeCpuDevice();
     SlotArenaOptions derived;
     derived.payloadBudgetBytes = 6u * ArenaStorage::slotBytes;
     ArenaStorage storage{device, 2u, 4u, derived};
@@ -302,4 +302,55 @@ TEST_CASE("config validates the slot-arena reservation and keeps the fixed defau
     config.poolPayloadBudgetBytes = requiredArenaBytes(2u, 4u, 2u);
     config.numChunks = 11u;
     CHECK_THROWS_AS(config.validate(), std::invalid_argument);
+}
+
+TEST_CASE("a fragmented general free list cannot block the output acquire", "[slot][arena][storage][reserve]")
+{
+    auto device = graphFlow::test::makeCpuDevice();
+    constexpr std::uint32_t capacity = 8u;
+    graphFlow::SlotArenaOptions options;
+    options.arenaSlots = 64u;
+    ArenaStorage storage{device, 64u, capacity, options};
+    CHECK(storage.slotCount() == 64u);
+
+    // Two output ranges own the top 16 slots; the 48 slots below them are fragmented by a stream
+    // of one-slot input chunks whose alternate halves are released.
+    graphFlow::ChunkHandle const top = storage.acquireOutput();
+    graphFlow::ChunkHandle const lower = storage.acquireOutput();
+    CHECK(storage.base(top) == 56u);
+    CHECK(storage.base(lower) == 48u);
+    std::vector<graphFlow::ChunkHandle> singles;
+    for(std::uint32_t i = 0u; i < 48u; ++i)
+        singles.push_back(storage.acquire(1u));
+    for(std::size_t i = 0u; i < singles.size(); i += 2u)
+        storage.release(singles[i]);
+    CHECK_THROWS_AS(storage.acquire(capacity), std::runtime_error);
+    CHECK_NOTHROW(storage.verifyArena());
+
+    // A released output range is recycled by the full-chunk class, so the C-sized output
+    // allocation succeeds while the general free list cannot serve C.
+    storage.release(lower);
+    graphFlow::ChunkHandle const reused = storage.acquireOutput();
+    CHECK(storage.base(reused) == 48u);
+    CHECK(storage.fill(reused) == capacity);
+    CHECK_NOTHROW(storage.verifyArena());
+
+    // The range is really addressable: a payload written at the stored base reads back.
+    std::size_t const slots = static_cast<std::size_t>(storage.slotCount());
+    std::vector<ArenaPayload> host(slots);
+    std::size_t const base = static_cast<std::size_t>(storage.base(reused));
+    host[base] = ArenaPayload{41u, 7u};
+    host[base + 1u] = ArenaPayload{42u, 9u};
+    auto queue = device.makeQueue(alpaka::queueKind::blocking);
+    alpaka::onHost::memcpy(queue, storage.payload(), host);
+    std::vector<ArenaPayload> read(slots);
+    alpaka::onHost::memcpy(queue, read, storage.payload());
+    CHECK(read[base] == ArenaPayload{41u, 7u});
+    CHECK(read[base + 1u] == ArenaPayload{42u, 9u});
+
+    storage.release(reused);
+    storage.release(top);
+    for(std::size_t i = 1u; i < singles.size(); i += 2u)
+        storage.release(singles[i]);
+    CHECK_NOTHROW(storage.verifyArenaReleased());
 }

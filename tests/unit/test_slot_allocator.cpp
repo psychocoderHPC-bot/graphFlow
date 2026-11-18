@@ -194,3 +194,139 @@ TEST_CASE("slot arena rejects invalid requests and above-cap arenas", "[slot][ar
     CHECK(whole == 0u);
     CHECK(arena.liveSlots() == 5u);
 }
+
+TEST_CASE("a fragmented general free list cannot block a full-chunk allocation", "[slot][arena][reserve]")
+{
+    // The full-chunk class bumps down from the tail of a 128-slot arena; the general class
+    // first-fits from the front.
+    constexpr std::uint64_t block = 8u;
+    graphFlow::SlotArena arena{128u, block};
+    CHECK(arena.fullChunkSize() == block);
+    CHECK(arena.fullRegionStart() == 128u);
+    CHECK(arena.fullGap() == 128u);
+    CHECK(arena.generalHighWater() == 0u);
+    CHECK(arena.freeFullChunks() == 0u);
+
+    // Three output ranges own the top 24 slots. They are invisible to the general free list, so
+    // the 104 slots below them are what a stream of small input chunks can fragment.
+    std::uint64_t const top = arena.allocateFull();
+    std::uint64_t const middle = arena.allocateFull();
+    std::uint64_t const bottom = arena.allocateFull();
+    CHECK(top == 120u);
+    CHECK(middle == 112u);
+    CHECK(bottom == 104u);
+    CHECK(arena.fullRegionStart() == 104u);
+
+    std::vector<std::uint64_t> singles;
+    for(std::uint64_t i = 0u; i < 104u; ++i)
+        singles.push_back(arena.allocate(1u));
+    for(std::uint64_t i = 0u; i < singles.size(); i += 2u)
+        arena.release(singles[i], 1u);
+    CHECK(arena.generalHighWater() == 104u);
+    CHECK(arena.fullGap() == 0u);
+    CHECK(arena.freeSlots() == 52u);
+    CHECK(arena.largestFreeRange() == 1u); // every general hole is one slot wide
+    // The general allocator cannot serve an 8-slot request from that free list.
+    CHECK_THROWS_AS(arena.allocate(block), std::runtime_error);
+    CHECK_NOTHROW(arena.verify());
+
+    // A released output range is recycled by the class even though the general free list is
+    // fragmented, so the C-sized allocation succeeds while the general one cannot.
+    arena.release(middle, block);
+    CHECK(arena.freeFullChunks() == 1u);
+    std::uint64_t const reused = arena.allocateFull();
+    CHECK(reused == middle);
+    CHECK(arena.liveFullChunks() == 3u);
+    CHECK_FALSE(arena.isFree(reused));
+    CHECK_NOTHROW(arena.verify());
+
+    // The mutation that removes the guarantee: the same fragmenting stream on an arena without
+    // the class cannot serve the request and fails with the general first-fit error.
+    graphFlow::SlotArena generalOnly{128u};
+    for(std::uint64_t i = 0u; i < 128u; ++i)
+        (void) generalOnly.allocate(1u);
+    for(std::uint64_t i = 0u; i < 128u; i += 2u)
+        generalOnly.release(i, 1u);
+    std::string removed;
+    try
+    {
+        [[maybe_unused]] std::uint64_t const blocked = generalOnly.allocate(block);
+    }
+    catch(std::runtime_error const& error)
+    {
+        removed = error.what();
+    }
+    CHECK(removed.find("no contiguous range of 8 slots is free") != std::string::npos);
+
+    // With the class and no recycled range the request fails only when the gap above the general
+    // high-water mark is smaller than one full chunk. The message names all three values: the
+    // request (8), the high-water mark (104) and the arena size (128).
+    std::string exhausted;
+    try
+    {
+        [[maybe_unused]] std::uint64_t const blocked = arena.allocateFull();
+    }
+    catch(std::runtime_error const& error)
+    {
+        exhausted = error.what();
+    }
+    CHECK(
+        exhausted
+        == "graphFlow::SlotArena: no full-chunk range of 8 slots is free above the general high-water mark of "
+           "104 in an arena of 128 slots");
+
+    arena.release(reused, block);
+    arena.release(bottom, block);
+    arena.release(top, block);
+    CHECK(arena.fullRegionStart() == 128u);
+    for(std::uint64_t i = 1u; i < singles.size(); i += 2u)
+        arena.release(singles[i], 1u);
+    CHECK_NOTHROW(arena.verifyReleased());
+}
+
+TEST_CASE("the full-chunk class recycles a released middle range", "[slot][arena][reserve]")
+{
+    graphFlow::SlotArena arena{40u, 8u};
+    std::uint64_t const top = arena.allocateFull();
+    std::uint64_t const middle = arena.allocateFull();
+    std::uint64_t const bottom = arena.allocateFull();
+    CHECK(top == 32u);
+    CHECK(middle == 24u);
+    CHECK(bottom == 16u);
+
+    // Releasing a range that is not at the bump cursor keeps it in the class free list, so the
+    // next full-chunk request reuses exactly that start instead of bumping lower.
+    arena.release(middle, 8u);
+    CHECK(arena.freeFullChunks() == 1u);
+    CHECK(arena.liveFullChunks() == 2u);
+    std::uint64_t const reused = arena.allocateFull();
+    CHECK(reused == middle);
+    CHECK_NOTHROW(arena.verify());
+
+    arena.release(reused, 8u);
+    // A range at the cursor merges back into the general free list, so releasing everything
+    // restores the single [0, 40) range.
+    arena.release(bottom, 8u);
+    arena.release(top, 8u);
+    CHECK(arena.fullRegionStart() == 40u);
+    CHECK_NOTHROW(arena.verifyReleased());
+
+    // A general 8-slot request is served from the general free list at the front.
+    std::uint64_t const general = arena.allocate(8u);
+    CHECK(general == 0u);
+    CHECK(arena.freeFullChunks() == 0u);
+    arena.release(general, 8u);
+    CHECK_NOTHROW(arena.verifyReleased());
+}
+
+TEST_CASE("slot arena rejects an invalid full-chunk class", "[slot][arena][reserve]")
+{
+    // A full-chunk range must fit the arena.
+    CHECK_THROWS_AS((graphFlow::SlotArena{4u, 8u}), std::invalid_argument);
+    CHECK_THROWS_AS((graphFlow::SlotArena{0u, 8u}), std::invalid_argument);
+
+    // Without the class a full-chunk request is a loud misconfiguration, not a silent fallback.
+    graphFlow::SlotArena plain{16u};
+    CHECK_THROWS_AS(plain.allocateFull(), std::logic_error);
+    CHECK(plain.freeFullChunks() == 0u);
+}

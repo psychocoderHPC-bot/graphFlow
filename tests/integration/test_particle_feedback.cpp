@@ -415,3 +415,202 @@ TEST_CASE("exact chunk and admission fill conserves every particle", "[integrati
     // Several whole admission rounds: eight full C-sized chunks in four live batches of 2C.
     verify(1024u, 128u, 256u);
 }
+
+TEST_CASE("slot arena completes the N=100000 C=8192 run with the fixed physics", "[integration][arena][stress]")
+{
+    // Regression for the confirmed `main` failure: the scatter output needs a contiguous
+    // C-slot range and the first-fit free list was fragmented by the feedback stream exactly at
+    // this geometry. The run must complete, and only the layout may differ.
+    auto const device = graphFlow::test::makeCpuDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 100000u;
+    parameters.chunkSize = 8192u;
+    parameters.liveParticles = 16384u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    // The fixed layout needs P*C slots, so the shared policy budget is 4 GiB here. The arena run
+    // uses the same P and C but only 64 MiB of slots, which is the whole point of the class.
+    graphFlow::Tuning fixedTuning = graphFlow::particle::tuningOf(parameters);
+    fixedTuning.policyMemoryBudgetBytes = 4ull << 30u;
+    fixedTuning.poolPayloadBudgetBytes = 16ull << 30u;
+    auto const fixed = graphFlow::particle::runParticleFeedback(device, parameters, fixedTuning);
+    checkAgainstReference(parameters, fixed);
+
+    // The full-chunk class makes the allocation independent of the general free list; the arena
+    // still has to hold the peak number of live output chunks. `peakLiveFullChunks` reports the
+    // measured value, so a 64 MiB arena is stated rather than guessed.
+    constexpr std::uint64_t arenaBudgetBytes = 64ull << 20u;
+    graphFlow::Tuning arenaTuning = fixedTuning;
+    arenaTuning.poolMode = graphFlow::PoolMode::slotArena;
+    arenaTuning.slotArenaBudgetBytes = arenaBudgetBytes;
+    auto const arena = graphFlow::particle::runParticleFeedback(device, parameters, arenaTuning);
+
+    CHECK(arena.weights == fixed.weights);
+    CHECK(arena.histogram == fixed.histogram);
+    CHECK(arena.cappedParticles == fixed.cappedParticles);
+    CHECK(arena.sunkParticles == fixed.sunkParticles);
+    CHECK(arena.stats.poolChunks == fixed.stats.poolChunks);
+    CHECK(arena.stats.sourceSunk == parameters.numParticles);
+    CHECK(arena.stats.poolBytes == arenaBudgetBytes / graphFlow::payloadBytesPerSlot * graphFlow::payloadBytesPerSlot);
+    // The peak live output chunks, not the K*R credits, size the full-chunk class; the measured
+    // value is reported so the arena budget is reproducible.
+    CHECK(arena.stats.peakLiveFullChunks > 0u);
+    CHECK(
+        arena.stats.peakLiveFullChunks
+        <= arena.stats.poolBytes / (parameters.chunkSize * graphFlow::payloadBytesPerSlot));
+    checkAgainstReference(parameters, arena);
+}
+
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+TEST_CASE("slot arena completes the N=100000 C=8192 run on the native device", "[integration][arena][stress]")
+{
+    auto const device = makeNativeTestDevice();
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 100000u;
+    parameters.chunkSize = 8192u;
+    parameters.liveParticles = 16384u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 64u;
+
+    graphFlow::Tuning tuning = graphFlow::particle::tuningOf(parameters);
+    tuning.policyMemoryBudgetBytes = 4ull << 30u;
+    tuning.poolPayloadBudgetBytes = 16ull << 30u;
+    auto const fixed = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
+
+    tuning.poolMode = graphFlow::PoolMode::slotArena;
+    tuning.slotArenaBudgetBytes = 64ull << 20u;
+    auto const arena = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
+    CHECK(arena.weights == fixed.weights);
+    CHECK(arena.histogram == fixed.histogram);
+    CHECK(arena.stats.poolChunks == fixed.stats.poolChunks);
+    CHECK(arena.stats.sourceSunk == parameters.numParticles);
+}
+#endif
+
+TEST_CASE("the slot-arena budget knob reproduces the memory reduction", "[integration][arena][budget]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    constexpr std::uint32_t capacity = 4224u;
+    constexpr std::uint32_t liveParticles = 8448u;
+
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 20000u;
+    parameters.chunkSize = capacity;
+    parameters.liveParticles = liveParticles;
+    parameters.seed = 42u;
+    parameters.maxVisits = 8u;
+
+    // The host policy budget is 16 MiB, which cannot hold the fixed pool of this configuration;
+    // the probe states its budget explicitly so both layouts are measured under the same one.
+    graphFlow::Tuning base = graphFlow::particle::tuningOf(parameters);
+    base.policyMemoryBudgetBytes = 1ull << 30u;
+    base.poolPayloadBudgetBytes = 1ull << 30u;
+    auto const fixed = graphFlow::particle::runParticleFeedback(device, parameters, base);
+
+    // The feedback graph has one B=2 and two B=3 partitions, so `transformReserve` is
+    // outputChunkBound(C,C,2) + 2*outputChunkBound(C,C,3) = 2 + 6 = 8 chunks.
+    std::uint64_t const reserve = graphFlow::outputChunkBound(capacity, capacity, 2u)
+                                  + 2u * graphFlow::outputChunkBound(capacity, capacity, 3u);
+    CHECK(reserve == 8u);
+
+    // Why `K*R` is not the arena requirement: the credit is released as soon as the scatter is
+    // planned, while the output range stays live until a sink (or a downstream transform)
+    // releases the chunk. The number of live full-capacity output ranges is therefore a
+    // scheduling and queueing property of the run, not the credit count. Calibrate it with one
+    // run whose arena covers the provable worst case (one full-capacity range per chunk index,
+    // `S = P + K*R`), and let the run report what it actually needed.
+    graphFlow::Tuning calibration = base;
+    calibration.poolMode = graphFlow::PoolMode::slotArena;
+    calibration.slotArenaBudgetBytes = graphFlow::requiredArenaBytes(liveParticles, capacity, liveParticles + reserve);
+    auto const measured = graphFlow::particle::runParticleFeedback(device, parameters, calibration);
+    CHECK(measured.weights == fixed.weights);
+
+    // The run reports `requiredArenaSlots = peakGeneralHighWater + peakLiveFullChunks * C`, both
+    // of them the run's own maxima (the high-water mark only resets when a full release empties
+    // the arena), so this is the smallest arena the observed allocation pattern would have fit.
+    std::uint64_t const measuredRanges = measured.stats.peakLiveFullChunks;
+    std::uint64_t const measuredSlots = measured.stats.requiredArenaSlots;
+    std::uint64_t const generalSlots = measuredSlots - measuredRanges * capacity;
+    CHECK(measuredRanges > reserve);
+    CHECK(measuredSlots > graphFlow::requiredArenaSlots(liveParticles, capacity, reserve));
+    CHECK(generalSlots >= liveParticles);
+
+    // The live-output peak is a scheduling property of the run, so the requirement measured by
+    // one execution is a lower bound for the next one under different host load. Start from that
+    // requirement and grow by one full-capacity range until this execution fits; `sizedRanges` is
+    // the requirement the sized run itself needed, not a constant.
+    std::uint64_t sizedRanges = measuredRanges;
+    std::uint64_t usedRanges = 0u;
+    std::optional<graphFlow::particle::FeedbackResult> arena;
+    for(std::uint32_t attempt = 0u; attempt < 4u * reserve && !arena.has_value(); ++attempt)
+    {
+        graphFlow::Tuning tuned = base;
+        tuned.poolMode = graphFlow::PoolMode::slotArena;
+        tuned.slotArenaBudgetBytes = (generalSlots + sizedRanges * capacity) * graphFlow::payloadBytesPerSlot;
+        try
+        {
+            arena = graphFlow::particle::runParticleFeedback(device, parameters, tuned);
+            usedRanges = sizedRanges;
+        }
+        catch(std::runtime_error const& error)
+        {
+            // Only the capacity limit retries; anything else is a real failure.
+            if(std::string{error.what()}.find("no full-chunk range") == std::string::npos)
+                throw;
+            ++sizedRanges;
+        }
+    }
+    REQUIRE(arena.has_value());
+    // The sizing is close to the calibration: under host load the peak moved by at most the
+    // credit reserve, so the growth stays inside `4 * reserve` full-capacity ranges.
+    CHECK(usedRanges <= measuredRanges + 4u * reserve);
+    CHECK(arena->weights == fixed.weights);
+    CHECK(arena->histogram == fixed.histogram);
+    // The sized run stays inside the arena it was sized from, so the check cannot be wrong by one.
+    CHECK(arena->stats.requiredArenaSlots <= arena->stats.poolSlots);
+    CHECK(arena->stats.peakLiveFullChunks <= usedRanges);
+
+    // Layout accounting: the fixed pool charges one C-row per chunk index, while the arena
+    // charges one slot per live particle plus one C range per concurrent output chunk.
+    CHECK(fixed.stats.poolChunks == liveParticles + reserve);
+    CHECK(fixed.stats.poolSlots == static_cast<std::uint64_t>(fixed.stats.poolChunks) * capacity);
+    CHECK(fixed.stats.poolBytes == fixed.stats.poolSlots * graphFlow::payloadBytesPerSlot);
+    CHECK(arena->stats.poolChunks == fixed.stats.poolChunks);
+    CHECK(arena->stats.poolSlots == generalSlots + usedRanges * capacity);
+    CHECK(arena->stats.poolBytes * 50u < fixed.stats.poolBytes);
+    // The depth stays bounded by the same budget: the arena bytes cannot admit more live
+    // particles than the reservation inversion allows.
+    CHECK(graphFlow::maxLiveParticlesForArena(arena->stats.poolBytes, capacity, usedRanges) >= liveParticles);
+}
+
+TEST_CASE("an undersized slot-arena budget is rejected before the first launch", "[integration][arena][budget]")
+{
+    auto const device = graphFlow::test::makeCpuDevice();
+    graphFlow::particle::Parameters parameters{};
+    parameters.numParticles = 4097u;
+    parameters.chunkSize = 128u;
+    parameters.liveParticles = 256u;
+    parameters.seed = 42u;
+    parameters.maxVisits = 8u;
+
+    graphFlow::Tuning tuning = graphFlow::particle::tuningOf(parameters);
+    tuning.poolMode = graphFlow::PoolMode::slotArena;
+    tuning.slotArenaBudgetBytes = 1024u;
+
+    std::string message;
+    try
+    {
+        [[maybe_unused]] auto const result = graphFlow::particle::runParticleFeedback(device, parameters, tuning);
+    }
+    catch(std::invalid_argument const& error)
+    {
+        message = error.what();
+    }
+    // `Config::validate()` runs in `resolveConfig`, before the storage is built and before the
+    // first kernel launch, and names both the required and the available slot count.
+    CHECK(message.find("needs 1280 slots") != std::string::npos);
+    CHECK(message.find("but has 42") != std::string::npos);
+}

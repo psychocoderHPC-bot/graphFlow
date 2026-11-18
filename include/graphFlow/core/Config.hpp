@@ -32,10 +32,13 @@ namespace graphFlow
      * The slot-arena layout decouples the slot count from the chunk-index count: a fragmented
      * input chunk owns exactly its fill (one slot for a one-particle fragment) while an output
      * chunk is charged at the full `C` its `j % C` addressing needs, so the exact reservation is
-     * `P + K*R*C` slots. The arena itself is sized from the whole payload budget and that exact
-     * figure only has to fit inside it, because it is a lower bound rather than a hard bound: the
-     * first-fit range allocator needs slack beyond the worst case to serve the next full-`C` range
-     * once a release has fragmented the free list. The fixed layout keeps charging
+     * `P + K*R*C` slots. The arena is sized from `slotArenaBudgetBytes` when that knob is set and
+     * from the whole payload budget otherwise; the reservation only has to fit inside it. Output
+     * ranges come from the arena's full-chunk size class at the tail, so small-range
+     * fragmentation of the general free list cannot block them (`core/SlotAllocator.hpp`); a
+     * full-chunk request fails only when the gap above the general high-water mark is smaller
+     * than one chunk, so the arena must cover the peak number of concurrently live output chunks,
+     * which `SchedulerStats::peakLiveFullChunks` reports. The fixed layout keeps charging
      * `(P + K*R) * C` slots.
      *
      * The `policy*` fields are the knobs of the device-aware chunk policy in
@@ -88,12 +91,22 @@ namespace graphFlow
         ScatterMode scatterMode = ScatterMode::SharedStaging;
         std::uint64_t poolPayloadBudgetBytes = defaultPoolPayloadBudgetBytes; // total pool cap
         std::uint64_t poolOutputReserveChunks = defaultPoolOutputReserveChunks; // K*R reserve
-        /** Slot count of the slot-arena payload array; zero derives it from the budget.
+        /** Payload budget of the slot arena in bytes; zero derives it from `poolPayloadBudgetBytes`.
          *
-         * `Flow::resolveConfig` fills this with the whole payload budget in slots,
-         * `poolPayloadBudgetBytes / slotBytes`. The exact `P + K*R*C` reservation only has to fit
-         * inside that arena, so a direct `Config` caller may leave this zero and `validate()`
-         * derives the same budget-sized arena.
+         * This is the knob that lets a slot-arena run size its arena independently of the whole
+         * payload budget, which is what makes the design's memory reduction observable: the arena
+         * is `floor(slotArenaBudgetBytes / slotBytes)` slots instead of the entire pool budget.
+         * An undersized arena is rejected by `validate()` before any kernel launches, with the
+         * required and available slot counts, so it cannot stall inside an acquire. The value must
+         * not exceed `poolPayloadBudgetBytes` because it is a sub-budget of it.
+         */
+        std::uint64_t slotArenaBudgetBytes = 0u;
+        /** Slot count of the slot-arena payload array; zero derives it from the arena budget.
+         *
+         * `Flow::resolveConfig` fills this from `slotArenaBudgetBytes` (or the whole payload budget
+         * when the knob is absent): `budget / slotBytes`. The exact `P + K*R*C` reservation only has
+         * to fit inside that arena, so a direct `Config` caller may leave this zero and
+         * `validate()` derives the same arena from the budget.
          */
         std::uint64_t slotArenaSlots = 0u;
         /** Chunk-slot layout of the storage. `fixed` is the default and the historical layout;
@@ -222,13 +235,15 @@ namespace graphFlow
                 // C slots each, and it must fit the arena. `slotArenaSlots` is the whole payload
                 // budget in slots when `Flow::resolveConfig` set it; zero lets a direct caller
                 // derive the same budget-sized arena.
-                std::uint64_t const slots
-                    = slotArenaSlots != 0u ? slotArenaSlots : maxPayloadSlots(poolPayloadBudgetBytes, slotBytes);
-                checkedArenaSlotCount(slots, "graphFlow::Config slot arena");
-                if(numChunks != 0u && static_cast<std::uint64_t>(numChunks) > slots)
+                if(slotArenaBudgetBytes != 0u && slotArenaBudgetBytes > poolPayloadBudgetBytes)
                     throw std::invalid_argument{
-                        "graphFlow::Config: " + std::to_string(numChunks)
-                        + " chunk indices cannot be held by an arena of " + std::to_string(slots) + " slots"};
+                        "graphFlow::Config: the slot-arena budget of " + std::to_string(slotArenaBudgetBytes)
+                        + " bytes exceeds the payload budget of " + std::to_string(poolPayloadBudgetBytes) + " bytes"};
+                std::uint64_t const arenaBudget
+                    = slotArenaBudgetBytes != 0u ? slotArenaBudgetBytes : poolPayloadBudgetBytes;
+                std::uint64_t const slots
+                    = slotArenaSlots != 0u ? slotArenaSlots : maxPayloadSlots(arenaBudget, slotBytes);
+                checkedArenaSlotCount(slots, "graphFlow::Config slot arena");
                 if(liveParticles != 0u)
                 {
                     std::uint64_t const required
@@ -243,7 +258,7 @@ namespace graphFlow
                         liveParticles,
                         chunkCapacity,
                         poolOutputReserveChunks,
-                        poolPayloadBudgetBytes,
+                        arenaBudget,
                         "graphFlow::Config",
                         slotBytes);
                 }
@@ -251,11 +266,16 @@ namespace graphFlow
                 {
                     // Without a resolved P the one-slot-per-chunk lower bound is the only cap.
                     std::uint64_t const required = static_cast<std::uint64_t>(numChunks) * slotBytes;
-                    if(required > poolPayloadBudgetBytes)
+                    if(required > arenaBudget)
                         throw std::invalid_argument{
                             "graphFlow::Config: " + std::to_string(numChunks)
-                            + " chunk indices need at least one slot each, exceeding the payload budget"};
+                            + " chunk indices need at least one slot each, exceeding the slot-arena budget of "
+                            + std::to_string(arenaBudget) + " bytes"};
                 }
+                if(numChunks != 0u && static_cast<std::uint64_t>(numChunks) > slots)
+                    throw std::invalid_argument{
+                        "graphFlow::Config: " + std::to_string(numChunks)
+                        + " chunk indices cannot be held by an arena of " + std::to_string(slots) + " slots"};
             }
             else if(numChunks != 0u)
                 validatePayloadBudget(
