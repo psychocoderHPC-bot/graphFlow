@@ -60,10 +60,20 @@ namespace graphFlow
         std::optional<std::uint32_t> numChunks;
         std::optional<std::uint32_t> frameCap;
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
+        /** Payload budget of the slot arena in bytes; absence and zero keep the whole pool budget.
+         *
+         * This sizes the arena independently of `poolPayloadBudgetBytes`, which is what lets a
+         * user realize the memory reduction of the slot layout: the payload array becomes
+         * `floor(slotArenaBudgetBytes / slotBytes)` slots instead of the whole pool budget. The
+         * run is rejected before any kernel launches when the `P + K*R*C` reservation does not
+         * fit the bytes, with the required and available slot counts.
+         */
+        std::optional<std::uint64_t> slotArenaBudgetBytes;
         /** Chunk-slot layout; absence keeps `Config::poolMode` (the fixed layout).
          *
          * `slotArena` selects the phase-2 layout and its `P + K*R*C` reservation. The run is
-         * rejected when the arena does not fit `poolPayloadBudgetBytes`.
+         * rejected when the arena does not fit `slotArenaBudgetBytes` (or `poolPayloadBudgetBytes`
+         * when the arena knob is absent).
          */
         std::optional<PoolMode> poolMode;
         /** Validation-only stale base-table injection; see `Config::debugStaleBaseTable`. */

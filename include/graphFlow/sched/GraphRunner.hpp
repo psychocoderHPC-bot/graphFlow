@@ -9,6 +9,7 @@
 #include "graphFlow/core/ChunkPool.hpp"
 #include "graphFlow/core/ChunkRegistry.hpp"
 #include "graphFlow/core/ChunkStorage.hpp"
+#include "graphFlow/core/PoolMode.hpp"
 #include "graphFlow/core/Reservation.hpp"
 #include "graphFlow/flow/Debug.hpp"
 
@@ -156,6 +157,13 @@ namespace graphFlow
         std::uint64_t loopIterations = 0u;
         std::uint64_t yields = 0u;
         std::uint32_t poolChunks = 0u;
+        /** Payload slots and bytes of the storage; the arena keys print only in arena mode. */
+        std::uint64_t poolSlots = 0u;
+        std::uint64_t poolBytes = 0u;
+        /** True when the run used the slot-arena layout. */
+        bool slotArena = false;
+        /** Highest number of live full-capacity output ranges; arena runs only. */
+        std::uint64_t peakLiveFullChunks = 0u;
         std::uint32_t peakLiveChunks = 0u;
         std::uint32_t peakReservedChunks = 0u;
         std::uint32_t peakReadyChunks = 0u;
@@ -199,6 +207,9 @@ namespace graphFlow
         std::ostringstream message;
         message << "completedBatches=" << stats.completedBatches << " loopIterations=" << stats.loopIterations
                 << " yields=" << stats.yields << " poolChunks=" << stats.poolChunks
+                << (stats.slotArena ? " poolSlots=" + std::to_string(stats.poolSlots) : "")
+                << (stats.slotArena ? " poolBytes=" + std::to_string(stats.poolBytes) : "")
+                << (stats.slotArena ? " peakLiveFullChunks=" + std::to_string(stats.peakLiveFullChunks) : "")
                 << " peakLiveChunks=" << stats.peakLiveChunks << " peakReservedChunks=" << stats.peakReservedChunks
                 << " peakReadyChunks=" << stats.peakReadyChunks << " peakReadyNodes=" << stats.peakReadyNodes
                 << " maxReadyDepth=" << stats.maxReadyDepth << " peakInflightBatches=" << stats.peakInflightBatches
@@ -1195,6 +1206,14 @@ namespace graphFlow
             }
 
             stats.poolChunks = m_storage.numChunks();
+            if constexpr(requires { m_storage.slotCount(); })
+                stats.poolSlots = m_storage.slotCount();
+            if constexpr(requires { m_storage.payloadBytes(); })
+                stats.poolBytes = m_storage.payloadBytes();
+            if constexpr(requires { m_storage.poolMode(); })
+                stats.slotArena = m_storage.poolMode() == PoolMode::slotArena;
+            if constexpr(requires { m_storage.peakLiveFullChunks(); })
+                stats.peakLiveFullChunks = m_storage.peakLiveFullChunks();
             stats.peakLiveChunks = m_storage.peakLive();
             stats.sourceParticles = m_sourceParticles;
             stats.sourceGenerated = generated;
