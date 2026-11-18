@@ -36,10 +36,10 @@ namespace graphFlow
      * from the whole payload budget otherwise; the reservation only has to fit inside it. Output
      * ranges come from the arena's full-chunk size class at the tail, so small-range
      * fragmentation of the general free list cannot block them (`core/SlotAllocator.hpp`); a
-     * full-chunk request fails only when the gap above the general high-water mark is smaller
-     * than one chunk, so the arena must cover the peak number of concurrently live output chunks,
-     * which `SchedulerStats::peakLiveFullChunks` reports. The fixed layout keeps charging
-     * `(P + K*R) * C` slots.
+     * full-chunk request fails only when the gap between the general high-water mark and the
+     * full-chunk bump cursor is smaller than one chunk, so the arena must cover the peak number
+     * of concurrently live output chunks, which `SchedulerStats::peakLiveFullChunks` reports. The
+     * fixed layout keeps charging `(P + K*R) * C` slots.
      *
      * The `policy*` fields are the knobs of the device-aware chunk policy in
      * `graphFlow/core/DevicePolicy.hpp`: `makeDevicePolicy` reads them through `policyConfigOf()`

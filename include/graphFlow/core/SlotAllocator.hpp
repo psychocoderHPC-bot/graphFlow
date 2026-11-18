@@ -49,11 +49,13 @@ namespace graphFlow
      * above the general high-water mark, and a released full-chunk range is recycled directly.
      *
      * Failure mode: a full-chunk request fails when the gap between the general high-water mark
-     * and the full-chunk bump cursor is smaller than one `chunkCapacity`. The high-water mark is
-     * monotone and never decreases, so releasing a large general range does not reopen that gap
-     * for the full-chunk class; growth of the general high-water mark is what closes it. That is a
-     * capacity limit, not a fragmentation limit, and it raises a loud `std::runtime_error` naming
-     * the request, the high-water mark and the arena size.
+     * and the full-chunk bump cursor is smaller than one `chunkCapacity`. The high-water mark
+     * never decreases while any range is live and resets only when the free list is the whole
+     * arena again, so releasing a large general range does not reopen that gap for the
+     * full-chunk class while the arena is in use; growth of the general high-water mark is what
+     * closes it. That is a capacity limit, not a fragmentation limit, and it raises a loud
+     * `std::runtime_error` naming the request, the high-water mark, the bump cursor and the
+     * arena size.
      */
     class SlotArena
     {
@@ -140,8 +142,9 @@ namespace graphFlow
          * The general free list is not consulted, so fragmentation by small ranges cannot make
          * this fail. A released full-chunk range is reused first; otherwise the range is taken
          * from the top of the free arena above the general high-water mark. The only failure is a
-         * gap smaller than one full chunk above that high-water mark, which raises a
-         * `std::runtime_error` naming the request, the high-water mark and the arena size.
+         * gap smaller than one full chunk between that high-water mark and the bump cursor, which
+         * raises a `std::runtime_error` naming the request, the high-water mark, the bump cursor
+         * and the arena size.
          */
         std::uint64_t allocateFull()
         {
@@ -160,8 +163,9 @@ namespace graphFlow
                 if(m_fullCursor < m_fullChunkSize || m_fullCursor - m_fullChunkSize < m_generalHigh)
                     throw std::runtime_error{
                         "graphFlow::SlotArena: no full-chunk range of " + std::to_string(m_fullChunkSize)
-                        + " slots is free above the general high-water mark of " + std::to_string(m_generalHigh)
-                        + " in an arena of " + std::to_string(m_numSlots) + " slots"};
+                        + " slots is free between the general high-water mark of " + std::to_string(m_generalHigh)
+                        + " and the full-chunk cursor at " + std::to_string(m_fullCursor) + " in an arena of "
+                        + std::to_string(m_numSlots) + " slots"};
                 start = takeTopOfGeneral(m_fullChunkSize);
             }
             auto const inserted = m_live.emplace(start, Live{m_fullChunkSize, true});
