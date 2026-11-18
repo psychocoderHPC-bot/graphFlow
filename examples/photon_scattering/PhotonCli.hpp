@@ -36,7 +36,7 @@ namespace graphFlow::photon::cli
         std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
         std::string chunkKernelSchedule = "off"; // off|perChunk
-        std::uint32_t chunkQueueDepth = 1u;
+        std::uint32_t chunkQueueDepth = 2u; // measured default, see docs/benchmarks.md
         std::uint32_t chunkLatencyCapUs = 0u; // zero means no cap
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
         graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout

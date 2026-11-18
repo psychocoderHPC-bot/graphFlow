@@ -397,10 +397,13 @@ with its own fill and never shares a launch with a neighbour. The switch
 changes launch geometry only: the storage chunk capacity, the pool size and the
 host-side output-position planning stay what the device policy derived. Only
 `Flow::transform` nodes are affected; partition nodes keep the batch path.
-`--chunk-queue-depth D` (default 1) is the number of non-blocking device queues
+`--chunk-queue-depth D` (default 2) is the number of non-blocking device queues
 each per-chunk transform node owns, so its chunks run and retire independently;
-one keeps a single serial queue. `--chunk-latency-cap-us U` (default 0, no
-cap) is the per-chunk launch latency cap in microseconds; it clamps only the
+one keeps a single serial queue, and two is the measured best or tied width on
+the benchmarked cards (see
+[benchmarks](docs/benchmarks.md#queue-depth-p2-b)).
+`--chunk-latency-cap-us U` (default 0, no cap) is the per-chunk launch latency
+cap in microseconds; it clamps only the
 capacity and wave count that the per-chunk launch-size policy reports, at a
 fixed 10 us per wave, and never changes the storage chunk capacity.
 

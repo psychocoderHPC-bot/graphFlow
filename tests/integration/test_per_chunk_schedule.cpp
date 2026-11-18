@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -469,7 +470,7 @@ namespace
         std::uint32_t tileSize,
         std::uint32_t batchChunks,
         graphFlow::ChunkKernelSchedule schedule,
-        std::uint32_t chunkQueueDepth = 1u,
+        std::optional<std::uint32_t> chunkQueueDepth = 1u,
         std::uint32_t liveParticles = 0u,
         std::uint32_t inflightBatches = 1u,
         std::uint32_t occupancyTargetChunks = 0u)
@@ -574,6 +575,59 @@ TEST_CASE("per-chunk schedule runs with a multi-queue pool and credit pressure",
     // The smaller live budget changes the source chunking, not the per-chunk contract: every
     // dispatched chunk is still exactly one kernel.
     CHECK(pressured.stats.chunkLaunches >= chunks);
+}
+
+TEST_CASE("per-chunk queue-depth default is two and keeps the physics", "[integration][chunk-schedule][queue-depth]")
+{
+    using graphFlow::ChunkKernelSchedule;
+
+    // `runFlow` leaves `Tuning::chunkQueueDepth` absent in the default arm, so `Config` resolves
+    // it to the measured default of two. The occupancy gate exposes the resolved lane count: this
+    // graph registers one lane each for source, partition and sink plus
+    // `inflightBatches * chunkQueueDepth` transform lanes, so depth one is four lanes and depth two
+    // is five. A target of four therefore has to be rejected only by the default arm.
+    std::uint64_t const particles = 4097u;
+    std::uint32_t const capacity = 127u;
+    std::uint32_t const chunks = static_cast<std::uint32_t>((particles + capacity - 1u) / capacity);
+
+    FlowRun const off = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::off);
+    FlowRun const serial = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 1u);
+    FlowRun const depthTwo = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 2u);
+    FlowRun const defaulted = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, std::nullopt);
+
+    // The queue width is scheduling-only: depth two reproduces the serial depth and the
+    // batch-wide path bit for bit.
+    REQUIRE(depthTwo.values.size() == serial.values.size());
+    CHECK(
+        std::memcmp(serial.values.data(), depthTwo.values.data(), serial.values.size() * sizeof(std::uint32_t)) == 0);
+    REQUIRE(depthTwo.values.size() == off.values.size());
+    CHECK(std::memcmp(off.values.data(), depthTwo.values.data(), off.values.size() * sizeof(std::uint32_t)) == 0);
+    for(std::size_t id = 0u; id < depthTwo.values.size(); ++id)
+    {
+        CAPTURE(id);
+        REQUIRE(depthTwo.values[id] == expectedValue(id) + static_cast<std::uint32_t>(id % 2u));
+    }
+    CHECK(depthTwo.stats.chunkLaunches >= chunks);
+    CHECK(depthTwo.stats.sourceSunk == particles);
+
+    // An absent tuning value resolves to the same two-queue run.
+    REQUIRE(defaulted.values.size() == depthTwo.values.size());
+    CHECK(
+        std::memcmp(defaulted.values.data(), depthTwo.values.data(), depthTwo.values.size() * sizeof(std::uint32_t))
+        == 0);
+    CHECK(defaulted.stats.sourceSunk == particles);
+
+    // Four lanes is an explicit depth-one run and is rejected as the default: the absent value
+    // resolves to depth two, whose five lanes need a target of at least five.
+    CHECK_NOTHROW(runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, 1u, 0u, 1u, 4u));
+    CHECK_THROWS_AS(
+        runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, std::nullopt, 0u, 1u, 4u),
+        std::invalid_argument);
+    FlowRun const gated
+        = runFlow(particles, capacity, 128u, 8u, ChunkKernelSchedule::perChunk, std::nullopt, 0u, 1u, 5u);
+    REQUIRE(gated.values.size() == depthTwo.values.size());
+    CHECK(
+        std::memcmp(gated.values.data(), depthTwo.values.data(), depthTwo.values.size() * sizeof(std::uint32_t)) == 0);
 }
 
 TEST_CASE("per-chunk status detects a failure that follows a zero-fill chunk", "[integration][chunk-schedule][status]")

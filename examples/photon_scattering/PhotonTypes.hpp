@@ -262,8 +262,8 @@ namespace graphFlow::photon
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
         /** Transform launch schedule; `off` keeps the batch-wide transform launch. */
         graphFlow::ChunkKernelSchedule chunkKernelSchedule = graphFlow::ChunkKernelSchedule::off;
-        /** Per-chunk transform queues; one keeps a single serial queue. */
-        std::uint32_t chunkQueueDepth = 1u;
+        /** Per-chunk transform queues; two is the measured default, one keeps a single serial queue. */
+        std::uint32_t chunkQueueDepth = 2u;
         /** Per-chunk latency cap in microseconds fed to the launch-size policy; zero means no cap. */
         std::uint32_t chunkLatencyCapUs = 0u;
         std::uint64_t poolPayloadBudgetBytes = 0u; // zero means the Flow default

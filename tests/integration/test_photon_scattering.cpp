@@ -923,6 +923,10 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
     CHECK(resolved.parameters.numPhotons == 17u);
     CHECK(resolved.parameters.mode == ScatterMode::isotropic);
     CHECK(resolved.parameters.chunkSize > 0u);
+    // The measured queue-depth default travels through both the domain parameters and `Tuning`.
+    CHECK(resolved.parameters.chunkQueueDepth == 2u);
+    REQUIRE(resolved.tuning.chunkQueueDepth.has_value());
+    CHECK(*resolved.tuning.chunkQueueDepth == 2u);
 
     std::vector<std::string> const aliasArgs{
         "graphFlow_photon_scattering",

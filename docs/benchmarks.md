@@ -404,7 +404,39 @@ interval touching zero, so the default was left unchanged.
 The whole-process wall time includes a 0.31-0.34 s start-up floor on fwk394,
 so the steady-phase improvement is larger than the wall percentage. The
 magnitudes are card-specific and must not be extrapolated, and the queue depth
-was not tuned. No H100 was used.
+was not tuned at that commit (the P2-B section below tunes it). No H100 was
+used.
+
+## Queue depth (P2-B)
+
+**Measured basis for the depth-2 default.** Provenance: P2-B on `fwk394`
+(RTX 2080 Ti `sm_75`) and a Quadro GV100 (`sm_70`), with the per-chunk harness
+above: 4M photons, Q=8, `--chunk-kernel-schedule perChunk`, Release and no
+output directory. Medians of the process wall time in seconds:
+
+| Card | depth 1 | depth 2 | depth 4 | depth 8 |
+| --- | ---: | ---: | ---: | ---: |
+| RTX 2080 Ti `sm_75` (fwk394) | 1.6555 | 1.4027 | 1.4101 | 1.4221 |
+| Quadro GV100 `sm_70` | 1.2535 | 1.2412 | not recorded | not recorded |
+
+Depth 2 against depth 1 is `-15.3%` (95% CI `[-15.8, -14.0]`) on the RTX 2080 Ti
+and `-0.9%` (95% CI `[-2.3, -0.7]`) on the GV100. The GV100 depth-4 and
+depth-8 arms measure `-0.6%` to `-0.9%` against depth 1; their absolute medians
+were not part of the P2-B handoff. The physics output is byte-identical across
+all depths on both cards: every arm produces the same md5.
+
+A later confirmation on the A30 `sm_80` (hal, `sharing=unknown`) at the commit
+that makes two the default uses the same harness and one interleaved session:
+1.5859 s at depth 1 against 1.5318 s at the default depth 2, a paired `-3.48%`
+(95% CI `[-3.85, -2.84]`), with the same md5 in all 20 accepted runs.
+
+Depth 2 is the default because it is the best or tied choice on both cards. On
+the RTX 2080 Ti it captures the whole gain, and the deeper pools add queues
+without adding overlap: depth 4 is 0.5% and depth 8 is 1.4% slower than depth 2.
+On the GV100 depth 2 leads the depth-4 and depth-8 arms by less than half a
+percentage point. The knob affects the `perChunk` schedule only; the batch-wide
+schedule keeps its single node queue. The magnitudes are card-specific and must
+not be extrapolated beyond these two GPUs.
 
 ## Chunk occupancy target, phase 1 (main `54ba63f`)
 
