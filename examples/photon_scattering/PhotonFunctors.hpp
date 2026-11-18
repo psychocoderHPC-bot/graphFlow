@@ -185,6 +185,39 @@ namespace graphFlow::photon
         return Vec3T<T>{transverse * alpaka::math::cos(phi), transverse * alpaka::math::sin(phi), mu};
     }
 
+    /** Integral `Event` value in the scalar domain of a SIMD pack.
+     *
+     * `Event` is a plain `std::uint32_t` enum, so the value is exactly representable in the
+     * floating-point pack the transform arithmetic uses.
+     */
+    template<typename T>
+    constexpr T eventValue(Event event)
+    {
+        return static_cast<T>(static_cast<std::uint32_t>(event));
+    }
+
+    /** Per-lane debug state check of a photon SIMD pack.
+     *
+     * Mirrors `validatePhoton()` without leaving the pack: `value == value` excludes NaN and the
+     * magnitude bound excludes an infinity, so the check needs no scalar round trip. Release
+     * builds never instantiate the comparisons.
+     */
+    template<typename TPack>
+    ALPAKA_FN_ACC auto photonStateValid(TPack const& photon, SlabT<typename TPack::Scalar> const& slab)
+    {
+        using T = typename TPack::Scalar;
+        using Simd = alpaka::Simd<T, TPack::width>;
+        auto const finite = [](Simd const& value)
+        {
+            T const maxValue = std::numeric_limits<T>::max();
+            return (value == value) && (alpaka::math::abs(value) <= maxValue);
+        };
+        auto ok = finite(photon.positionX) && finite(photon.positionY) && finite(photon.positionZ)
+                  && finite(photon.directionX) && finite(photon.directionY) && finite(photon.directionZ);
+        ok = ok && (photon.positionZ >= T{0}) && (photon.positionZ <= slab.thickness);
+        return ok;
+    }
+
     /** No-op trace writer used by production runs without diagnostics. */
     struct NoTrace
     {
@@ -270,6 +303,9 @@ namespace graphFlow::photon
     template<typename T = double>
     struct ProposeFlightT
     {
+        /** This functor also provides the vectorised transform body. */
+        static constexpr bool supportsSimdTransform = true;
+
         SlabT<T> slab{};
         std::uint32_t maxScatters = 0u;
 
@@ -284,6 +320,99 @@ namespace graphFlow::photon
             photon[proposalTag] = resolveFlight(slab, total, photon, sampledDistance, kindUniform, maxScatters);
             if(!photon[proposalTag].valid || !validateProposal(slab, photon))
                 status.set(StatusCode::invalid);
+        }
+
+        /** Vectorised propose stage over one pack of photons.
+         *
+         * Same rules as `resolveFlight()`, expressed on `Simd` values: the distance and the face
+         * hit are `Simd` arithmetic, and every per-particle decision is a comparison mask applied
+         * with `where`. The draw loop is the only per-lane loop: each lane owns an engine built
+         * from its own `(id, scatterCount)` position, so the two uniforms must be assembled from
+         * per-lane draws. The status word is decided per lane afterwards, reusing the scalar
+         * validators, which keeps the failure codes identical to the batch kernel.
+         */
+        template<typename TPack, typename TAcc>
+        ALPAKA_FN_ACC TPack simdTransform(
+            TAcc const&,
+            std::uint64_t seed,
+            std::uint32_t purpose,
+            Status& status,
+            TPack const& photon) const
+        {
+            static_assert(std::is_same_v<T, typename TPack::Scalar>, "graphFlow: photon SIMD pack scalar mismatch");
+            using Simd = alpaka::Simd<T, TPack::width>;
+            constexpr std::uint32_t width = TPack::width;
+
+            // Permitted per-lane loop: one engine per lane, draws assembled into packs.
+            Simd flightUniform;
+            Simd kindUniform;
+            for(std::uint32_t lane = 0u; lane < width; ++lane)
+            {
+                rng::Engine engine = rng::makeEngine(
+                    seed,
+                    static_cast<std::uint64_t>(photon.id[lane]),
+                    static_cast<std::uint64_t>(photon.scatterCount[lane]),
+                    purpose);
+                flightUniform[lane] = T{1} - alpaka::rand::distribution::UniformReal<T>{}(engine);
+                kindUniform[lane] = alpaka::rand::distribution::UniformReal<T>{}(engine);
+            }
+
+            T const total = sigmaTotal(slab);
+            Simd sampledDistance = Simd::fill(T{0});
+            if(total > T{0})
+                sampledDistance = -alpaka::math::log(flightUniform) / total;
+
+            auto const forward = photon.directionZ > T{0};
+            auto const backward = photon.directionZ < T{0};
+            auto const reachable = forward || backward;
+            Simd faceDistance = Simd::fill(T{0});
+            where(forward, faceDistance) = (slab.thickness - photon.positionZ) / photon.directionZ;
+            where(backward, faceDistance) = -photon.positionZ / photon.directionZ;
+            Simd faceEvent = Simd::fill(eventValue<T>(Event::reflected));
+            where(forward, faceEvent) = eventValue<T>(Event::transmitted);
+
+            auto stateValid = alpaka::SimdMask<T, width>{[](std::uint32_t const) { return true; }};
+            if constexpr(graphFlow::debug::checksEnabled)
+                stateValid = photonStateValid(photon, slab);
+
+            Simd event = Simd::fill(eventValue<T>(Event::absorbed));
+            Simd distance = Simd::fill(T{0});
+            auto valid = reachable && stateValid; // vacuum: a parallel ray reaches no face
+
+            if(total > T{0})
+            {
+                auto const faceWins = stateValid && reachable && (faceDistance <= sampledDistance);
+                auto const scatters = kindUniform < (slab.sigmaS / total);
+                where(stateValid && scatters, event) = eventValue<T>(Event::scatter);
+                // The cap only reclassifies a collided photon that already decided to scatter.
+                where(
+                    (event == eventValue<T>(Event::scatter)) && (photon.scatterCount >= static_cast<T>(maxScatters)),
+                    event)
+                    = eventValue<T>(Event::capped);
+                where(stateValid, distance) = sampledDistance;
+                where(faceWins, event) = faceEvent;
+                where(faceWins, distance) = faceDistance;
+                valid = stateValid;
+            }
+            else
+            {
+                where(stateValid && reachable, event) = faceEvent;
+                where(stateValid && reachable, distance) = faceDistance;
+            }
+
+            TPack proposal = photon;
+            proposal.event = event;
+            proposal.distance = distance;
+            proposal.valid = Simd::fill(T{0});
+            where(valid, proposal.valid) = T{1};
+
+            for(std::uint32_t lane = 0u; lane < width; ++lane)
+            {
+                PhotonT<T> const one = graphFlow::SimdPayload<PhotonT<T>, width>::lane(proposal, lane);
+                if(!one[proposalTag].valid || !validateProposal(slab, one))
+                    status.set(StatusCode::invalid);
+            }
+            return proposal;
         }
     };
 
@@ -338,6 +467,9 @@ namespace graphFlow::photon
     template<typename TTrace = NoTrace, typename T = double>
     struct ScatterT
     {
+        /** This functor also provides the vectorised transform body. */
+        static constexpr bool supportsSimdTransform = true;
+
         SlabT<T> slab{};
         ScatterMode mode = ScatterMode::forward;
         mutable TTrace trace;
@@ -368,6 +500,103 @@ namespace graphFlow::photon
                 photon[positionTag],
                 photon[directionTag]);
             ++photon[scatterCountTag];
+        }
+
+        /** Vectorised scatter stage over one pack of photons.
+         *
+         * The angular draw is the only per-lane loop: each lane owns an engine built from its own
+         * `(id, scatterCount)` position. The direction update, the validity gate and the counter
+         * step are `Simd` arithmetic selected with `where` masks. The direction and counter only
+         * change for lanes that reached the scatter event, so the inactive lanes keep the values
+         * they had. Tracing stays a per-lane scatter into the vertex buffer and is compiled out for
+         * the production `NoTrace` writer.
+         */
+        template<typename TPack, typename TAcc>
+        ALPAKA_FN_ACC TPack simdTransform(
+            TAcc const&,
+            std::uint64_t seed,
+            std::uint32_t purpose,
+            Status& status,
+            TPack const& photon) const
+        {
+            static_assert(std::is_same_v<T, typename TPack::Scalar>, "graphFlow: photon SIMD pack scalar mismatch");
+            using Simd = alpaka::Simd<T, TPack::width>;
+            using Traits = graphFlow::SimdPayload<PhotonT<T>, TPack::width>;
+            constexpr std::uint32_t width = TPack::width;
+
+            auto const advancing = (photon.valid > T{0}) && (photon.event == eventValue<T>(Event::scatter));
+
+            TPack scattered = photon;
+            if(mode == ScatterMode::isotropic)
+            {
+                T const pi = static_cast<T>(alpaka::math::constants::pi);
+                Simd mu = Simd::fill(T{0});
+                Simd phi = Simd::fill(T{0});
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                {
+                    rng::Engine engine = rng::makeEngine(
+                        seed,
+                        static_cast<std::uint64_t>(photon.id[lane]),
+                        static_cast<std::uint64_t>(photon.scatterCount[lane]),
+                        purpose);
+                    mu[lane] = T{2} * alpaka::rand::distribution::UniformReal<T>{}(engine) -T{1};
+                    phi[lane] = T{2} * pi * alpaka::rand::distribution::UniformReal<T>{}(engine);
+                }
+                Simd oneMinusMu2 = T{1} - mu * mu;
+                where(oneMinusMu2 < T{0}, oneMinusMu2) = T{0}; // the scalar path clamps at zero
+                Simd const transverse = alpaka::math::sqrt(oneMinusMu2);
+                // `alpaka::math::cos/sin` on a pack is not the scalar function: the host backend
+                // evaluates the native `std::simd` overload, which differs from `std::cos` by one
+                // ulp on some lanes. The physics contract is byte identity with the batch kernel,
+                // so the two transcendentals are evaluated per lane and the products stay on the
+                // packs. `log`, `sqrt` and `abs` are bit-identical on the pack and stay vectorised.
+                Simd const cosPhi = Simd{[&phi](std::uint32_t const lane) { return alpaka::math::cos(phi[lane]); }};
+                Simd const sinPhi = Simd{[&phi](std::uint32_t const lane) { return alpaka::math::sin(phi[lane]); }};
+                Simd const isoX = transverse * cosPhi;
+                Simd const isoY = transverse * sinPhi;
+                where(advancing, scattered.directionX) = isoX;
+                where(advancing, scattered.directionY) = isoY;
+                where(advancing, scattered.directionZ) = mu;
+            }
+
+            auto advance
+                = advancing && (photon.scatterCount != static_cast<T>(std::numeric_limits<std::uint32_t>::max()));
+            if constexpr(graphFlow::debug::checksEnabled)
+                advance = advance && photonStateValid(scattered, slab);
+            where(advance, scattered.scatterCount) = photon.scatterCount + T{1};
+
+            for(std::uint32_t lane = 0u; lane < width; ++lane)
+            {
+                if(!advancing[lane])
+                {
+                    status.set(StatusCode::invalid);
+                    continue;
+                }
+                PhotonT<T> const one = Traits::lane(scattered, lane);
+                if(!validatePhoton(slab, one))
+                {
+                    status.set(StatusCode::invalid);
+                    continue;
+                }
+                if(photon.scatterCount[lane] == static_cast<T>(std::numeric_limits<std::uint32_t>::max()))
+                    status.set(StatusCode::overflow);
+            }
+
+            if constexpr(!std::is_same_v<TTrace, NoTrace>)
+            {
+                for(std::uint32_t lane = 0u; lane < width; ++lane)
+                {
+                    if(!advance[lane])
+                        continue;
+                    trace.record(
+                        static_cast<std::uint64_t>(scattered.id[lane]),
+                        TraceKind::scatter,
+                        static_cast<std::uint32_t>(scattered.scatterCount[lane]),
+                        Vec3T<T>{scattered.positionX[lane], scattered.positionY[lane], scattered.positionZ[lane]},
+                        Vec3T<T>{scattered.directionX[lane], scattered.directionY[lane], scattered.directionZ[lane]});
+                }
+            }
+            return scattered;
         }
     };
 

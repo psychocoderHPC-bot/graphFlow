@@ -142,7 +142,95 @@ namespace graphFlow::photon
 
     static_assert(std::is_trivially_copyable_v<Photon>);
     static_assert(std::is_default_constructible_v<Photon>);
+
+    /** Structured SIMD pack of the photon payload.
+     *
+     * One pack holds `T_width` photons. The three-vector attributes keep three packs each and are
+     * combined componentwise, which is the SIMD idiom the alpaka `HACCmk` benchmark uses. The
+     * decision fields live in the scalar domain the arithmetic uses: `event` and `scatterCount`
+     * are integral values held in a floating-point pack, and `valid` is `1` or `0`. Every value is
+     * exactly representable, so a lane converts back to the payload bit for bit. Keeping the whole
+     * state in one pack lets every selection be a comparison mask over the same value type.
+     */
+    template<typename T, std::uint32_t T_width>
+    struct PhotonSimdPack
+    {
+        static constexpr std::uint32_t width = T_width;
+
+        using Scalar = T;
+
+        alpaka::Simd<std::uint64_t, T_width> id;
+        alpaka::Simd<T, T_width> positionX;
+        alpaka::Simd<T, T_width> positionY;
+        alpaka::Simd<T, T_width> positionZ;
+        alpaka::Simd<T, T_width> directionX;
+        alpaka::Simd<T, T_width> directionY;
+        alpaka::Simd<T, T_width> directionZ;
+        alpaka::Simd<T, T_width> scatterCount;
+        alpaka::Simd<T, T_width> event; // proposal event as an integral value
+        alpaka::Simd<T, T_width> distance;
+        alpaka::Simd<T, T_width> valid; // proposal valid as 1 or 0
+    };
 } // namespace graphFlow::photon
+
+namespace graphFlow
+{
+    /** SIMD form of the photon record.
+     *
+     * The storage keeps one column per attribute, so the position and direction columns hold
+     * interleaved three-vectors. `load` transposes them into the three component packs of
+     * `PhotonSimdPack`; this is the only place the payload layout is transposed. `lane` is the
+     * inverse for the scattered output store.
+     */
+    template<std::uint32_t T_width, typename T>
+    struct SimdPayload<photon::PhotonT<T>, T_width>
+    {
+        using Pack = photon::PhotonSimdPack<T, T_width>;
+        using Simd = alpaka::Simd<T, T_width>;
+
+        template<typename... TColumnPacks>
+        ALPAKA_FN_ACC static Pack load(std::tuple<TColumnPacks...> const& columns)
+        {
+            static_assert(sizeof...(TColumnPacks) == 5u, "graphFlow: photon payload expects five columns");
+            auto const& ids = std::get<0>(columns);
+            auto const& positions = std::get<1>(columns);
+            auto const& directions = std::get<2>(columns);
+            auto const& counts = std::get<3>(columns);
+            auto const& proposals = std::get<4>(columns);
+
+            Pack pack;
+            pack.id = ids;
+            pack.positionX = Simd{[&positions](std::uint32_t const lane) { return positions[lane].x; }};
+            pack.positionY = Simd{[&positions](std::uint32_t const lane) { return positions[lane].y; }};
+            pack.positionZ = Simd{[&positions](std::uint32_t const lane) { return positions[lane].z; }};
+            pack.directionX = Simd{[&directions](std::uint32_t const lane) { return directions[lane].x; }};
+            pack.directionY = Simd{[&directions](std::uint32_t const lane) { return directions[lane].y; }};
+            pack.directionZ = Simd{[&directions](std::uint32_t const lane) { return directions[lane].z; }};
+            pack.scatterCount = Simd{[&counts](std::uint32_t const lane) { return static_cast<T>(counts[lane]); }};
+            pack.event = Simd{[&proposals](std::uint32_t const lane)
+                              { return static_cast<T>(static_cast<std::uint32_t>(proposals[lane].event)); }};
+            pack.distance = Simd{[&proposals](std::uint32_t const lane) { return proposals[lane].distance; }};
+            pack.valid = Simd{[&proposals](std::uint32_t const lane) { return proposals[lane].valid ? T{1} : T{0}; }};
+            return pack;
+        }
+
+        ALPAKA_FN_ACC static photon::PhotonT<T> lane(Pack const& pack, std::uint32_t const lane)
+        {
+            photon::PhotonT<T> payload;
+            payload[photon::idTag] = pack.id[lane];
+            payload[photon::positionTag]
+                = photon::Vec3T<T>{pack.positionX[lane], pack.positionY[lane], pack.positionZ[lane]};
+            payload[photon::directionTag]
+                = photon::Vec3T<T>{pack.directionX[lane], pack.directionY[lane], pack.directionZ[lane]};
+            payload[photon::scatterCountTag] = static_cast<std::uint32_t>(pack.scatterCount[lane]);
+            payload[photon::proposalTag] = photon::ProposalT<T>{
+                static_cast<photon::Event>(static_cast<std::uint32_t>(pack.event[lane])),
+                pack.distance[lane],
+                pack.valid[lane] != T{0}};
+            return payload;
+        }
+    };
+} // namespace graphFlow
 
 namespace graphFlow::rng
 {

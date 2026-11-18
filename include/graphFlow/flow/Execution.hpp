@@ -14,6 +14,7 @@
 #include "graphFlow/flow/Debug.hpp"
 #include "graphFlow/flow/Payload.hpp"
 #include "graphFlow/flow/PayloadStorage.hpp"
+#include "graphFlow/flow/SimdPayload.hpp"
 #include "graphFlow/flow/Status.hpp"
 #include "graphFlow/graph/BinTable.hpp"
 #include "graphFlow/graph/Classifier.hpp"
@@ -455,19 +456,13 @@ namespace graphFlow::detail
         static constexpr std::size_t arity = std::tuple_size_v<HostViews>;
         static_assert(arity == sizeof...(TAttrs), "graphFlow: SoA access must expose one view per attribute");
 
-        /** One SIMD pack per attribute column can be assembled back into one payload lane. */
-        static constexpr bool supportsSimdLane = true;
-
-        /** Assemble the payload of one SIMD lane from the per-column packs.
+        /** One SIMD pack per attribute column can be transposed into a structured payload pack.
          *
-         * `packs` is the tuple returned by loading one `SimdPtr` per attribute column. Every pack
-         * has the width `SimdAlgo` selected, so `lane` addresses the same element in all columns.
+         * The transposition itself belongs to the payload: a three-vector attribute is interleaved
+         * inside its column, so only the payload's `SimdPayload` specialisation knows how to
+         * assemble its `Simd` components.
          */
-        template<typename... TPacks>
-        ALPAKA_FN_ACC static Payload assembleLane(std::uint32_t lane, std::tuple<TPacks...> const& packs)
-        {
-            return assembleLaneImpl(lane, packs, std::index_sequence_for<TAttrs...>{});
-        }
+        static constexpr bool supportsSimdLane = true;
 
         [[nodiscard]] static Views views(Storage& storage)
         {
@@ -495,15 +490,6 @@ namespace graphFlow::detail
         ALPAKA_FN_ACC static Payload loadImpl(std::uint32_t slot, TColumns const& columns, std::index_sequence<Is...>)
         {
             return Payload{columns.template get<Is>()[slot]...};
-        }
-
-        template<typename... TPacks, std::size_t... Is>
-        ALPAKA_FN_ACC static Payload assembleLaneImpl(
-            std::uint32_t lane,
-            std::tuple<TPacks...> const& packs,
-            std::index_sequence<Is...>)
-        {
-            return Payload{std::get<Is>(packs)[lane]...};
         }
 
         template<typename TColumns, std::size_t... Is>
@@ -809,13 +795,49 @@ namespace graphFlow::detail
         }
     };
 
-    /** Store one transformed payload at its batch-global output position.
+    /** Store one payload at its batch-global output position.
      *
-     * This is the per-element body of the scalar batch kernel, shared by the SIMD mappings. The
-     * output-chunk arithmetic, the validation-only base check and the per-payload RNG engine are
-     * the batch semantics; keeping them in one place is what makes the SIMD mappings byte
-     * identical rather than merely similar.
+     * `offset` is the payload index inside the input chunk and `position` the chunk's batch-global
+     * start. `global / chunkCapacity` selects the output chunk and `global % chunkCapacity` its
+     * offset, so the multi-chunk output table stays authoritative. The SIMD mappings call this once
+     * per lane; the scalar batch kernel calls it once per element.
      */
+    template<
+        typename TAccess,
+        typename TStatus,
+        typename TOutChunks,
+        typename TOutBases,
+        typename TExpectedBases,
+        typename... TOutViews>
+    ALPAKA_FN_ACC void storePayloadAt(
+        TStatus& status,
+        typename TAccess::Payload const& payload,
+        std::uint32_t offset,
+        std::uint32_t position,
+        std::uint32_t chunkCapacity,
+        TOutChunks const& outChunks,
+        TOutBases const& outBases,
+        TExpectedBases const& expectedBases,
+        std::tuple<TOutViews&...> const& out)
+    {
+        std::uint32_t const global = position + offset;
+        std::uint32_t const outputChunk = global / chunkCapacity;
+        std::uint32_t const outputOffset = global % chunkCapacity;
+        if constexpr(graphFlow::debug::checksEnabled)
+        {
+            // The output chunk index comes from the plan; its base comes from the device table. A
+            // stale row would write into another chunk's slots.
+            if(outBases[outChunks[outputChunk]] != expectedBases[outChunks[outputChunk]])
+            {
+                status.set(StatusCode::invalid);
+                return;
+            }
+        }
+        std::uint32_t const outSlot = outBases[outChunks[outputChunk]] + outputOffset;
+        std::apply([&](auto&... views) { TAccess{}.store(outSlot, payload, views...); }, out);
+    }
+
+    /** Apply the scalar batch functor to one payload and store the result. */
     template<
         typename TFunctor,
         typename TAccess,
@@ -841,24 +863,13 @@ namespace graphFlow::detail
         TExpectedBases const& expectedBases,
         std::tuple<TOutViews&...> const& out)
     {
-        std::uint32_t const global = position + offset;
-        std::uint32_t const outputChunk = global / chunkCapacity;
-        std::uint32_t const outputOffset = global % chunkCapacity;
-        if constexpr(graphFlow::debug::checksEnabled)
-        {
-            if(outBases[outChunks[outputChunk]] != expectedBases[outChunks[outputChunk]])
-            {
-                status.set(StatusCode::invalid);
-                return;
-            }
-        }
-        std::uint32_t const outSlot = outBases[outChunks[outputChunk]] + outputOffset;
         rng::Engine engine = rng::makeEngine(seed, rng::streamId(payload), rng::streamEvent(payload), purpose);
         if constexpr(std::is_void_v<TSet>)
             payload = applyTransform(functor, acc, engine, status, std::move(payload));
         else
             payload = applySubsetTransform<TSet>(functor, acc, engine, status, std::move(payload));
-        std::apply([&](auto&... views) { TAccess{}.store(outSlot, payload, views...); }, out);
+        storePayloadAt<
+            TAccess>(status, payload, offset, position, chunkCapacity, outChunks, outBases, expectedBases, out);
     }
 
     /** Offset every payload column to the slot range of one chunk.
@@ -874,14 +885,91 @@ namespace graphFlow::detail
         return std::tuple{alpaka::makeMdSpan(views.data() + offset, alpaka::Vec{fill})...};
     }
 
+    /** Functor opt-in marker of the vectorised transform body.
+     *
+     * A functor that declares `static constexpr bool supportsSimdTransform = true` and provides
+     * `simdTransform(acc, seed, purpose, status, pack)` is used by the SIMD kernel mappings. All
+     * other functors keep the scalar batch kernel even if a SIMD mapping is selected.
+     */
+    template<typename TFunctor>
+    concept SimdTransformFunctor = requires {
+        { TFunctor::supportsSimdTransform } -> std::convertible_to<bool>;
+    } && TFunctor::supportsSimdTransform;
+
+    /** A SIMD transform entry point over a structured payload pack. */
+    template<typename TFunctor, typename TAcc, typename TPack, typename TStatus>
+    concept SimdPackTransform = requires(
+        TFunctor const& functor,
+        TAcc const& acc,
+        std::uint64_t seed,
+        std::uint32_t purpose,
+        TStatus& status,
+        TPack const& pack) {
+        { functor.simdTransform(acc, seed, purpose, status, pack) } -> std::same_as<TPack>;
+    };
+
+    /** Transform one SIMD pack of a chunk and store every lane at its batch-global output position.
+     *
+     * `packs` holds the loaded column packs and `base` is the element index of the pack's first
+     * lane inside the chunk. The functor receives the packed payload and returns the transformed
+     * pack, so its arithmetic runs on `Simd` values. The output store stays per lane: the input
+     * walk of `concurrent()` is contiguous, while the output slot is the batch-global
+     * `outBases[outChunks[...]]` scatter computed by `storePayloadAt`, so a pack's lanes are not
+     * necessarily contiguous in the output.
+     */
+    template<
+        typename TFunctor,
+        typename TAccess,
+        typename TAcc,
+        typename TPacks,
+        typename TOutViews,
+        typename TOutChunks,
+        typename TOutBases,
+        typename TExpectedBases>
+    ALPAKA_FN_ACC void simdTransformPack(
+        TFunctor const& functor,
+        TAcc const& acc,
+        std::uint64_t seed,
+        std::uint32_t purpose,
+        Status& status,
+        TPacks const& packs,
+        std::uint32_t base,
+        std::uint32_t position,
+        std::uint32_t chunkCapacity,
+        TOutChunks const& outChunks,
+        TOutBases const& outBases,
+        TExpectedBases const& expectedBases,
+        TOutViews const& out)
+    {
+        using Payload = typename TAccess::Payload;
+        constexpr std::uint32_t width = ALPAKA_TYPEOF(std::get<0>(packs))::width();
+        using Traits = SimdPayload<Payload, width>;
+        using Pack = typename Traits::Pack;
+        static_assert(
+            SimdPackTransform<TFunctor, TAcc, Pack, Status>,
+            "graphFlow: a SIMD transform functor must provide simdTransform(acc, seed, purpose, status, pack)");
+
+        Pack const transformed = functor.simdTransform(acc, seed, purpose, status, Traits::load(packs));
+        for(std::uint32_t lane = 0u; lane < width; ++lane)
+            storePayloadAt<TAccess>(
+                status,
+                Traits::lane(transformed, lane),
+                base + lane,
+                position,
+                chunkCapacity,
+                outChunks,
+                outBases,
+                expectedBases,
+                out);
+    }
+
     /** Out-of-place transform kernel with one chunk per block and a SIMD payload walk.
      *
      * Each block strides over the batch chunk list through `makeIdxMap(blocksInGrid)`, so the
      * mapping does not assume one block equals one chunk index. Inside the block,
      * `onAcc::SimdAlgo::concurrent()` distributes the chunk's `fill` payloads over the block
-     * threads. Every thread loads one SIMD pack per payload column, assembles the payload lanes
-     * and hands each lane to the same functor the batch kernel calls. The output position and the
-     * RNG engine are computed per lane by `transformAndStore`.
+     * threads. Every thread loads one SIMD pack per payload column and hands the packed payload to
+     * the functor, whose arithmetic is expressed on `Simd` values.
      */
     template<
         typename TFunctor,
@@ -897,6 +985,9 @@ namespace graphFlow::detail
         static_assert(
             TAccess::supportsSimdLane,
             "graphFlow: the SIMD transform needs one independently loadable column per payload field");
+        static_assert(
+            SimdTransformFunctor<TFunctor>,
+            "graphFlow: the SIMD transform needs a functor with a vectorised transform body");
 
         TFunctor functor;
         std::uint64_t seed = 0u;
@@ -947,25 +1038,20 @@ namespace graphFlow::detail
                             [&](auto const& elementAcc, auto const& firstPtr, auto const&... restPtrs)
                             {
                                 auto packs = std::tuple{firstPtr.load(), restPtrs.load()...};
-                                std::uint32_t const base = static_cast<std::uint32_t>(firstPtr.getIdx().x());
-                                constexpr std::uint32_t width = ALPAKA_TYPEOF(std::get<0>(packs))::width();
-                                for(std::uint32_t lane = 0u; lane < width; ++lane)
-                                {
-                                    transformAndStore<TFunctor, TAccess, TSet>(
-                                        functor,
-                                        elementAcc,
-                                        seed,
-                                        purpose,
-                                        status,
-                                        TAccess::assembleLane(lane, packs),
-                                        base + lane,
-                                        position,
-                                        chunkCapacity,
-                                        outChunks,
-                                        outBases,
-                                        expectedBases,
-                                        outViews);
-                                }
+                                simdTransformPack<TFunctor, TAccess>(
+                                    functor,
+                                    elementAcc,
+                                    seed,
+                                    purpose,
+                                    status,
+                                    packs,
+                                    static_cast<std::uint32_t>(firstPtr.getIdx().x()),
+                                    position,
+                                    chunkCapacity,
+                                    outChunks,
+                                    outBases,
+                                    expectedBases,
+                                    outViews);
                             },
                             columns...);
                     },
@@ -996,6 +1082,9 @@ namespace graphFlow::detail
         static_assert(
             TAccess::supportsSimdLane,
             "graphFlow: the SIMD transform needs one independently loadable column per payload field");
+        static_assert(
+            SimdTransformFunctor<TFunctor>,
+            "graphFlow: the SIMD transform needs a functor with a vectorised transform body");
 
         TFunctor functor;
         std::uint64_t seed = 0u;
@@ -1044,25 +1133,20 @@ namespace graphFlow::detail
                             [&](auto const& elementAcc, auto const& firstPtr, auto const&... restPtrs)
                             {
                                 auto packs = std::tuple{firstPtr.load(), restPtrs.load()...};
-                                std::uint32_t const base = static_cast<std::uint32_t>(firstPtr.getIdx().x());
-                                constexpr std::uint32_t width = ALPAKA_TYPEOF(std::get<0>(packs))::width();
-                                for(std::uint32_t lane = 0u; lane < width; ++lane)
-                                {
-                                    transformAndStore<TFunctor, TAccess, TSet>(
-                                        functor,
-                                        elementAcc,
-                                        seed,
-                                        purpose,
-                                        status,
-                                        TAccess::assembleLane(lane, packs),
-                                        base + lane,
-                                        position,
-                                        chunkCapacity,
-                                        outChunks,
-                                        outBases,
-                                        expectedBases,
-                                        outViews);
-                                }
+                                simdTransformPack<TFunctor, TAccess>(
+                                    functor,
+                                    elementAcc,
+                                    seed,
+                                    purpose,
+                                    status,
+                                    packs,
+                                    static_cast<std::uint32_t>(firstPtr.getIdx().x()),
+                                    position,
+                                    chunkCapacity,
+                                    outChunks,
+                                    outBases,
+                                    expectedBases,
+                                    outViews);
                             },
                             columns...);
                     },
@@ -2061,11 +2145,12 @@ namespace graphFlow::detail
             if constexpr(requires { m_storage.poolMode(); })
                 m_fixedBaseTable = m_storage.poolMode() == PoolMode::fixed;
             m_pending.reserve(m_reserveBound);
-            if constexpr(!Access::supportsSimdLane)
+            if(m_kernelMode != TransformKernelMode::batch)
             {
-                if(m_kernelMode != TransformKernelMode::batch)
+                if constexpr(!Access::supportsSimdLane || !SimdTransformFunctor<TFunctor> || !std::is_void_v<TSet>)
                     throw std::invalid_argument{
-                        "graphFlow: transformKernelMode simdBlocks/simdWarps needs a SoA payload storage"};
+                        "graphFlow: transformKernelMode simdBlocks/simdWarps needs a SoA payload storage, a "
+                        "vectorised transform body and a full-record transform"};
             }
             if(m_chunkSchedule == ChunkKernelSchedule::perChunk)
             {
@@ -2215,7 +2300,7 @@ namespace graphFlow::detail
                         m_capacity,
                         static_cast<std::uint32_t>(chunkCount));
                 };
-                if constexpr(Access::supportsSimdLane)
+                if constexpr(Access::supportsSimdLane && SimdTransformFunctor<TFunctor> && std::is_void_v<TSet>)
                 {
                     if(m_kernelMode == TransformKernelMode::simdBlocks)
                     {
