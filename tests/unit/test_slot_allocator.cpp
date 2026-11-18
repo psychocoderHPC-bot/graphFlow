@@ -258,8 +258,9 @@ TEST_CASE("a fragmented general free list cannot block a full-chunk allocation",
     }
     CHECK(removed.find("no contiguous range of 8 slots is free") != std::string::npos);
 
-    // With the class and no recycled range the request fails only when the arena's top is
-    // genuinely consumed; the message names the request and the tested bound.
+    // With the class and no recycled range the request fails only when the gap above the general
+    // high-water mark is smaller than one full chunk. The message names all three values: the
+    // request (8), the high-water mark (104) and the arena size (128).
     std::string exhausted;
     try
     {
@@ -270,8 +271,9 @@ TEST_CASE("a fragmented general free list cannot block a full-chunk allocation",
         exhausted = error.what();
     }
     CHECK(
-        exhausted.find("no full-chunk range of 8 slots is free above the general high-water mark")
-        != std::string::npos);
+        exhausted
+        == "graphFlow::SlotArena: no full-chunk range of 8 slots is free above the general high-water mark of "
+           "104 in an arena of 128 slots");
 
     arena.release(reused, block);
     arena.release(bottom, block);
