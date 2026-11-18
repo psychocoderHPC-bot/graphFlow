@@ -1836,7 +1836,16 @@ namespace graphFlow::detail
                 alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
-                    ChunkHandle const handle = m_storage.acquire();
+                    // Output chunks need one contiguous full-capacity range because the
+                    // transform kernel writes at `j % capacity`; the arena serves that request
+                    // from its full-chunk size class at the arena tail.
+                    ChunkHandle const handle = [&]()
+                    {
+                        if constexpr(requires { m_storage.acquireOutput(); })
+                            return m_storage.acquireOutput();
+                        else
+                            return m_storage.acquire();
+                    }();
                     m_outChunksHost.data()[k] = handle.index;
                     m_outExpectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                     std::uint64_t const remaining = particles - static_cast<std::uint64_t>(k) * m_capacity;
@@ -1989,7 +1998,16 @@ namespace graphFlow::detail
                 alpaka::onHost::memset(queue, *m_chunkStatus, std::uint8_t{0});
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
-                    ChunkHandle const handle = m_storage.acquire();
+                    // Output chunks need one contiguous full-capacity range because the
+                    // transform kernel writes at `j % capacity`; the arena serves that request
+                    // from its full-chunk size class at the arena tail.
+                    ChunkHandle const handle = [&]()
+                    {
+                        if constexpr(requires { m_storage.acquireOutput(); })
+                            return m_storage.acquireOutput();
+                        else
+                            return m_storage.acquire();
+                    }();
                     m_outChunksHost.data()[k] = handle.index;
                     m_outExpectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                     std::uint64_t const remaining = particles - static_cast<std::uint64_t>(k) * m_capacity;
@@ -2484,8 +2502,17 @@ namespace graphFlow::detail
                     for(std::uint32_t k = 0u; k < chunks; ++k)
                     {
                         // Output chunks are acquired at the full C: the scatter kernel addresses
-                        // every chunk of a bin's dense sequence at offset `j % C`.
-                        ChunkHandle const handle = m_storage.acquire();
+                        // every chunk of a bin's dense sequence at offset `j % C`. The arena
+                        // serves this request from its full-chunk size class at the arena tail,
+                        // so a general free list fragmented by small input ranges cannot block
+                        // it.
+                        ChunkHandle const handle = [&]()
+                        {
+                            if constexpr(requires { m_storage.acquireOutput(); })
+                                return m_storage.acquireOutput();
+                            else
+                                return m_storage.acquire();
+                        }();
                         chunkIndices.push_back(handle.index);
                         m_expectedBasesHost.data()[handle.index] = static_cast<std::uint32_t>(m_storage.base(handle));
                         std::uint32_t const fillIndex = plan.binBase[bin] + k;

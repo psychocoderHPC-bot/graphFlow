@@ -102,7 +102,7 @@ namespace graphFlow
             , m_payload{alpaka::onHost::alloc<TPayload>(device, alpaka::Vec{m_slots})}
             , m_baseTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
             , m_fillTable{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{m_chunks}})}
-            , m_arena{std::in_place, m_chunks, m_slots}
+            , m_arena{std::in_place, m_chunks, m_slots, m_chunkCapacity}
         {
             initialiseBaseTable();
         }
@@ -131,6 +131,12 @@ namespace graphFlow
         [[nodiscard]] std::uint32_t liveCount() const
         {
             return m_ledger.liveCount();
+        }
+
+        /** Highest number of live full-capacity output ranges observed (arena only). */
+        [[nodiscard]] std::uint64_t peakLiveFullChunks() const
+        {
+            return m_arena ? m_arena->peakLiveFullChunks() : 0u;
         }
 
         [[nodiscard]] ChunkHandle acquire()
@@ -163,6 +169,32 @@ namespace graphFlow
             {
                 // Giving the index back keeps the ledger and the arena consistent: a failed
                 // allocation must not leak a chunk index.
+                m_ledger.release(handle);
+                throw;
+            }
+            return handle;
+        }
+
+        /** Acquire a chunk for a full-`chunkCapacity` output range.
+         *
+         * Output chunks are addressed by the scatter kernels at `j % chunkCapacity`, so the range
+         * must be `chunkCapacity` wide. In the slot arena the request is served from the
+         * full-chunk size class, which bumps down from the arena tail, so a general free list
+         * fragmented by small input ranges cannot block it. The fixed layout is unchanged: its
+         * row is `chunkCapacity` wide.
+         */
+        [[nodiscard]] ChunkHandle acquireOutput()
+        {
+            if(!m_arena)
+                return acquire(m_chunkCapacity);
+            ChunkHandle const handle = m_ledger.acquire();
+            try
+            {
+                m_arena->acquireFull(handle.index);
+                publishBaseRow(handle.index);
+            }
+            catch(...)
+            {
                 m_ledger.release(handle);
                 throw;
             }
