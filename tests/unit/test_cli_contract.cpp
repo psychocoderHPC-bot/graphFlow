@@ -583,3 +583,32 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
 #    endif
 }
 #endif
+
+TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
+{
+    graphFlow::cli::Options const defaults = parseArgs({});
+    CHECK_FALSE(defaults.slotArenaBudgetBytes.has_value());
+
+    graphFlow::cli::Options const parsed
+        = parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "67108864"});
+    REQUIRE(parsed.slotArenaBudgetBytes.has_value());
+    CHECK(*parsed.slotArenaBudgetBytes == 67108864u);
+
+    graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(parsed, cpuProperties());
+    CHECK(resolved.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolved.parameters.slotArenaBudgetBytes == 67108864u);
+    REQUIRE(resolved.tuning.slotArenaBudgetBytes.has_value());
+    CHECK(*resolved.tuning.slotArenaBudgetBytes == 67108864u);
+
+    // Zero is a defined value: it keeps the whole pool budget, like an absent flag.
+    graphFlow::cli::ResolvedOptions const zero = graphFlow::cli::resolveOptions(
+        parseArgs({"--pool-mode", "slotArena", "--slot-arena-budget", "0"}),
+        cpuProperties());
+    CHECK(zero.parameters.slotArenaBudgetBytes == 0u);
+    CHECK_FALSE(zero.tuning.slotArenaBudgetBytes.has_value());
+
+    // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--slot-arena-budget", "1024"}), cpuProperties()),
+        Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+}
