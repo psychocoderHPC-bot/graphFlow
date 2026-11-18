@@ -496,3 +496,33 @@ not comparable with the `hal` A30 measurements above.
 run to about 10.6 s and made an earlier sweep under-powered. Arms must be
 interleaved with alternating order: position bias alone produced a spurious
 +0.8% effect that reversed under reversed ordering.
+
+## Scheduler idle wait on the CPU backend
+
+Provenance: measured on the idle-wait branch based on `a08731c`, `hal`, AMD
+EPYC 7452, 64 hardware threads, built with `-march=native` (AVX2, SIMD width 4
+for `double`), shared host, one measurement stream. Harness `examples/photon_scattering`, `--backend cpu --photons 250000
+--batch-chunks 8 --thickness 4 --sigma-s 0.5 --sigma-a 0.05 --mode isotropic
+--max-scatters 32 --seed 7`, default `C=256` and `P=512`, no `--output-dir`.
+One warm-up per arm, then five interleaved repetitions with alternating order.
+
+| mode | wall median (range) | scheduler iterations | yields | system CPU | CPU utilisation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| polling (`off`) | 10.45 s (10.35-10.58) | 13.46M-13.72M | 8.62M-8.83M | 113.7-116.8 s | 2066-2089% |
+| blocking (`on`) | 11.31 s (11.08-11.39) | 148,447-153,274 | 0 | 110.3-113.7 s | 1901-1915% |
+
+The paired median wall delta is +8.23% for blocking, and the smallest paired
+delta is +4.73%, so the direction is consistent across all five repetitions.
+Blocking removes 98.9% of the scheduler iterations and all `yield` calls and
+saves about 1.8 cores of CPU time. Each of the roughly 66,000 lane completions
+pays a wake-up of about 10 us on the dispatch path, which costs more wall time
+than the removed spin. This is the observation behind issue #103: reducing the
+iteration count by two orders of magnitude made the wall time worse, so the
+iteration count is not the wall-time driver at this workload size.
+
+The mode is a resource option, not a throughput option. The default remains
+polling on every backend. `Tuning::schedulerIdleWait` (CLI
+`--scheduler-idle-wait auto|on|off`) selects it; `on` is rejected on a non-CPU
+backend before device work. Physics is unchanged: transmitted 82,941, reflected
+96,128, absorbed 70,921, capped 10, terminal 250,000, inconsistent 0 in every
+arm.

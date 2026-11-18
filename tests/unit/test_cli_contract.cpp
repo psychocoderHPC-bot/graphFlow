@@ -114,6 +114,7 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK(defaults.chunkKernelSchedule == "off");
     CHECK(defaults.chunkQueueDepth == 1u);
     CHECK(defaults.chunkLatencyCapUs == 0u);
+    CHECK_FALSE(defaults.schedulerIdleWait.has_value());
 
     graphFlow::cli::Options const options
         = parseArgs({"--backend",        "cuda", "--device",     "3",  "--particles",    "4097", "--chunk-size", "256",
@@ -165,6 +166,30 @@ TEST_CASE("CLI accepts --occupancy-target 0 as the disabled default", "[cli][adm
     REQUIRE(gated.tuning.occupancyTargetChunks.has_value());
     CHECK(*gated.tuning.occupancyTargetChunks == 4u);
     CHECK_NOTHROW(gated.tuning.validate());
+}
+
+TEST_CASE("CLI accepts --scheduler-idle-wait auto|on|off", "[cli][scheduler]")
+{
+    CHECK_FALSE(parseArgs({}).schedulerIdleWait.has_value());
+
+    graphFlow::cli::Options const on = parseArgs({"--scheduler-idle-wait", "on"});
+    REQUIRE(on.schedulerIdleWait.has_value());
+    CHECK(*on.schedulerIdleWait);
+
+    graphFlow::cli::Options const off = parseArgs({"--scheduler-idle-wait", "off"});
+    REQUIRE(off.schedulerIdleWait.has_value());
+    CHECK_FALSE(*off.schedulerIdleWait);
+
+    CHECK_FALSE(parseArgs({"--scheduler-idle-wait", "auto"}).schedulerIdleWait.has_value());
+
+    graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(on, cpuProperties());
+    REQUIRE(resolved.tuning.schedulerIdleWait.has_value());
+    CHECK(*resolved.tuning.schedulerIdleWait);
+    CHECK_NOTHROW(resolved.tuning.validate());
+
+    CHECK_THROWS_WITH(
+        parseArgs({"--scheduler-idle-wait", "sometimes"}),
+        Catch::Matchers::ContainsSubstring("expected 'on', 'off' or 'auto'"));
 }
 
 TEST_CASE("CLI rejects an unknown backend", "[cli]")

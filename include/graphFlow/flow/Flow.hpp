@@ -404,6 +404,10 @@ namespace graphFlow
             runner->setChunkSchedule(config.chunkKernelSchedule, config.chunkQueueDepth, std::move(chunkLimitName));
             if(m_tuning.stallTimeout.has_value())
                 runner->setStallTimeout(*m_tuning.stallTimeout);
+            // An absent setting keeps the polling scheduler. Blocking is opt-in on the CPU backend,
+            // where the post-wake dispatch latency currently costs more wall time than the spin it
+            // removes (see docs/benchmarks.md); accelerators always poll.
+            runner->setIdleWait(m_tuning.schedulerIdleWait.value_or(false));
             runner->setDiagnostics(m_tuning.diagnostics);
             runner->setStallDetailCallback(m_stallDetailCallback);
 

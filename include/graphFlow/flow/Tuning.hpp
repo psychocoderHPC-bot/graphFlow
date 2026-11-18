@@ -109,6 +109,14 @@ namespace graphFlow
         /** Maximum scheduler quiet time before `Flow::run` reports a stall. */
         std::optional<std::chrono::milliseconds> stallTimeout;
 
+        /** Block the scheduler on lane completion instead of polling.
+         *
+         * Absence keeps the polling scheduler. `true` opts into blocking on the CPU backend,
+         * where it lowers host CPU time at the cost of wall time on the measured workload.
+         * `true` is rejected on a non-CPU backend before any device work; `false` polls.
+         */
+        std::optional<bool> schedulerIdleWait;
+
         /** Reject present zero values before they reach the scheduler or the pool. */
         void validate() const
         {

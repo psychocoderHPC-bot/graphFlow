@@ -344,9 +344,12 @@ TEST_CASE("tuning rejects zero-valued knobs", "[unit][flow][tuning]")
     valid.poolPayloadBudgetBytes = 1u << 20;
     valid.diagnostics = true;
     valid.stallTimeout = std::chrono::milliseconds{1000};
+    valid.schedulerIdleWait = true;
     CHECK_NOTHROW(flow.configure(valid));
     CHECK(flow.tuning().chunkCapacity == 16u);
     CHECK(flow.tuning().diagnostics);
+    REQUIRE(flow.tuning().schedulerIdleWait.has_value());
+    CHECK(*flow.tuning().schedulerIdleWait);
     CHECK(flow.tuning().stallTimeout == std::chrono::milliseconds{1000});
 }
 

@@ -89,7 +89,10 @@ examples opt into `SoAFlow` with a `Record` payload and matching `SoAStorage`.
 `GraphRunner` in `include/graphFlow/sched/GraphRunner.hpp` runs one loop on the
 calling thread. That thread owns queue submission, event retirement, routing,
 the pool free list, staging, and source admission. The runner creates no
-scheduler thread and never blocks on a queue in the steady state.
+scheduler thread. It polls completion by default and does not block on a queue
+in the steady state. The opt-in CPU idle wait (`Tuning::schedulerIdleWait`)
+replaces the idle spin with a wait for a completion notifier task, bounded by
+the stall timeout; accelerators always poll.
 
 Each node has:
 

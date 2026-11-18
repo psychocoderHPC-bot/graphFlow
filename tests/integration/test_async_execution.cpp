@@ -52,7 +52,12 @@ namespace
      * and every input handle must reach the sink exactly once.
      */
     template<typename TDevice>
-    void runDepthScenario(TDevice device, std::uint32_t depth, std::uint32_t numChunks, std::uint32_t capacity)
+    void runDepthScenario(
+        TDevice device,
+        std::uint32_t depth,
+        std::uint32_t numChunks,
+        std::uint32_t capacity,
+        bool idleWait = false)
     {
         using Runner = graphFlow::GraphRunner<TDevice>;
         using Queue = typename Runner::Queue;
@@ -111,6 +116,7 @@ namespace
         auto const sink = runner.addNode("sink", graphFlow::NodeRole::sink, 1u, {}, std::move(sinkHooks), depth);
         runner.setSource(source, static_cast<std::uint64_t>(numChunks) * capacity, 0u);
         runner.setStallTimeout(std::chrono::milliseconds{30000});
+        runner.setIdleWait(idleWait);
         graphFlow::SchedulerStats const stats = runner.run();
 
         CHECK(observation->launches == numChunks);
@@ -124,6 +130,12 @@ namespace
         CHECK(stats.maxReadyDepth >= 1u);
         CHECK(stats.peakInflightBatches <= depth + 1u); // sink lanes plus the single source lane
         CHECK(runner.nodeCompleted(sink) == numChunks);
+        // The wait mode must actually block instead of polling; the polling mode must not.
+        CHECK(stats.idleWait == idleWait);
+        if(idleWait)
+            CHECK(stats.eventWaits > 0u);
+        else
+            CHECK(stats.eventWaits == 0u);
     }
 
     graphFlow::particle::FeedbackResult runFeedback(
@@ -131,7 +143,8 @@ namespace
         std::uint32_t capacity,
         std::uint32_t liveParticles,
         std::uint32_t batchChunks,
-        std::uint32_t depth)
+        std::uint32_t depth,
+        std::optional<bool> idleWait = std::nullopt)
     {
         graphFlow::particle::Parameters parameters{};
         parameters.numParticles = numParticles;
@@ -144,6 +157,7 @@ namespace
 
         graphFlow::Tuning tuning = graphFlow::particle::tuningOf(parameters);
         tuning.inflightBatches = depth;
+        tuning.schedulerIdleWait = idleWait;
         return graphFlow::particle::runParticleFeedback(graphFlow::test::makeCpuDevice(), parameters, tuning);
     }
 } // namespace
@@ -163,6 +177,23 @@ TEST_CASE("depth one keeps a single in-flight batch per node", "[integration][as
 TEST_CASE("depth above one overlaps batches and backpressures on lane exhaustion", "[integration][async][depth]")
 {
     runDepthScenario(graphFlow::test::makeCpuDevice(), 4u, 16u, 8u);
+}
+
+TEST_CASE("idle wait blocks on completion and preserves the depth results", "[integration][async][depth][idle-wait]")
+{
+    runDepthScenario(graphFlow::test::makeCpuDevice(), 4u, 16u, 8u, true);
+}
+
+TEST_CASE("idle wait preserves the feedback histogram", "[integration][async][depth][idle-wait]")
+{
+    graphFlow::particle::FeedbackResult const polling = runFeedback(8192u, 1024u, 512u, 2u, 2u, false);
+    graphFlow::particle::FeedbackResult const blocking = runFeedback(8192u, 1024u, 512u, 2u, 2u, true);
+    CHECK(blocking.sunkParticles == polling.sunkParticles);
+    CHECK(blocking.weights == polling.weights);
+    CHECK(blocking.histogram == polling.histogram);
+    CHECK(polling.stats.eventWaits == 0u);
+    CHECK(blocking.stats.eventWaits > 0u);
+    CHECK(blocking.stats.idleWait);
 }
 
 TEST_CASE("batch-level batching and submitted depth preserve the histogram", "[integration][async][depth][batching]")
@@ -200,6 +231,18 @@ TEST_CASE("CUDA depth above one overlaps batches and backpressures", "[integrati
         throw std::runtime_error{"CUDA is compiled in but no NVIDIA GPU is visible; this test requires hardware"};
     runDepthScenario(selector.makeDevice(0u), 4u, 16u, 8u);
 }
+
+TEST_CASE("CUDA rejects the CPU-only idle wait", "[integration][async][depth][cuda]")
+{
+    auto selector = alpaka::onHost::makeDeviceSelector(alpaka::api::Cuda{}, alpaka::deviceKind::nvidiaGpu);
+    if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+        throw std::runtime_error{"CUDA is compiled in but no NVIDIA GPU is visible; this test requires hardware"};
+    auto device = selector.makeDevice(0u);
+    graphFlow::ChunkPool<decltype(device)> pool{device, 4u, 8u};
+    graphFlow::GraphRunner<decltype(device)> runner{device, pool};
+    CHECK_THROWS_AS(runner.setIdleWait(true), std::invalid_argument);
+    CHECK_NOTHROW(runner.setIdleWait(false));
+}
 #endif
 
 #if ALPAKA_LANG_HIP
@@ -209,5 +252,17 @@ TEST_CASE("HIP depth above one overlaps batches and backpressures", "[integratio
     if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
         throw std::runtime_error{"HIP is compiled in but no AMD GPU is visible; this test requires hardware"};
     runDepthScenario(selector.makeDevice(0u), 4u, 16u, 8u);
+}
+
+TEST_CASE("HIP rejects the CPU-only idle wait", "[integration][async][depth][hip]")
+{
+    auto selector = alpaka::onHost::makeDeviceSelector(alpaka::api::Hip{}, alpaka::deviceKind::amdGpu);
+    if(!selector.isAvailable() || selector.getDeviceCount() == 0u)
+        throw std::runtime_error{"HIP is compiled in but no AMD GPU is visible; this test requires hardware"};
+    auto device = selector.makeDevice(0u);
+    graphFlow::ChunkPool<decltype(device)> pool{device, 4u, 8u};
+    graphFlow::GraphRunner<decltype(device)> runner{device, pool};
+    CHECK_THROWS_AS(runner.setIdleWait(true), std::invalid_argument);
+    CHECK_NOTHROW(runner.setIdleWait(false));
 }
 #endif

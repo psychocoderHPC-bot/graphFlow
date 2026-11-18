@@ -34,6 +34,7 @@ namespace graphFlow::photon::cli
         std::optional<std::uint32_t> tileSize; // T, absent means policy
         std::uint32_t batchChunks = 1u; // Q
         std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
+        std::optional<bool> schedulerIdleWait; // absent keeps polling
         std::uint32_t frameCap = graphFlow::defaultFrameCap;
         std::string chunkKernelSchedule = "off"; // off|perChunk
         std::uint32_t chunkQueueDepth = 1u;
@@ -73,6 +74,7 @@ namespace graphFlow::photon::cli
                "                                      [--chunk-size C] [--live-particles P]\n"
                "                                      [--tile-size T] [--batch-chunks Q]\n"
                "                                      [--occupancy-target D]\n"
+               "                                      [--scheduler-idle-wait auto|on|off]\n"
                "                                      [--frame-cap F] [--pool-budget-bytes B]\n"
                "                                      [--pool-mode fixed|slotArena]\n"
                "                                      [--slot-arena-budget BYTES]\n"
@@ -106,6 +108,15 @@ namespace graphFlow::photon::cli
         if(!allowZero && parsed == 0u)
             throw std::invalid_argument{std::string{flag} + ": value must be non-zero"};
         return static_cast<std::uint32_t>(parsed);
+    }
+
+    inline bool parseOnOff(std::string_view flag, std::string const& value)
+    {
+        if(value == "on" || value == "true" || value == "1")
+            return true;
+        if(value == "off" || value == "false" || value == "0")
+            return false;
+        throw std::invalid_argument{std::string{flag} + ": expected 'on', 'off' or 'auto', got '" + value + "'"};
     }
 
     inline double parseDouble(std::string_view flag, std::string const& value)
@@ -195,6 +206,12 @@ namespace graphFlow::photon::cli
                 // Zero is a defined value: it disables the gate, matching `Config` and `Tuning`,
                 // so `--occupancy-target 0` is the explicit off switch.
                 options.occupancyTarget = parseU32(flag, nextValue(flag), true);
+            else if(flag == "--scheduler-idle-wait")
+            {
+                auto const value = nextValue(flag);
+                options.schedulerIdleWait
+                    = value == "auto" ? std::nullopt : std::optional<bool>{parseOnOff(flag, value)};
+            }
             else if(flag == "--chunk-kernel-schedule")
                 options.chunkKernelSchedule = nextValue(flag);
             else if(flag == "--chunk-queue-depth")
@@ -313,6 +330,7 @@ namespace graphFlow::photon::cli
         // Opt-in occupancy target; absent keeps the default tuning and the output unchanged.
         if(options.occupancyTarget)
             resolved.tuning.occupancyTargetChunks = options.occupancyTarget;
+        resolved.tuning.schedulerIdleWait = options.schedulerIdleWait;
         return resolved;
     }
 } // namespace graphFlow::photon::cli

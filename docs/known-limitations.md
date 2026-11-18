@@ -435,6 +435,13 @@ only when `8N` bytes plus the payload pool exceeds the device budget.
 
 ## Other open items
 
+- With `schedulerIdleWait=on`, the scheduler blocks on a completion notifier
+  task instead of polling. A hung CPU host task prevents that notifier from
+  running, so the stall surfaces as `SchedulerStallError` after `stallTimeout`
+  rather than through the idle spin counter. The mode also costs wall time on
+  short CPU runs (measured +8.23% median at `N=250000`; see
+  `docs/benchmarks.md`). The default polls on every backend.
+
 - The example binaries are registered in CTest. The particle example runs 24
   CLI cases per backend (`N=0,1,17,127,128,4097` crossed with `C=1,31,127,128`)
   plus one `example.public_api` source-contract case. The photon example runs

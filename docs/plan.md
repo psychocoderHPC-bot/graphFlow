@@ -252,7 +252,7 @@ loop:
 ```
 
 - Use a single host scheduler thread. It owns queue submissions, routing, event retirement, free lists, staging, and admission.
-- Poll `event.isComplete()` with bounded spin then `std::this_thread::yield()`. Do not block on `queue.waitFor()` in the steady state.
+- Poll `event.isComplete()` with bounded spin then `std::this_thread::yield()`. Do not block on `queue.waitFor()` in the steady state. On the CPU backend, `Tuning::schedulerIdleWait` may replace the idle spin with a bounded wait for a completion notifier task; the default polls and accelerators always poll.
 - Bound each node's submitted depth. Use fair round-robin across nodes. Prioritize continuations and sinks that release storage under pressure.
 - Combine already-ready chunks of the same type to amortize launches. Dispatch partial chunks immediately; there is no full-chunk threshold.
 - Source admission is not a free-running producer. Admit a source chunk only when it can carry at least `min(C, P, remaining)` particles; otherwise wait for the sink to release budget. One-particle source chunks fill the pool, fragment the graph, and turn every particle into a separate host round trip. The no-full-chunk-threshold rule applies to consumer ready lists, not to source generation. A tail chunk (`remaining < C`) or a deliberately small `P` still gets a smaller chunk.

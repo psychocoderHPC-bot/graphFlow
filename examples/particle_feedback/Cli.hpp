@@ -39,6 +39,7 @@ namespace graphFlow::cli
         std::optional<std::uint32_t> tileSize; // T, absent means policy
         std::uint32_t batchChunks = 1u; // Q
         std::optional<std::uint32_t> occupancyTarget; // D, absent keeps the historical admission
+        std::optional<bool> schedulerIdleWait; // absent keeps polling
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor
         /** Transform launch schedule; accepted for CLI parity with `photon_scattering`.
          *
@@ -84,6 +85,7 @@ namespace graphFlow::cli
                "                                    [--live-particles P] [--tile-size T]\n"
                "                                    [--batch-chunks Q] [--frame-cap F]\n"
                "                                    [--occupancy-target D] [--pool-mode fixed|slotArena]\n"
+               "                                    [--scheduler-idle-wait auto|on|off]\n"
                "                                    [--slot-arena-budget BYTES]\n"
                "                                    [--chunk-kernel-schedule off|perChunk]\n"
                "                                    [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
@@ -193,6 +195,15 @@ namespace graphFlow::cli
         return static_cast<std::uint32_t>(parsed);
     }
 
+    inline bool parseOnOff(std::string_view flag, std::string const& value)
+    {
+        if(value == "on" || value == "true" || value == "1")
+            return true;
+        if(value == "off" || value == "false" || value == "0")
+            return false;
+        throw std::invalid_argument{std::string{flag} + ": expected 'on', 'off' or 'auto', got '" + value + "'"};
+    }
+
     /** Parse the command line without touching a device.
      *
      * `--help` sets `Options::help` and returns immediately so tests and the wrapper can decide
@@ -249,6 +260,12 @@ namespace graphFlow::cli
                 // Zero is a defined value: it disables the gate, matching `Config` and `Tuning`,
                 // so `--occupancy-target 0` is the explicit off switch.
                 options.occupancyTarget = parseU32(flag, nextValue(flag), true);
+            }
+            else if(flag == "--scheduler-idle-wait")
+            {
+                auto const value = nextValue(flag);
+                options.schedulerIdleWait
+                    = value == "auto" ? std::nullopt : std::optional<bool>{parseOnOff(flag, value)};
             }
             else if(flag == "--pool-mode")
             {
@@ -425,6 +442,7 @@ namespace graphFlow::cli
         // output is byte-identical to the pre-phase-1 binary.
         if(options.occupancyTarget)
             resolved.tuning.occupancyTargetChunks = options.occupancyTarget;
+        resolved.tuning.schedulerIdleWait = options.schedulerIdleWait;
         return resolved;
     }
 } // namespace graphFlow::cli

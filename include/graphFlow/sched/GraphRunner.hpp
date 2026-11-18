@@ -18,12 +18,14 @@
 #include <algorithm>
 #include <chrono>
 #include <concepts>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -144,6 +146,48 @@ namespace graphFlow
             storage.setChunkObservers(callback, callback);
             storage.clearChunkObservers();
         };
+
+        /** Condition-variable bridge between a CPU queue's completion notifier and the scheduler.
+         *
+         * The notifier task runs on the lane queue after the lane's event marker, so it signals
+         * actual completion. The scheduler captures `epoch` before it scans the lanes: a
+         * notification that lands between the scan and the wait changes the epoch, so the wait
+         * returns immediately and no wakeup is lost.
+         */
+        struct IdleSignal
+        {
+            std::mutex mutex;
+            std::condition_variable condition;
+            std::uint64_t epoch = 0u;
+
+            void notify() noexcept
+            {
+                {
+                    std::lock_guard<std::mutex> lk{mutex};
+                    ++epoch;
+                }
+                condition.notify_one();
+            }
+        };
+
+        /** Enqueue a completion notifier on a queue that supports host tasks.
+         *
+         * The type-erased queue declares `enqueueHostFn` on every backend, but only the CPU queue
+         * implements host tasks; the call site is an `if constexpr` CPU branch, so this overload is
+         * never instantiated for an accelerator. The notifier captures the signal by value, never
+         * the queue, so a queued notifier outliving the runner stays valid.
+         */
+        template<typename TQueue, typename TSignal>
+        requires requires(TQueue& queue) { queue.enqueueHostFn(std::declval<TSignal>()); }
+        void enqueueIdleNotifier(TQueue& queue, TSignal signal)
+        {
+            queue.enqueueHostFn([signal]() { signal->notify(); });
+        }
+
+        template<typename TQueue, typename TSignal>
+        void enqueueIdleNotifier(TQueue&, TSignal) noexcept
+        {
+        }
     } // namespace detail
 
     /** Cheap aggregate scheduler counters and peaks of one `GraphRunner::run()`.
@@ -156,6 +200,10 @@ namespace graphFlow
         std::uint64_t completedBatches = 0u;
         std::uint64_t loopIterations = 0u;
         std::uint64_t yields = 0u;
+        /** Blocking waits on a lane completion; zero when the scheduler polls. */
+        std::uint64_t eventWaits = 0u;
+        /** True when the run blocked on lane completion instead of polling. */
+        bool idleWait = false;
         std::uint32_t poolChunks = 0u;
         /** Payload slots and bytes of the storage; the arena keys print only in arena mode. */
         std::uint64_t poolSlots = 0u;
@@ -243,6 +291,9 @@ namespace graphFlow
             message << " occupancyTargetChunks=" << stats.occupancyTargetChunks
                     << " liveWorkChunks=" << stats.liveWorkChunks << " peakLiveWorkChunks=" << stats.peakLiveWorkChunks
                     << " refills=" << stats.refills;
+        // The wait keys print only in wait mode, so the polling path keeps its exact output.
+        if(stats.idleWait)
+            message << " schedulerIdleWait=1 eventWaits=" << stats.eventWaits;
         return message.str();
     }
 
@@ -299,6 +350,8 @@ namespace graphFlow
         std::uint64_t completedBatches = 0u;
         std::uint64_t loopIterations = 0u;
         std::uint64_t yields = 0u;
+        std::uint64_t eventWaits = 0u;
+        bool idleWait = false;
         std::uint64_t stallTimeoutMs = 0u;
     };
 
@@ -341,6 +394,8 @@ namespace graphFlow
             if(snapshot.occupancyTargetChunks != 0u)
                 message << ", occupancyTargetChunks=" << snapshot.occupancyTargetChunks
                         << ", liveWorkChunks=" << snapshot.liveWorkChunks << ", refills=" << snapshot.refills;
+            if(snapshot.idleWait)
+                message << ", schedulerIdleWait=1, eventWaits=" << snapshot.eventWaits;
             message << ')';
             return message.str();
         }
@@ -385,7 +440,9 @@ namespace graphFlow
      * batch size and the chunk pool. The depth defaults to one and preserves the historical
      * one-batch-per-node scheduling. The
      * scheduler thread owns queue submission, routing, event retirement, free-list updates and
-     * output-chunk reservation; it never blocks on a queue in the steady state.
+     * output-chunk reservation. It does not block on a queue in the steady state unless the
+     * opt-in CPU idle wait is enabled, which blocks on lane completion with the stall timeout as
+     * the bound.
      *
      * Completion protocol per batch:
      *  - `launch` enqueues the first device stage,
@@ -657,6 +714,22 @@ namespace graphFlow
             m_stallTimeout = timeout;
         }
 
+        /** Block the scheduler on lane completion instead of polling.
+         *
+         * Supported on the CPU backend only. `true` on any other backend is rejected before the
+         * run because other queues have no host-side completion task, and the polling loop is
+         * already cheap there.
+         */
+        void setIdleWait(bool enabled)
+        {
+            if constexpr(!std::same_as<ALPAKA_TYPEOF(m_device.getDeviceKind()), alpaka::deviceKind::Cpu>)
+            {
+                if(enabled)
+                    throw std::invalid_argument{"graphFlow: schedulerIdleWait is only supported on the CPU backend"};
+            }
+            m_idleWait = enabled;
+        }
+
         /** Opt in to per-node stall detail.
          *
          * Aggregate counters are always available in `SchedulerStallError::what()` and in
@@ -730,6 +803,7 @@ namespace graphFlow
             }
 
             m_stats = SchedulerStats{};
+            m_stats.idleWait = m_idleWait;
             m_generated = 0u;
             m_sunkParticles = 0u;
             m_reservedTotal = 0u;
@@ -762,6 +836,16 @@ namespace graphFlow
                 while(true)
                 {
                     bool progress = false;
+
+                    // Capture the notification epoch before the retirement scan. A completion
+                    // that lands between the scan and the wait then changes the epoch, so the
+                    // wait returns instead of sleeping past a completion.
+                    std::uint64_t wakeEpoch = 0u;
+                    if(m_idleWait)
+                    {
+                        std::lock_guard<std::mutex> lk{m_idleSignal->mutex};
+                        wakeEpoch = m_idleSignal->epoch;
+                    }
 
                     // 1) Retire completed events. Each node has up to `depth` lanes, so every
                     //    lane owns its batch, event, leases and output credit independently.
@@ -1153,14 +1237,31 @@ namespace graphFlow
                     if(!progress)
                     {
                         ++idleSpins;
-                        if(idleSpins > 64u)
+                        if(m_idleWait && anyArmedLane())
                         {
-                            std::this_thread::yield();
-                            ++stats.yields;
+                            auto const idle = std::chrono::steady_clock::now() - lastProgress;
+                            if(idle >= m_stallTimeout)
+                                throw stallError();
+                            std::unique_lock<std::mutex> lk{m_idleSignal->mutex};
+                            bool const woke = m_idleSignal->condition.wait_for(
+                                lk,
+                                m_stallTimeout - idle,
+                                [&] { return m_idleSignal->epoch != wakeEpoch; });
+                            if(!woke)
+                                throw stallError();
+                            ++stats.eventWaits;
                         }
-                        auto const idle = std::chrono::steady_clock::now() - lastProgress;
-                        if(idleSpins > 200'000'000u || idle > m_stallTimeout)
-                            throw stallError();
+                        else
+                        {
+                            if(idleSpins > 64u)
+                            {
+                                std::this_thread::yield();
+                                ++stats.yields;
+                            }
+                            auto const idle = std::chrono::steady_clock::now() - lastProgress;
+                            if(idleSpins > 200'000'000u || idle > m_stallTimeout)
+                                throw stallError();
+                        }
                     }
                     else
                     {
@@ -1474,8 +1575,27 @@ namespace graphFlow
             ++node.eventEnqueues;
             if(m_failureHook)
                 m_failureHook(FailurePoint::eventEnqueue, node.id, node.eventEnqueues);
-            laneQueue(node, lane).enqueue(lane.event);
+            Queue& queue = laneQueue(node, lane);
+            queue.enqueue(lane.event);
             lane.armed = true;
+            // The notifier runs after the event marker on the same FIFO queue. The scheduler can
+            // only be asleep here when the marker had not completed yet, so a wakeup is
+            // guaranteed. The CPU guard keeps the accelerator instantiations free of host tasks.
+            if constexpr(std::same_as<ALPAKA_TYPEOF(m_device.getDeviceKind()), alpaka::deviceKind::Cpu>)
+            {
+                if(m_idleWait)
+                    detail::enqueueIdleNotifier(queue, m_idleSignal);
+            }
+        }
+
+        /** True when at least one lane waits for a queued completion event. */
+        [[nodiscard]] bool anyArmedLane() const
+        {
+            for(auto const& nodePtr : m_nodes)
+                for(Lane const& lane : nodePtr->lanes)
+                    if(lane.armed)
+                        return true;
+            return false;
         }
 
         /** True when `handle` is one of the batch's input chunks. */
@@ -1580,6 +1700,8 @@ namespace graphFlow
             snapshot.completedBatches = m_stats.completedBatches;
             snapshot.loopIterations = m_stats.loopIterations;
             snapshot.yields = m_stats.yields;
+            snapshot.eventWaits = m_stats.eventWaits;
+            snapshot.idleWait = m_stats.idleWait;
             snapshot.sourceParticles = m_sourceParticles;
             snapshot.sourceGenerated = m_generated;
             snapshot.sourceSunk = m_sunkParticles;
@@ -1740,6 +1862,9 @@ namespace graphFlow
         std::function<void(FailurePoint, std::uint32_t, std::uint32_t)> m_failureHook;
         std::function<void(std::string const&)> m_stallDetailCallback;
         std::chrono::milliseconds m_stallTimeout{120000};
+        /** Block on lane completion instead of polling; CPU backend only. */
+        bool m_idleWait = false;
+        std::shared_ptr<detail::IdleSignal> m_idleSignal = std::make_shared<detail::IdleSignal>();
         ChunkRegistry m_registry;
         SchedulerStats m_stats;
         std::uint64_t m_generated = 0u;
