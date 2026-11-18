@@ -1007,15 +1007,32 @@ TEST_CASE("photon CLI exposes the chunk-slot layout", "[photon][cli][arena]")
         return graphFlow::photon::cli::parseOptions(static_cast<int>(parseArgv.size()), parseArgv.data());
     };
 
+    // The CPU backend defaults to the slot arena with a 1 GiB payload budget.
     graphFlow::photon::cli::Options defaults;
     defaults.numPhotons = 17u;
     CHECK(defaults.poolMode == graphFlow::PoolMode::fixed);
+    CHECK_FALSE(defaults.poolModeExplicit);
     CHECK_FALSE(defaults.slotArenaBudgetBytes.has_value());
     auto const resolvedDefaults = graphFlow::photon::cli::resolveOptions(defaults, properties);
-    CHECK(resolvedDefaults.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedDefaults.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolvedDefaults.parameters.poolPayloadBudgetBytes == 1'073'741'824u);
     CHECK(resolvedDefaults.parameters.slotArenaBudgetBytes == 0u);
-    CHECK(resolvedDefaults.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedDefaults.policy.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolvedDefaults.policy.memoryBudgetBytes == 1'073'741'824u);
+    REQUIRE(resolvedDefaults.tuning.policyMemoryBudgetBytes.has_value());
+    CHECK(*resolvedDefaults.tuning.policyMemoryBudgetBytes == 1'073'741'824u);
     CHECK_FALSE(resolvedDefaults.tuning.slotArenaBudgetBytes.has_value());
+
+    // An explicit fixed layout keeps the fixed policy but still receives the 1 GiB CPU budget.
+    graphFlow::photon::cli::Options fixedDefaults;
+    fixedDefaults.numPhotons = 17u;
+    fixedDefaults.poolMode = graphFlow::PoolMode::fixed;
+    fixedDefaults.poolModeExplicit = true;
+    auto const resolvedFixedDefaults = graphFlow::photon::cli::resolveOptions(fixedDefaults, properties);
+    CHECK(resolvedFixedDefaults.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedFixedDefaults.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedFixedDefaults.policy.memoryBudgetBytes == 1'073'741'824u);
+    CHECK(resolvedFixedDefaults.parameters.poolPayloadBudgetBytes == 1'073'741'824u);
 
     // The flags exist on this example because the photon flow has transform nodes, so the arena
     // and the per-chunk schedule both have a real effect. Here only the layout is exercised.
@@ -1037,14 +1054,15 @@ TEST_CASE("photon CLI exposes the chunk-slot layout", "[photon][cli][arena]")
     CHECK(resolved.policy.poolMode == graphFlow::PoolMode::slotArena);
     REQUIRE(resolved.tuning.slotArenaBudgetBytes.has_value());
     CHECK(*resolved.tuning.slotArenaBudgetBytes == 67'108'864u);
-    // The arena is the payload, so a budget above the host policy budget raises the pool budget.
+    // The 64 MiB arena is a sub-budget of the 1 GiB CPU default, so the pool budget stays at 1 GiB.
     REQUIRE(resolved.tuning.poolPayloadBudgetBytes.has_value());
-    CHECK(*resolved.tuning.poolPayloadBudgetBytes == 67'108'864u);
+    CHECK(*resolved.tuning.poolPayloadBudgetBytes == 1'073'741'824u);
 
     // Zero keeps the whole pool budget, exactly like an absent flag.
     graphFlow::photon::cli::Options zero;
     zero.numPhotons = 17u;
     zero.poolMode = graphFlow::PoolMode::slotArena;
+    zero.poolModeExplicit = true;
     zero.slotArenaBudgetBytes = 0u;
     auto const resolvedZero = graphFlow::photon::cli::resolveOptions(zero, properties);
     CHECK(resolvedZero.parameters.poolMode == graphFlow::PoolMode::slotArena);
@@ -1057,6 +1075,8 @@ TEST_CASE("photon CLI exposes the chunk-slot layout", "[photon][cli][arena]")
     // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
     graphFlow::photon::cli::Options fixedWithBudget;
     fixedWithBudget.numPhotons = 17u;
+    fixedWithBudget.poolMode = graphFlow::PoolMode::fixed;
+    fixedWithBudget.poolModeExplicit = true;
     fixedWithBudget.slotArenaBudgetBytes = 1024u;
     CHECK_THROWS_WITH(
         graphFlow::photon::cli::resolveOptions(fixedWithBudget, properties),

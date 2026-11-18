@@ -591,8 +591,9 @@ namespace graphFlow
         policy.poolMode = config.poolMode;
         policy.description = std::string{"C="} + std::to_string(chunkCapacity) + " P=" + std::to_string(liveParticles)
                              + " T=" + std::to_string(tile) + " waves=" + std::to_string(config.waves)
-                             + " blocksPerSm=" + std::to_string(config.targetBlocksPerSm) + " budget="
-                             + std::to_string(budgetBytes) + "B warp=" + std::to_string(properties.warpSize)
+                             + " blocksPerSm=" + std::to_string(config.targetBlocksPerSm)
+                             + " poolMode=" + poolModeName(config.poolMode) + " budget=" + std::to_string(budgetBytes)
+                             + "B warp=" + std::to_string(properties.warpSize)
                              + " sms=" + std::to_string(properties.multiProcessorCount) + " cap=" + capacityCap;
         return policy;
     }

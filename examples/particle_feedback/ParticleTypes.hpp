@@ -71,6 +71,8 @@ namespace graphFlow::particle
         std::uint32_t batchChunks = 1u; // Q, ready input chunks per batch
         std::uint32_t frameCap = graphFlow::defaultFrameCap; // blocks per multiprocessor cap
         graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        /** Total pool payload budget in bytes; zero keeps the `Flow` default. */
+        std::uint64_t poolPayloadBudgetBytes = 0u;
         /** Payload budget of the slot arena in bytes; zero keeps the whole pool budget. */
         std::uint64_t slotArenaBudgetBytes = 0u;
     };
@@ -185,6 +187,8 @@ namespace graphFlow::particle
         tuning.batchChunks = parameters.batchChunks;
         tuning.frameCap = parameters.frameCap;
         tuning.poolMode = parameters.poolMode;
+        if(parameters.poolPayloadBudgetBytes != 0u)
+            tuning.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
         if(parameters.slotArenaBudgetBytes != 0u)
             tuning.slotArenaBudgetBytes = parameters.slotArenaBudgetBytes;
         return tuning;
