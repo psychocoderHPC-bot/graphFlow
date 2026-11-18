@@ -39,6 +39,8 @@ namespace graphFlow::photon::cli
         std::uint32_t chunkQueueDepth = 1u;
         std::uint32_t chunkLatencyCapUs = 0u; // zero means no cap
         std::optional<std::uint64_t> poolPayloadBudgetBytes;
+        graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        std::optional<std::uint64_t> slotArenaBudgetBytes; // slot-arena payload budget in bytes
         std::optional<std::string> outputDirectory;
         std::uint32_t tracePhotons = 0u;
         std::uint32_t traceVertices = 64u;
@@ -72,6 +74,8 @@ namespace graphFlow::photon::cli
                "                                      [--tile-size T] [--batch-chunks Q]\n"
                "                                      [--occupancy-target D]\n"
                "                                      [--frame-cap F] [--pool-budget-bytes B]\n"
+               "                                      [--pool-mode fixed|slotArena]\n"
+               "                                      [--slot-arena-budget BYTES]\n"
                "                                      [--chunk-kernel-schedule off|perChunk]\n"
                "                                      [--chunk-queue-depth D] [--chunk-latency-cap-us U]\n"
                "                                      [--output-dir DIR] [--trace-photons M]\n"
@@ -132,6 +136,16 @@ namespace graphFlow::photon::cli
         throw std::invalid_argument{std::string{flag} + ": expected 'off' or 'perChunk', got '" + value + "'"};
     }
 
+    /** Parse the chunk-slot layout of `--pool-mode`. */
+    inline graphFlow::PoolMode parsePoolMode(std::string_view flag, std::string const& value)
+    {
+        if(value == graphFlow::poolModeName(graphFlow::PoolMode::fixed))
+            return graphFlow::PoolMode::fixed;
+        if(value == graphFlow::poolModeName(graphFlow::PoolMode::slotArena))
+            return graphFlow::PoolMode::slotArena;
+        throw std::invalid_argument{std::string{flag} + ": expected fixed or slotArena, got '" + value + "'"};
+    }
+
     /** Parse the command line without touching a device. */
     inline Options parseOptions(int argc, char const* const* argv)
     {
@@ -189,6 +203,12 @@ namespace graphFlow::photon::cli
                 options.chunkLatencyCapUs = parseU32(flag, nextValue(flag), true);
             else if(flag == "--pool-budget-bytes")
                 options.poolPayloadBudgetBytes = parseU64(flag, nextValue(flag));
+            else if(flag == "--pool-mode")
+                options.poolMode = parsePoolMode(flag, nextValue(flag));
+            else if(flag == "--slot-arena-budget")
+                // Bytes of the slot-arena payload budget. Zero is a defined value: it keeps the
+                // whole pool budget, which is also the absent-value behaviour.
+                options.slotArenaBudgetBytes = parseU64(flag, nextValue(flag));
             else if(flag == "--output-dir")
                 options.outputDirectory = nextValue(flag);
             else if(flag == "--trace-photons")
@@ -220,6 +240,9 @@ namespace graphFlow::photon::cli
         // The AoS-over-SoA storage charges the aligned attribute widths plus the bin-id scratch
         // word, not the particle SoA size.
         policyConfig.slotBytes = graphFlow::photon::Photon::attribute_list::slotBytes;
+        // Mirror the layout in the CLI-side policy, so an explicit P is checked against the
+        // arena formula the run will use. `Flow` re-derives with the exact graph credit K*R*C.
+        policyConfig.poolMode = options.poolMode;
         resolved.policy = graphFlow::makeDevicePolicy(properties, options.numPhotons, overrides, policyConfig);
         resolved.liveParticlesExplicit = resolved.policy.liveParticlesExplicit;
 
@@ -248,6 +271,13 @@ namespace graphFlow::photon::cli
                 throw std::invalid_argument{"--pool-budget-bytes: value must be non-zero"};
             resolved.parameters.poolPayloadBudgetBytes = *options.poolPayloadBudgetBytes;
         }
+        resolved.parameters.poolMode = options.poolMode;
+        if(options.slotArenaBudgetBytes)
+        {
+            if(options.poolMode != graphFlow::PoolMode::slotArena)
+                throw std::invalid_argument{"--slot-arena-budget requires --pool-mode slotArena"};
+            resolved.parameters.slotArenaBudgetBytes = *options.slotArenaBudgetBytes;
+        }
         if(options.outputDirectory && options.outputDirectory->empty())
             throw std::invalid_argument{"--output-dir: value must not be empty"};
 
@@ -260,6 +290,12 @@ namespace graphFlow::photon::cli
 
         graphFlow::photon::validateParameters(resolved.parameters);
         resolved.tuning = graphFlow::photon::tuningOf(resolved.parameters);
+        // The slot arena is the payload, so an explicit arena budget above the resolved pool
+        // budget raises that budget instead of being rejected as inconsistent. The device-policy
+        // memory cap still sets the derived C and P; only the arena allocation grows.
+        if(resolved.tuning.slotArenaBudgetBytes
+           && resolved.policy.memoryBudgetBytes < *resolved.tuning.slotArenaBudgetBytes)
+            resolved.tuning.poolPayloadBudgetBytes = *resolved.tuning.slotArenaBudgetBytes;
         // Opt-in occupancy target; absent keeps the default tuning and the output unchanged.
         if(options.occupancyTarget)
             resolved.tuning.occupancyTargetChunks = options.occupancyTarget;

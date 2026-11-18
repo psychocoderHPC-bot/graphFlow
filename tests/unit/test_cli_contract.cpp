@@ -111,6 +111,9 @@ TEST_CASE("CLI parses valid backend, device and tunables", "[cli]")
     CHECK(defaults.frameCap == graphFlow::defaultFrameCap);
     CHECK(defaults.seed == 0u);
     CHECK(defaults.maxVisits == 64u);
+    CHECK(defaults.chunkKernelSchedule == "off");
+    CHECK(defaults.chunkQueueDepth == 1u);
+    CHECK(defaults.chunkLatencyCapUs == 0u);
 
     graphFlow::cli::Options const options
         = parseArgs({"--backend",        "cuda", "--device",     "3",  "--particles",    "4097", "--chunk-size", "256",
@@ -496,6 +499,8 @@ TEST_CASE("CLI process contract maps usage errors to the documented exit codes",
     ExampleRun const help = runExample("--help");
     CHECK(help.exitCode == 0);
     CHECK(help.output.find("usage: graphFlow_particle_feedback") != std::string::npos);
+    // The usage text names the limitation of the parity flags instead of implying an effect.
+    CHECK(help.output.find("accepted for CLI parity and change nothing here") != std::string::npos);
 
     ExampleRun const unknownBackend = runExample("--backend tpu --particles 0");
     CHECK(unknownBackend.exitCode == 2);
@@ -528,6 +533,21 @@ TEST_CASE("CLI process contract runs the selected backend", "[cli][backend][devi
     CHECK(cpu.output.find("# graphFlow_particle_feedback backend=cpu device=0 ") != std::string::npos);
     CHECK(cpu.output.find(" particles=0 ") != std::string::npos);
     CHECK(cpu.output.find("# weight,count") != std::string::npos);
+
+    // The per-chunk flags are accepted for parity, and the run states that they cannot take
+    // effect: no transform node exists, so the scheduler still reports the off path.
+    ExampleRun const inertChunk = runExample(
+        "--backend cpu --particles 0 --chunk-kernel-schedule perChunk --chunk-queue-depth 4 "
+        "--chunk-latency-cap-us 25");
+    CHECK(inertChunk.exitCode == 0);
+    CHECK(
+        inertChunk.output.find(
+            "# note: chunk-kernel-schedule, chunk-queue-depth and chunk-latency-cap-us have no effect")
+        != std::string::npos);
+    CHECK(inertChunk.output.find("chunkLaunches=0 chunkLimit=none") != std::string::npos);
+
+    // Without the flags the note is absent, so the default output is unchanged.
+    CHECK(cpu.output.find("# note: chunk-kernel-schedule") == std::string::npos);
 
     ExampleRun const kernel = runExample(
         "--backend cpu --workload kernel --particles 64 --chunk-size 16 --live-particles 64 "
@@ -625,4 +645,41 @@ TEST_CASE("CLI exposes the slot-arena budget", "[cli][arena]")
     CHECK_THROWS_WITH(
         graphFlow::cli::resolveOptions(parseArgs({"--slot-arena-budget", "1024"}), cpuProperties()),
         Catch::Matchers::ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
+}
+
+TEST_CASE("CLI accepts the per-chunk transform flags for parity", "[cli][chunk-schedule]")
+{
+    using Catch::Matchers::ContainsSubstring;
+
+    // The defaults stay the historical configuration, so an unflagged run is unchanged.
+    graphFlow::cli::ResolvedOptions const defaults = graphFlow::cli::resolveOptions(parseArgs({}), cpuProperties());
+    CHECK(defaults.tuning.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::off);
+    REQUIRE(defaults.tuning.chunkQueueDepth.has_value());
+    CHECK(*defaults.tuning.chunkQueueDepth == 1u);
+    REQUIRE(defaults.tuning.chunkLatencyCapUs.has_value());
+    CHECK(*defaults.tuning.chunkLatencyCapUs == 0u);
+
+    graphFlow::cli::Options const options = parseArgs(
+        {"--chunk-kernel-schedule", "perChunk", "--chunk-queue-depth", "4", "--chunk-latency-cap-us", "25"});
+    CHECK(options.chunkKernelSchedule == "perChunk");
+    CHECK(options.chunkQueueDepth == 4u);
+    CHECK(options.chunkLatencyCapUs == 25u);
+
+    // The values are parsed and carried into `Tuning` so a shared command line is accepted by both
+    // examples. No graph in this example registers a transform node, so they cannot change the run.
+    graphFlow::cli::ResolvedOptions const resolved = graphFlow::cli::resolveOptions(options, cpuProperties());
+    CHECK(resolved.tuning.chunkKernelSchedule == graphFlow::ChunkKernelSchedule::perChunk);
+    REQUIRE(resolved.tuning.chunkQueueDepth.has_value());
+    CHECK(*resolved.tuning.chunkQueueDepth == 4u);
+    REQUIRE(resolved.tuning.chunkLatencyCapUs.has_value());
+    CHECK(*resolved.tuning.chunkLatencyCapUs == 25u);
+    CHECK_NOTHROW(resolved.tuning.validate());
+
+    // Zero latency is the defined "no cap" value and zero depth is a usage error, matching the
+    // photon example.
+    CHECK_NOTHROW(parseArgs({"--chunk-latency-cap-us", "0"}));
+    CHECK_THROWS_WITH(parseArgs({"--chunk-queue-depth", "0"}), ContainsSubstring("must be non-zero"));
+    CHECK_THROWS_WITH(
+        graphFlow::cli::resolveOptions(parseArgs({"--chunk-kernel-schedule", "batch"}), cpuProperties()),
+        ContainsSubstring("expected off or perChunk"));
 }

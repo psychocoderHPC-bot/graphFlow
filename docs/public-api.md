@@ -232,7 +232,12 @@ microseconds; it clamps only the capacity and wave count that the per-chunk
 launch-size policy reports, at a fixed 10 us per wave, and never changes the
 storage chunk capacity. The `photon_scattering` CLI exposes the three knobs as
 `--chunk-kernel-schedule off|perChunk` (default `off`), `--chunk-queue-depth D`
-(default 1) and `--chunk-latency-cap-us U` (default 0).
+(default 1) and `--chunk-latency-cap-us U` (default 0). The
+`particle_feedback` CLI accepts the same three flags so one command line works
+against both examples, but it cannot honour them: every graph that example
+builds is source, partition and sink nodes, so no per-chunk transform launch
+and no transform queue pool exists. Its `--help` text says so, and the run
+prints a `# note:` line when one of the three is set.
 
 `Tuning::slotArenaBudgetBytes` (`std::uint64_t`, zero keeps the whole payload
 budget) sizes the slot-arena payload array independently of
@@ -245,9 +250,11 @@ arena must also cover the peak number of concurrently live output ranges, which
 exceeds the `K*R` credit because a range stays live until a sink releases it.
 `SchedulerStats::requiredArenaSlots`
 (`peakGeneralHighWater + peakLiveFullChunks * chunkCapacity`) reports what a run
-actually needed, so size the budget from it. The `particle_feedback` example
-exposes the knob as `--slot-arena-budget BYTES`, valid only with
-`--pool-mode slotArena`; zero is accepted and means the whole pool budget.
+actually needed, so size the budget from it. Both the `particle_feedback` and
+the `photon_scattering` examples expose the layout as
+`--pool-mode fixed|slotArena` and the budget as `--slot-arena-budget BYTES`,
+valid only with `--pool-mode slotArena`; zero is accepted and means the whole
+pool budget.
 
 `scatterMode` selects `ScatterMode::SharedStaging` (the default) or
 `ScatterMode::Direct` on the dense path. `binPath` is `BinPath::automatic` by
@@ -605,6 +612,11 @@ Run it with:
   --chunk-size 128 --live-particles 256 --tile-size 128 --batch-chunks 1
 ```
 
+The example also accepts `--chunk-kernel-schedule`, `--chunk-queue-depth` and
+`--chunk-latency-cap-us` for CLI parity with `photon_scattering`. Its graphs are
+partition-only, so these three cannot change the run: the usage text states
+that, and a run that sets one prints a `# note:` line saying the same.
+
 ### Photon scattering
 
 `examples/photon_scattering` transports independent photon histories through a
@@ -642,6 +654,12 @@ chunk capacity. With `perChunk` the scheduler line reports
 registry keys: `registryAcquisitions`, `registryRoutings`,
 `registryRetirements`, `registryFaults`, `peakRegistryReady`,
 `peakRegistryInflight` and `peakRegistryReserved`.
+
+`--pool-mode fixed|slotArena` selects the chunk-slot layout and
+`--slot-arena-budget BYTES` sizes its arena, as described above for
+`Tuning::slotArenaBudgetBytes`. A slot-arena run reports
+`poolSlots`, `poolBytes`, `peakLiveFullChunks` and `requiredArenaSlots` in the
+scheduler line, so the arena high-water mark of a run is directly visible.
 
 `--output-dir` writes `metadata.csv`, `outcomes.csv`,
 `scatter_histogram.csv`, `exits.csv`, `traces.csv` and `trace_summary.csv`.

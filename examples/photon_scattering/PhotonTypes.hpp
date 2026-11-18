@@ -267,6 +267,9 @@ namespace graphFlow::photon
         /** Per-chunk latency cap in microseconds fed to the launch-size policy; zero means no cap. */
         std::uint32_t chunkLatencyCapUs = 0u;
         std::uint64_t poolPayloadBudgetBytes = 0u; // zero means the Flow default
+        graphFlow::PoolMode poolMode = graphFlow::PoolMode::fixed; // chunk-slot layout
+        /** Payload budget of the slot arena in bytes; zero keeps the whole pool budget. */
+        std::uint64_t slotArenaBudgetBytes = 0u;
         TraceConfig trace; // bounded deterministic diagnostic trace
     };
 
@@ -350,6 +353,9 @@ namespace graphFlow::photon
         tuning.chunkLatencyCapUs = parameters.chunkLatencyCapUs;
         if(parameters.poolPayloadBudgetBytes != 0u)
             tuning.poolPayloadBudgetBytes = parameters.poolPayloadBudgetBytes;
+        tuning.poolMode = parameters.poolMode;
+        if(parameters.slotArenaBudgetBytes != 0u)
+            tuning.slotArenaBudgetBytes = parameters.slotArenaBudgetBytes;
         return tuning;
     }
 

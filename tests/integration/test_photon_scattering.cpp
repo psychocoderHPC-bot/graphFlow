@@ -12,6 +12,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -990,4 +991,74 @@ TEST_CASE("photon CLI rejects invalid physical configuration", "[photon][cli]")
     graphFlow::photon::cli::Options zeroBudget = valid;
     zeroBudget.poolPayloadBudgetBytes = 0u;
     CHECK_THROWS_AS(graphFlow::photon::cli::resolveOptions(zeroBudget, properties), std::invalid_argument);
+}
+
+TEST_CASE("photon CLI exposes the chunk-slot layout", "[photon][cli][arena]")
+{
+    using Catch::Matchers::ContainsSubstring;
+
+    auto const properties = graphFlow::test::makeCpuDevice().getDeviceProperties();
+    auto const parse = [](std::vector<std::string> const& arguments)
+    {
+        std::vector<char const*> parseArgv;
+        parseArgv.reserve(arguments.size());
+        for(auto const& argument : arguments)
+            parseArgv.push_back(argument.c_str());
+        return graphFlow::photon::cli::parseOptions(static_cast<int>(parseArgv.size()), parseArgv.data());
+    };
+
+    graphFlow::photon::cli::Options defaults;
+    defaults.numPhotons = 17u;
+    CHECK(defaults.poolMode == graphFlow::PoolMode::fixed);
+    CHECK_FALSE(defaults.slotArenaBudgetBytes.has_value());
+    auto const resolvedDefaults = graphFlow::photon::cli::resolveOptions(defaults, properties);
+    CHECK(resolvedDefaults.parameters.poolMode == graphFlow::PoolMode::fixed);
+    CHECK(resolvedDefaults.parameters.slotArenaBudgetBytes == 0u);
+    CHECK(resolvedDefaults.policy.poolMode == graphFlow::PoolMode::fixed);
+    CHECK_FALSE(resolvedDefaults.tuning.slotArenaBudgetBytes.has_value());
+
+    // The flags exist on this example because the photon flow has transform nodes, so the arena
+    // and the per-chunk schedule both have a real effect. Here only the layout is exercised.
+    auto const options = parse(
+        {"graphFlow_photon_scattering",
+         "--photons",
+         "17",
+         "--pool-mode",
+         "slotArena",
+         "--slot-arena-budget",
+         "67108864"});
+    CHECK(options.poolMode == graphFlow::PoolMode::slotArena);
+    REQUIRE(options.slotArenaBudgetBytes.has_value());
+    CHECK(*options.slotArenaBudgetBytes == 67'108'864u);
+
+    auto const resolved = graphFlow::photon::cli::resolveOptions(options, properties);
+    CHECK(resolved.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK(resolved.parameters.slotArenaBudgetBytes == 67'108'864u);
+    CHECK(resolved.policy.poolMode == graphFlow::PoolMode::slotArena);
+    REQUIRE(resolved.tuning.slotArenaBudgetBytes.has_value());
+    CHECK(*resolved.tuning.slotArenaBudgetBytes == 67'108'864u);
+    // The arena is the payload, so a budget above the host policy budget raises the pool budget.
+    REQUIRE(resolved.tuning.poolPayloadBudgetBytes.has_value());
+    CHECK(*resolved.tuning.poolPayloadBudgetBytes == 67'108'864u);
+
+    // Zero keeps the whole pool budget, exactly like an absent flag.
+    graphFlow::photon::cli::Options zero;
+    zero.numPhotons = 17u;
+    zero.poolMode = graphFlow::PoolMode::slotArena;
+    zero.slotArenaBudgetBytes = 0u;
+    auto const resolvedZero = graphFlow::photon::cli::resolveOptions(zero, properties);
+    CHECK(resolvedZero.parameters.poolMode == graphFlow::PoolMode::slotArena);
+    CHECK_FALSE(resolvedZero.tuning.slotArenaBudgetBytes.has_value());
+
+    CHECK_THROWS_WITH(
+        parse({"graphFlow_photon_scattering", "--pool-mode", "arena"}),
+        ContainsSubstring("expected fixed or slotArena"));
+
+    // The budget only applies to the slot arena, so a fixed run rejects it instead of ignoring it.
+    graphFlow::photon::cli::Options fixedWithBudget;
+    fixedWithBudget.numPhotons = 17u;
+    fixedWithBudget.slotArenaBudgetBytes = 1024u;
+    CHECK_THROWS_WITH(
+        graphFlow::photon::cli::resolveOptions(fixedWithBudget, properties),
+        ContainsSubstring("--slot-arena-budget requires --pool-mode slotArena"));
 }
