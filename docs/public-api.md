@@ -103,7 +103,16 @@ slotIndex(handle,row) = base(handle) + row
 A storage constructed with `SlotArenaOptions` (`PoolMode::slotArena`) instead
 stores a contiguous range per chunk and returns `base(handle)` from that stored
 start; `slotIndex(handle, row)` stays `base(handle) + row`. Consumers read the
-base from the storage and must not recompute `index * chunkCapacity`.
+base from the storage and must not recompute `index * chunkCapacity`. An output
+chunk is acquired with `acquireOutput()` and owns one contiguous
+`chunkCapacity` range, which the scatter kernels need because they address the
+chunk at `j % chunkCapacity`. The arena serves those ranges from a full-chunk
+size class that bumps down from the tail and recycles released ranges, so a
+general free list fragmented by small input fills cannot block them. A
+full-chunk request fails only when the gap above the general high-water mark is
+smaller than `chunkCapacity`, and the message names the request, the high-water
+mark and the arena size. The high-water mark never decreases, so releasing a
+large general range does not reopen that gap for the full-chunk class.
 
 `loadRecord(slot)` and `storeRecord(slot, record)` gather or scatter one
 logical record, `proxy<Set<Tags...>>(slot)` returns a per-slot `RecordProxy`,
@@ -198,7 +207,7 @@ through `configure`. `Tuning::seed` is a plain `uint64_t` (default zero).
 Every other `Tuning` field is optional and empty by default, so the device
 policy supplies the derived value: batching (`batchChunks`,
 `chunkCapacity`), storage and pool limits (`liveParticles`, `tileSize`,
-`numChunks`, `poolPayloadBudgetBytes`), the launch frame cap (`frameCap`),
+`numChunks`, `poolPayloadBudgetBytes`, `slotArenaBudgetBytes`), the launch frame cap (`frameCap`),
 device-policy knobs, the opt-in `diagnostics` flag, the measured partition
 axes (`scatterMode` and `binPath`), and an optional `stallTimeout`
 (`std::chrono::milliseconds`). It never changes payload semantics or routes;
@@ -222,6 +231,21 @@ launch-size policy reports, at a fixed 10 us per wave, and never changes the
 storage chunk capacity. The `photon_scattering` CLI exposes the three knobs as
 `--chunk-kernel-schedule off|perChunk` (default `off`), `--chunk-queue-depth D`
 (default 1) and `--chunk-latency-cap-us U` (default 0).
+
+`Tuning::slotArenaBudgetBytes` (`std::uint64_t`, zero keeps the whole payload
+budget) sizes the slot-arena payload array independently of
+`poolPayloadBudgetBytes`: the arena holds `floor(bytes / slotBytes)` slots
+instead of `floor(poolPayloadBudgetBytes / slotBytes)`. `Config::validate()`
+rejects a run before any kernel launch when the `P + K*R*C` reservation does not
+fit the arena, naming the required and available slot counts, and rejects a
+budget above `poolPayloadBudgetBytes`. The reservation is a lower bound: the
+arena must also cover the peak number of concurrently live output ranges, which
+exceeds the `K*R` credit because a range stays live until a sink releases it.
+`SchedulerStats::requiredArenaSlots`
+(`peakGeneralHighWater + peakLiveFullChunks * chunkCapacity`) reports what a run
+actually needed, so size the budget from it. The `particle_feedback` example
+exposes the knob as `--slot-arena-budget BYTES`, valid only with
+`--pool-mode slotArena`; zero is accepted and means the whole pool budget.
 
 `scatterMode` selects `ScatterMode::SharedStaging` (the default) or
 `ScatterMode::Direct` on the dense path. `binPath` is `BinPath::automatic` by
@@ -248,7 +272,9 @@ inflight`), which gates opt-in source admission, and no other scheduling
 decision reads a registry record. When an occupancy target is configured the
 stats also carry `occupancyTargetChunks`, `liveWorkChunks`,
 `peakLiveWorkChunks` and `refills`; those four keys are appended only in that
-case, so the default stats line stays byte-identical.
+case, so the default stats line stays byte-identical. A slot-arena run appends
+`poolSlots`, `poolBytes`, `peakLiveFullChunks` and `requiredArenaSlots`, again
+only in that mode, so a fixed-layout stats line is unchanged.
 
 A stall throws `SchedulerStallError`; `snapshot()` on the runner and on the error
 exposes the same aggregate state, including the current registry phase counts,
