@@ -109,10 +109,12 @@ chunk is acquired with `acquireOutput()` and owns one contiguous
 chunk at `j % chunkCapacity`. The arena serves those ranges from a full-chunk
 size class that bumps down from the tail and recycles released ranges, so a
 general free list fragmented by small input fills cannot block them. A
-full-chunk request fails only when the gap above the general high-water mark is
-smaller than `chunkCapacity`, and the message names the request, the high-water
-mark and the arena size. The high-water mark never decreases, so releasing a
-large general range does not reopen that gap for the full-chunk class.
+full-chunk request fails only when the gap between the general high-water mark
+and the full-chunk bump cursor is smaller than `chunkCapacity`, and the message
+names the request, the high-water mark, the bump cursor and the arena size. The
+high-water mark never decreases while any range is live and resets only when the
+arena becomes entirely free, so releasing a large general range does not reopen
+that gap for the full-chunk class while the arena is in use.
 
 `loadRecord(slot)` and `storeRecord(slot, record)` gather or scatter one
 logical record, `proxy<Set<Tags...>>(slot)` returns a per-slot `RecordProxy`,
