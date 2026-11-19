@@ -1605,20 +1605,22 @@ namespace graphFlow::detail
             , m_purpose{purpose}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
-            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            // The status word lives only in the device-accessible mapped host buffer. It is
+            // written by the kernel only on error, so a single host zero before the first
+            // launch keeps every success path bit-exact without a per-launch reset.
+            std::fill_n(m_statusHost.data(), 1u, 0u);
         }
 
         void launch(Queue const& queue, Batch const& batch) override
         {
             throwIfFailed();
             ChunkDescriptor const& chunk = batch.chunk();
-            // Reset the single status word on the node queue, then copy it back only after the
-            // source kernel, so `advance` observes a status that covers this batch.
-            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
+            // The kernel writes the already-mapped status word directly; `advance` reads it
+            // after the batch event, so no per-launch memset or readback is needed.
             if(chunk.fill != 0u)
             {
                 ++m_launches;
@@ -1628,12 +1630,11 @@ namespace graphFlow::detail
                     policy.frameSpec(),
                     SourceKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
                     Access::views(m_storage),
-                    m_status,
+                    m_statusHost,
                     batch.firstId,
                     static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
                     chunk.fill);
             }
-            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }
 
         bool advance(Queue const&, Batch const&, std::uint32_t& allocated) override
@@ -1683,7 +1684,6 @@ namespace graphFlow::detail
         std::uint32_t m_purpose = 0u;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
-        U32View m_status;
         MappedU32View m_statusHost;
         std::uint32_t m_launches = 0u;
         bool m_failed = false;
@@ -1759,11 +1759,13 @@ namespace graphFlow::detail
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
             , m_baseTableStaging{device, storage.numChunks()}
-            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            // The status word lives only in the mapped host buffer and is written only on
+            // error, so one host zero keeps every success path bit-exact.
+            std::fill_n(m_statusHost.data(), 1u, 0u);
             m_staleBaseTable = config.debugStaleBaseTable;
             if(m_staleBaseTable && !debug::checksEnabled)
                 throw std::invalid_argument{
@@ -1838,7 +1840,6 @@ namespace graphFlow::detail
 
             try
             {
-                alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
                     // Output chunks need one contiguous full-capacity range because the
@@ -1878,7 +1879,7 @@ namespace graphFlow::detail
                     TransformKernel<TFunctor, Access, TSet>{m_functor, m_seed, m_purpose},
                     views,
                     views,
-                    m_status,
+                    m_statusHost,
                     m_inBase,
                     m_inCount,
                     m_outPosition,
@@ -1887,7 +1888,6 @@ namespace graphFlow::detail
                     m_outExpectedBases,
                     m_capacity,
                     static_cast<std::uint32_t>(chunkCount));
-                alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             }
             catch(...)
             {
@@ -1998,14 +1998,13 @@ namespace graphFlow::detail
             try
             {
                 std::size_t const chunkCount = batch.chunks.size();
-                // One status word per input chunk: the memset and the readback bracket the whole
-                // fan-out on the same queue, and every launch writes a distinct slot. Both cover
-                // exactly the dispatched slots, so the work is proportional to this batch.
+                // One mapped status word per input chunk: every launch writes a distinct slot and
+                // the host scans exactly the dispatched slots after the batch event, so neither a
+                // per-launch memset nor a readback is needed.
                 ensureChunkStatusSlots(static_cast<std::uint32_t>(chunkCount));
                 m_chunkStatusSlots = static_cast<std::uint32_t>(chunkCount);
                 auto const statusExtent = alpaka::Vec{static_cast<std::uint64_t>(chunkCount)};
-                auto const statusView = m_chunkStatus->getSubView(statusExtent);
-                alpaka::onHost::memset(queue, *m_chunkStatus, std::uint8_t{0}, statusExtent);
+                auto const statusView = m_chunkStatusHost->getSubView(statusExtent);
                 for(std::uint32_t k = 0u; k < outputChunks; ++k)
                 {
                     // Output chunks need one contiguous full-capacity range because the
@@ -2089,7 +2088,6 @@ namespace graphFlow::detail
                         chunk.fill,
                         m_capacity);
                 }
-                alpaka::onHost::memcpy(queue, *m_chunkStatusHost, *m_chunkStatus, statusExtent);
             }
             catch(...)
             {
@@ -2138,22 +2136,23 @@ namespace graphFlow::detail
             return StatusCode::ok;
         }
 
-        /** Grow the per-chunk status pair to hold `slots` words.
+        /** Grow the mapped per-chunk status buffer to hold `slots` words.
          *
          * The stage exists before any batch, so the constructor cannot size this to the dispatched
-         * chunk count. Sizing per launch would add a device allocation to every batch, which costs
-         * more than the scan it saves; instead the pair is allocated once at the first batch's
+         * chunk count. Sizing per launch would add an allocation to every batch, which costs more
+         * than the scan it saves; instead the mapped buffer is allocated once at the first batch's
          * count and only grows when a larger batch arrives, so its size is the largest dispatched
-         * count and the memset covers exactly the current one. Growing is safe because a stage
-         * holds at most one batch at a time.
+         * count. Each new buffer is zeroed fully once; the kernels write only on error, so a
+         * success keeps every slot at zero. Growing is safe because a stage holds at most one
+         * batch at a time.
          */
         void ensureChunkStatusSlots(std::uint32_t slots)
         {
             if(m_chunkStatusCapacity >= slots)
                 return;
-            m_chunkStatus.emplace(alpaka::onHost::alloc<std::uint32_t>(m_device, alpaka::Vec{std::uint64_t{slots}}));
             m_chunkStatusHost.emplace(
                 alpaka::onHost::allocMapped<std::uint32_t>(m_device, alpaka::Vec{std::uint64_t{slots}}));
+            std::fill_n(m_chunkStatusHost->data(), static_cast<std::size_t>(slots), 0u);
             m_chunkStatusCapacity = slots;
         }
 
@@ -2237,11 +2236,9 @@ namespace graphFlow::detail
         bool m_fixedBaseTable = false;
         bool m_baseTablePublished = false;
         std::uint32_t m_baseTablePublishes = 0u;
-        U32View m_status;
         MappedU32View m_statusHost;
         // Per-chunk completion slots, one word per dispatched input chunk; allocated on the first
         // perChunk batch because the batch size is not known when the stage is constructed.
-        std::optional<U32View> m_chunkStatus;
         std::optional<MappedU32View> m_chunkStatusHost;
         /** Slots of the batch being advanced, and the allocated word count (the largest batch). */
         std::uint32_t m_chunkStatusSlots = 0u;
@@ -2345,11 +2342,13 @@ namespace graphFlow::detail
                   device,
                   alpaka::Vec{static_cast<std::uint64_t>(storage.numChunks())})}
             , m_baseTableStaging{device, storage.numChunks()}
-            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            // The status word lives only in the mapped host buffer and is written only on
+            // error, so one host zero keeps every success path bit-exact.
+            std::fill_n(m_statusHost.data(), 1u, 0u);
             m_staleBaseTable = config.debugStaleBaseTable;
             if(m_staleBaseTable && !debug::checksEnabled)
                 throw std::invalid_argument{
@@ -2390,7 +2389,6 @@ namespace graphFlow::detail
 
             LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
             alpaka::onHost::memset(queue, m_counts, std::uint8_t{0});
-            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
             if(m_numTiles != 0u)
             {
                 for(ChunkDescriptor const& chunk : batch.chunks)
@@ -2412,7 +2410,7 @@ namespace graphFlow::detail
                         policy.frameSpec(),
                         std::move(kernel),
                         Access::views(m_storage),
-                        m_status,
+                        m_statusHost,
                         m_binIds,
                         m_counts,
                         tilesView,
@@ -2425,7 +2423,6 @@ namespace graphFlow::detail
                     enqueueClassify(DenseClassifyKernel{m_classifier, m_seed, m_purpose});
                 ++m_classifyLaunches;
             }
-            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
             alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
         }
 
@@ -2522,8 +2519,8 @@ namespace graphFlow::detail
             std::vector<std::uint32_t> chunkIndices;
             try
             {
-                // The classify status copy is enqueued before the batch event, so `advance`
-                // observes the status of this batch before it plans any output chunk.
+                // The classify kernel writes the mapped status word before the batch event, so
+                // `advance` observes the status of this batch before it plans any output chunk.
                 checkStatus("partition classify");
                 LaunchPolicy const policy = launchPolicy(m_device, batch.particles(), m_tileSize, m_frameCap);
                 std::uint32_t const* host = m_countsHost.data();
@@ -2589,8 +2586,6 @@ namespace graphFlow::detail
                 std::copy(table.begin(), table.end(), m_tableHost.data());
                 alpaka::onHost::memcpy(queue, m_table, m_tableHost);
                 alpaka::onHost::memset(queue, m_next, std::uint8_t{0});
-                // Reset the status for the scatter stage; its copy follows the scatter kernel.
-                alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
                 auto const tilesView = m_tiles.getSubView(alpaka::Vec{static_cast<std::uint64_t>(m_numTiles)});
 
                 if(m_numTiles != 0u)
@@ -2607,7 +2602,7 @@ namespace graphFlow::detail
                             std::move(kernel),
                             views,
                             views,
-                            m_status,
+                            m_statusHost,
                             m_binIds,
                             m_table,
                             m_next,
@@ -2627,7 +2622,6 @@ namespace graphFlow::detail
                     ++m_scatterLaunches;
                 }
 
-                alpaka::onHost::memcpy(queue, m_statusHost, m_status);
                 alpaka::onHost::memcpy(queue, m_countsHost, m_counts);
                 alpaka::onHost::memcpy(queue, m_nextHost, m_next);
             }
@@ -2760,7 +2754,6 @@ namespace graphFlow::detail
         bool m_fixedBaseTable = false;
         bool m_baseTablePublished = false;
         std::uint32_t m_baseTablePublishes = 0u;
-        U32View m_status;
         MappedU32View m_statusHost;
         std::uint32_t m_stage = 0u;
         std::uint32_t m_numTiles = 0u;
@@ -2799,18 +2792,22 @@ namespace graphFlow::detail
             , m_purpose{purpose}
             , m_tileSize{config.tileSize}
             , m_frameCap{config.frameCap}
-            , m_status{alpaka::onHost::alloc<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
             , m_statusHost{alpaka::onHost::allocMapped<std::uint32_t>(device, alpaka::Vec{std::uint64_t{1u}})}
         {
             if(m_frameCap == 0u)
                 throw std::invalid_argument{"graphFlow: frameCap must be non-zero"};
+            // The status word lives only in the device-accessible mapped host buffer. It is
+            // written by the kernel only on error, so a single host zero before the first
+            // launch keeps every success path bit-exact without a per-launch reset.
+            std::fill_n(m_statusHost.data(), 1u, 0u);
         }
 
         void launch(Queue const& queue, Batch const& batch) override
         {
             throwIfFailed();
             ChunkDescriptor const& chunk = batch.chunk();
-            alpaka::onHost::memset(queue, m_status, std::uint8_t{0});
+            // The kernel writes the already-mapped status word directly; `advance` reads it
+            // after the batch event, so no per-launch memset or readback is needed.
             if(chunk.fill != 0u)
             {
                 ++m_launches;
@@ -2820,11 +2817,10 @@ namespace graphFlow::detail
                     policy.frameSpec(),
                     SinkKernel<TFunctor, Access>{m_functor, m_seed, m_purpose},
                     Access::views(m_storage),
-                    m_status,
+                    m_statusHost,
                     static_cast<std::uint32_t>(m_storage.base(chunk.handle)),
                     chunk.fill);
             }
-            alpaka::onHost::memcpy(queue, m_statusHost, m_status);
         }
 
         bool advance(Queue const&, Batch const&, std::uint32_t& allocated) override
@@ -2873,7 +2869,6 @@ namespace graphFlow::detail
         std::uint32_t m_purpose = 0u;
         std::uint32_t m_tileSize;
         std::uint32_t m_frameCap;
-        U32View m_status;
         MappedU32View m_statusHost;
         std::uint32_t m_launches = 0u;
         bool m_failed = false;
