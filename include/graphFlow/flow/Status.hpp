@@ -36,9 +36,9 @@ namespace graphFlow
      * The execution adapters own a single status word per batch. A functor that declares an extra
      * `Status&` argument (after the optional accelerator argument) may call `set()` or `fail()`
      * when it rejects an item. Any non-`ok` value is fatal; the exact failure code is diagnostic.
-     * Device code writes the word. The execution adapters copy it to the host after the batch
-     * metadata and before observing the batch event, so the host can reject the batch before it
-     * plans or publishes outputs.
+     * Device code writes the word directly into device-accessible mapped host memory, and the
+     * host reads it after the batch event, so it can reject the batch before planning or
+     * publishing outputs.
      *
      * A default-constructed `Status` has no backing word and ignores writes. The execution
      * adapters always pass a bound instance.
